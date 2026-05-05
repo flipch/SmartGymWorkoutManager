@@ -1454,8 +1454,8 @@ You must output a JSON object with the following structure:
                     html += `
                         <tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
                             <td class="p-3">${item.dayStr}</td>
-                            <td class="p-3 font-bold text-green-400">${item.oneRepMax ? item.oneRepMax.toFixed(1) : '-'}</td>
-                            <td class="p-3 text-white">${item.maxWeight}</td>
+                            <td class="p-3 font-bold text-green-400">${item.oneRepMax ? formatLastMaxWeight(item.oneRepMax) : '-'}</td>
+                            <td class="p-3 text-white">${item.maxWeight ? formatLastMaxWeight(item.maxWeight) : '-'}</td>
                             <td class="p-3 text-gray-400">${item.totalCapacity}</td>
                         </tr>
                     `;
