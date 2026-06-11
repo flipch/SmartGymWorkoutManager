@@ -483,7 +483,8 @@ def exercise_detail(ex_id):
         print(f"JSON Parse Error: {e}")
         detail['steps'] = []
 
-    return render_template('exercise_detail.html', ex=detail, accessories=mapped_accessories, ex_id=ex_id)
+    unit = client.credentials.get('unit', 0)
+    return render_template('exercise_detail.html', ex=detail, accessories=mapped_accessories, ex_id=ex_id, unit=unit)
 
 @app.route('/api/exercise/<int:ex_id>')
 def api_exercise_detail(ex_id):

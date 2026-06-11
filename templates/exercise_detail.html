@@ -263,6 +263,7 @@
 
 <script>
     const exerciseId = {{ ex_id }};
+    const userUnit = {{ unit | default(0) }};
 
     const formatStat = (value, decimals = 1) => {
         const number = Number(value);
@@ -271,6 +272,14 @@
             maximumFractionDigits: decimals,
             minimumFractionDigits: number % 1 === 0 ? 0 : decimals
         });
+    };
+
+    const formatWeightStat = (value) => {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return '-';
+        const displayWeight = userUnit === 1 ? Math.round(number) : Math.round(number * 2) / 2;
+        const unitLabel = userUnit === 1 ? 'lb' : 'kg';
+        return `${displayWeight.toLocaleString()} ${unitLabel}`;
     };
 
     const formatStatDate = (value) => {
@@ -316,15 +325,15 @@
             const maxWeightPr = bestBy(rows, 'maxWeight');
             const volumePr = bestBy(rows, 'totalCapacity');
 
-            document.getElementById('pr-one-rep-max').textContent = formatStat(oneRepMaxPr?.oneRepMax);
-            document.getElementById('pr-max-weight').textContent = formatStat(maxWeightPr?.maxWeight);
+            document.getElementById('pr-one-rep-max').textContent = formatWeightStat(oneRepMaxPr?.oneRepMax);
+            document.getElementById('pr-max-weight').textContent = formatWeightStat(maxWeightPr?.maxWeight);
             document.getElementById('pr-volume').textContent = formatStat(volumePr?.totalCapacity, 0);
 
             tbody.innerHTML = rows.map(item => `
                 <tr class="hover:bg-gray-800/70">
                     <td class="p-2 whitespace-nowrap">${formatStatDate(item.dayStr)}</td>
-                    <td class="p-2 text-right font-bold text-green-400">${formatStat(item.oneRepMax)}</td>
-                    <td class="p-2 text-right text-white">${formatStat(item.maxWeight)}</td>
+                    <td class="p-2 text-right font-bold text-green-400">${formatWeightStat(item.oneRepMax)}</td>
+                    <td class="p-2 text-right text-white">${formatWeightStat(item.maxWeight)}</td>
                     <td class="p-2 text-right text-gray-400">${formatStat(item.totalCapacity, 0)}</td>
                 </tr>
             `).join('');
