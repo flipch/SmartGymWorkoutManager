@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, Response
 from api_client import SpeedianceClient
 from debug_routes import init_debug
+from features import init_features
 import json
 import os
 import sys
@@ -29,6 +30,7 @@ else:
 app.secret_key = "speediance_secret_key" # For Flash Messages
 client = SpeedianceClient()
 app.register_blueprint(init_debug(client))
+app.register_blueprint(init_features(client))
 
 # --- Media Caching Logic ---
 # Define local cache path

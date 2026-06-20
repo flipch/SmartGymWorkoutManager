@@ -5,7 +5,14 @@ import os
 
 class SpeedianceClient:
     def __init__(self):
-        self.config_file = "config.json"
+        # DATA_DIR lets the web app and the MCP server share one config.json
+        # (the logged-in user's token) + library cache via a mounted volume.
+        self.data_dir = os.environ.get("DATA_DIR", ".")
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+        except Exception:
+            pass
+        self.config_file = os.path.join(self.data_dir, "config.json")
         self.credentials = self.load_config()
         self.region = self.credentials.get("region", "Global")
         self.device_type = int(self.credentials.get("device_type", 1))
@@ -41,7 +48,8 @@ class SpeedianceClient:
 
     def _get_library_cache_file(self):
         allow_flag = 1 if self.allow_monster_moves else 0
-        return f"library_cache_v2_device{self.device_type}_allow{allow_flag}.json"
+        return os.path.join(self.data_dir,
+                            f"library_cache_v2_device{self.device_type}_allow{allow_flag}.json")
 
     def _load_library_cache(self):
         """Loads library from disk if available."""
