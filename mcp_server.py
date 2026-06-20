@@ -17,8 +17,9 @@ from datetime import date, timedelta
 
 from mcp.server.fastmcp import FastMCP
 
+import coach
 from api_client import SpeedianceClient
-from features import _session_dates  # pure helper, shared so MCP == HTTP logic
+from features import _session_dates, _coach_workout_to_exercises  # shared so MCP == HTTP logic
 
 mcp = FastMCP(
     "smart-gym",
@@ -245,6 +246,72 @@ def search_exercises(query: str = "", limit: int = 25) -> list:
                 break
         return out
     return _safe(run)
+
+
+# ─────────────────────────────────────────────── AI Coach (evidence-based engine)
+@mcp.tool()
+def coaching_principles(topic: str = "") -> dict:
+    """Return the engine's evidence-based training principles (cite knowledge/*.md).
+    Optional topic: volume, intensity, rir, frequency, rest, balance, modes, ordering,
+    recovery, fatloss. Use this to ground your coaching in the science."""
+    return coach.principles(topic or None)
+
+
+@mcp.tool()
+def generate_program(goal: str = "general", days_per_week: int = 4,
+                     experience: str = "intermediate", readiness: dict = None) -> dict:
+    """Generate a full weekly Speediance program tuned to the user.
+    goal: muscle | strength | fatloss | general. days_per_week: 1-5.
+    experience: beginner | intermediate | advanced.
+    readiness (optional): {whoop_recovery 0-100, hrv_vs_baseline above|within|below,
+      rhr_delta_bpm, sleep_hours, subjective 1-5, acwr} -> autoregulates volume/intensity/RIR.
+    Returns days with ordered exercises (sets/reps/%1RM/RIR/rest), the Speediance MODE per
+    exercise (standard/chain/eccentric/constant/spotter), setup-swap count, and a quality
+    review (volume vs landmarks, push/pull balance, eccentric share)."""
+    def run():
+        # require nothing — works offline as a PT; uses live readiness if a wearable fed it
+        return coach.generate_program(goal=goal, days_per_week=days_per_week,
+                                      experience=experience, readiness=readiness)
+    return _safe(run)
+
+
+@mcp.tool()
+def critique_exercises(exercises: list, goal: str = "general") -> dict:
+    """Critique an ad-hoc workout for safety/balance. `exercises`: list of
+    {name, sets, reps, mode?}. Flags volume vs landmarks, push/pull imbalance, excessive
+    eccentric load, exercise-order issues, and off-target rep ranges."""
+    return _safe(lambda: coach.critique_workout(exercises, goal))
+
+
+@mcp.tool()
+def critique_my_workout(code: str, goal: str = "general") -> dict:
+    """Critique one of the user's saved Speediance workouts by its template `code`
+    (from list_workouts). Fetches the live workout and runs the coach safety review."""
+    def run():
+        c = _client(); _require_auth(c)
+        detail = c.get_workout_detail(code)
+        exercises = _coach_workout_to_exercises(detail)
+        if not exercises:
+            return {"error": "empty", "message": f"Could not parse exercises from workout {code}."}
+        result = coach.critique_workout(exercises, goal)
+        result["parsed_exercises"] = exercises
+        return result
+    return _safe(run)
+
+
+@mcp.tool()
+def autoregulate(whoop_recovery: float = None, hrv_vs_baseline: str = None,
+                 rhr_delta_bpm: float = None, sleep_hours: float = None,
+                 subjective: int = None, acwr: float = None) -> dict:
+    """Given today's recovery signals (any subset; from Whoop/Apple Health or a 1-5 subjective
+    score), return today's training adjustment: readiness band + volume%/intensity%/RIR/session
+    type. Most-conservative signal wins; sleep<6h or RHR>=+5bpm caps a green day."""
+    r = {k: v for k, v in {
+        "whoop_recovery": whoop_recovery, "hrv_vs_baseline": hrv_vs_baseline,
+        "rhr_delta_bpm": rhr_delta_bpm, "sleep_hours": sleep_hours,
+        "subjective": subjective, "acwr": acwr,
+    }.items() if v is not None}
+    return _safe(lambda: coach.autoregulate(r))
 
 
 if __name__ == "__main__":

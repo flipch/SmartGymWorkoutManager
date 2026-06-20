@@ -12,9 +12,13 @@ All endpoints degrade gracefully when not logged in (return empty/zeroed
 data rather than erroring), and parse the Speediance responses defensively
 since field names vary by region/firmware.
 """
-from flask import Blueprint, jsonify, Response, render_template_string
+from flask import Blueprint, jsonify, Response, render_template_string, request
 from datetime import datetime, date, timedelta
+import json
+import os
 import re
+
+import coach
 
 features_bp = Blueprint('features', __name__)
 _client = None
@@ -246,3 +250,172 @@ async function j(u){try{return await (await fetch(u)).json()}catch(e){return{}}}
 @features_bp.route('/insights')
 def insights_page():
     return render_template_string(_INSIGHTS_HTML)
+
+
+# ═══════════════════════════════════ AI Coach (Feature 4) ═══════════════════════════════════
+# Evidence-based coaching engine (coach.py) surfaced over HTTP. The same logic is exposed to
+# AI agents via the MCP server and the portable Agent Skill.
+
+def _readiness_path():
+    d = getattr(_client, "data_dir", ".") if _client else "."
+    return os.path.join(d, "readiness.json")
+
+
+def _load_readiness():
+    try:
+        with open(_readiness_path()) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _coach_workout_to_exercises(detail):
+    """Best-effort map a Speediance workout detail into coach critique input."""
+    out = []
+    if not isinstance(detail, dict):
+        return out
+    actions = detail.get("actionLibraryList") or detail.get("actions") or detail.get("list") or []
+    for a in actions if isinstance(actions, list) else []:
+        if not isinstance(a, dict):
+            continue
+        name = a.get("name") or a.get("actionName") or a.get("groupName") or ""
+        reps_csv = str(a.get("setsAndReps") or a.get("reps") or "")
+        reps_list = [int(x) for x in re.findall(r"\d+", reps_csv)] or None
+        out.append({
+            "name": name,
+            "sets": len(reps_list) if reps_list else int(a.get("sets") or 0),
+            "reps": reps_list[0] if reps_list else a.get("rep"),
+        })
+    return out
+
+
+@features_bp.route('/api/coach/principles')
+def coach_principles():
+    return jsonify(coach.principles(request.args.get("topic")))
+
+
+@features_bp.route('/api/coach/readiness', methods=['GET', 'POST'])
+def coach_readiness():
+    """GET returns the stored readiness + today's adjustment. POST stores a readiness payload
+    (the integration point for Whoop / Apple Health auto-export shortcuts)."""
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        keep = {k: data[k] for k in
+                ("whoop_recovery", "hrv_vs_baseline", "rhr_delta_bpm", "sleep_hours", "subjective", "acwr")
+                if k in data}
+        keep["updated"] = datetime.utcnow().isoformat() + "Z"
+        try:
+            with open(_readiness_path(), "w") as f:
+                json.dump(keep, f)
+        except Exception as e:
+            return jsonify({"error": "could_not_store", "message": str(e)}), 500
+        return jsonify({"stored": keep, "adjustment": coach.autoregulate(keep)})
+    stored = _load_readiness()
+    return jsonify({"stored": stored, "adjustment": coach.autoregulate(stored)})
+
+
+@features_bp.route('/api/coach/autoregulate', methods=['POST'])
+def coach_autoregulate():
+    return jsonify(coach.autoregulate(request.get_json(silent=True) or {}))
+
+
+@features_bp.route('/api/coach/program', methods=['POST'])
+def coach_program():
+    body = request.get_json(silent=True) or {}
+    readiness = body.get("readiness")
+    if readiness is None and body.get("use_stored_readiness"):
+        readiness = _load_readiness() or None
+    prog = coach.generate_program(
+        goal=body.get("goal", "general"),
+        days_per_week=body.get("days_per_week", 4),
+        experience=body.get("experience", "intermediate"),
+        one_rm=body.get("one_rm"),
+        readiness=readiness,
+        available_accessories=body.get("available_accessories"),
+    )
+    return jsonify(prog)
+
+
+@features_bp.route('/api/coach/critique', methods=['POST'])
+def coach_critique():
+    """Critique an explicit list of exercises, or — if {code} is given and authenticated —
+    critique one of the user's saved Speediance workouts."""
+    body = request.get_json(silent=True) or {}
+    goal = body.get("goal", "general")
+    exercises = body.get("exercises")
+    if not exercises and body.get("code") and _authed():
+        try:
+            detail = _client.get_workout_detail(body["code"])
+            exercises = _coach_workout_to_exercises(detail)
+        except Exception as e:
+            return jsonify({"error": "fetch_failed", "message": str(e)}), 502
+    if not exercises:
+        return jsonify({"error": "no_exercises",
+                        "message": "Provide 'exercises' (list of {name,sets,reps}) or an authenticated 'code'."}), 400
+    return jsonify(coach.critique_workout(exercises, goal))
+
+
+_COACH_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>AI Coach · Smart Gym</title><style>
+:root{color-scheme:dark}body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#0f1419;color:#e6edf3;margin:0;padding:28px;max-width:980px;margin:0 auto}
+h1{font-weight:650;margin:0 0 2px}.sub{color:#8b98a5;margin:0 0 22px}
+.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:end;background:#161b22;border:1px solid #21262d;border-radius:14px;padding:16px;margin-bottom:18px}
+label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:#8b98a5;margin-bottom:4px}
+select,input{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px 10px;font-size:.9rem}
+button{background:#238636;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-weight:600;cursor:pointer}
+button.alt{background:#1f6feb}
+.day{background:#161b22;border:1px solid #21262d;border-radius:14px;padding:16px 18px;margin-bottom:14px}
+.day h3{margin:0 0 4px}.muted{color:#8b98a5;font-size:.82rem}
+table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.88rem}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #21262d}th{color:#8b98a5;font-weight:600;font-size:.72rem;text-transform:uppercase}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.72rem;font-weight:700}
+.standard{background:#21303f;color:#79c0ff}.eccentric{background:#3a2a16;color:#d29922}.chain{background:#2d233f;color:#bc8cff}.constant{background:#16303a;color:#39a7d2}.spotter{background:#3d2230;color:#f778ba}
+.review{border-radius:14px;padding:16px 18px;margin-bottom:14px;border:1px solid #21262d}
+.warn{color:#f0883e}.ok{color:#3fb950}.score{font-size:2rem;font-weight:700}
+a{color:#58a6ff}
+</style></head><body>
+<h1>🧠 AI Coach</h1><p class=sub>flipch fork · evidence-based program generator (see <a href="/api/coach/principles">principles</a> · citations in repo <code>knowledge/</code>)</p>
+<div class=bar>
+  <div><label>Goal</label><select id=goal>
+    <option value=muscle>Build muscle</option><option value=strength>Build strength</option>
+    <option value=fatloss>Lose fat</option><option value=general selected>General / recomp</option></select></div>
+  <div><label>Days/week</label><select id=days><option>3</option><option selected>4</option><option>5</option><option>2</option></select></div>
+  <div><label>Experience</label><select id=exp><option>beginner</option><option selected>intermediate</option><option>advanced</option></select></div>
+  <div><label>Readiness (Whoop %)</label><input id=whoop type=number min=0 max=100 placeholder="optional" style=width:120px></div>
+  <div><label>Sleep (h)</label><input id=sleep type=number step=0.5 placeholder="opt" style=width:80px></div>
+  <button onclick=gen()>Generate program</button>
+</div>
+<div id=out class=muted>Pick options and generate a program. Runs fully offline (PT mode); add readiness to autoregulate.</div>
+<script>
+const $=id=>document.getElementById(id);
+async function gen(){
+  $('out').innerHTML='<p class=muted>Generating…</p>';
+  const body={goal:$('goal').value,days_per_week:+$('days').value,experience:$('exp').value};
+  const r={}; if($('whoop').value)r.whoop_recovery=+$('whoop').value; if($('sleep').value)r.sleep_hours=+$('sleep').value;
+  if(Object.keys(r).length)body.readiness=r;
+  const p=await (await fetch('/api/coach/program',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  render(p);
+}
+function render(p){
+  let h=`<div class=review style="background:#161b22"><span class=score>${p.review.score}</span> <span class=muted>/100 program quality · ${p.goal_label} · ${p.days_per_week}×/wk · ${p.experience}</span>`;
+  if(p.autoregulation){h+=`<div style="margin-top:8px">Readiness: <b>${p.autoregulation.band.toUpperCase()}</b> — ${p.autoregulation.message}</div>`;}
+  if(p.review.warnings.length){h+='<ul>'+p.review.warnings.map(w=>`<li class=warn>⚠ ${w}</li>`).join('')+'</ul>';}
+  else{h+='<div class=ok style="margin-top:8px">✓ Volume, balance and order all within evidence-based ranges.</div>';}
+  h+=`<div class=muted style="margin-top:6px">Weekly sets/muscle: ${Object.entries(p.weekly_sets_per_muscle).map(([k,v])=>k+' '+v).join(' · ')}</div></div>`;
+  for(const d of p.days){
+    h+=`<div class=day><h3>${d.name}</h3><div class=muted>${d.warmup} · ~${d.setup_swaps} setup changes</div>`;
+    h+='<table><tr><th>Exercise</th><th>Sets×Reps</th><th>%1RM</th><th>RIR</th><th>Rest</th><th>Mode</th><th>Setup</th></tr>';
+    for(const e of d.exercises){h+=`<tr><td>${e.name}${e.unilateral?' <span class=muted>(L/R)</span>':''}</td><td>${e.sets}×${e.reps}${e.load?(' @'+e.load):''}</td><td>${e.pct1rm}</td><td>${e.rir}</td><td>${e.rest_sec}s</td><td><span class="pill ${e.mode}" title="${e.mode_note}">${e.mode}</span></td><td class=muted>${e.accessory}/${e.belt}</td></tr>`;}
+    h+='</table>';
+    if(d.conditioning)h+=`<div class=muted style="margin-top:8px">🏃 ${d.conditioning}</div>`;
+    h+='</div>';
+  }
+  h+=`<p class=muted>${p.disclaimer}</p>`;
+  $('out').innerHTML=h;
+}
+</script></body></html>"""
+
+
+@features_bp.route('/coach')
+def coach_page():
+    return render_template_string(_COACH_HTML)
