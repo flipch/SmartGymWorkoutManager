@@ -37,6 +37,14 @@ services:
     depends_on:
       - smart-gym-app
     command: ["python", "mcp_server.py"]
+    # override the image healthcheck (which probes the Flask port 5001):
+    # this service serves the MCP on 5002, so check that instead.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 5002), 3).close()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
 
 volumes:
   gym-data:
