@@ -304,10 +304,10 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
     exp = EXPERIENCE[experience]
     one_rm = one_rm or {}
 
+    # Autoregulation is a *daily* overlay on top of the baseline week — it is reported as
+    # guidance (band + how to adjust today's session), not applied to the weekly volume,
+    # so the generated program keeps proper MEV→MRV volume year-round.
     auto = autoregulate(readiness) if readiness else None
-    vol_pct = auto["volume_pct"] if auto else 0
-    rir_min = auto["rir_min"] if auto else g["rir"][0]
-    intensity_pct = auto["intensity_pct"] if auto else 0
 
     split = SPLITS[days_per_week]
     # weekly frequency per muscle across the chosen split
@@ -330,7 +330,7 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
         ordered = _order(picks)
         # split each muscle's per-session set target across the exercises that hit it
         counts = Counter(e["muscles"][0] for e in ordered)
-        targets = {m: _sets_for(m, freq.get(m, 1), exp["vol_anchor"], vol_pct) for m in counts}
+        targets = {m: _sets_for(m, freq.get(m, 1), exp["vol_anchor"]) for m in counts}
         seen = {m: 0 for m in counts}
         exercises = []
         for e in ordered:
@@ -348,12 +348,10 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
                     mode = "eccentric"
             reps = target_reps
             load = working_weight(one_rm.get(e["name"]) or one_rm.get(m), reps)
-            if load and intensity_pct:
-                load = round(load * (1 + intensity_pct / 100.0), 1)
             exercises.append({
                 "name": e["name"], "primary": m, "muscles": e["muscles"],
                 "sets": sets, "reps": reps, "pct1rm": round(pct_for_reps(reps), 2),
-                "load": load, "rir": max(rir_min, g["rir"][0]), "rest_sec": g["rest"][0],
+                "load": load, "rir": g["rir"][0], "rest_sec": g["rest"][0],
                 "mode": mode, "mode_note": MODES[mode],
                 "accessory": e["accessory"], "belt": e["belt"], "unilateral": e["unilateral"],
             })
