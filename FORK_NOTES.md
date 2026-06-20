@@ -50,6 +50,10 @@ Point an MCP client at `http://<host>:5002/mcp` (streamable-http).
    Skill** (`skills/smart-gym-coach/SKILL.md`) so Claude/Codex/any agent can drive it.
    See `docs/ai-coach.md`.
 
-The MCP now exposes 17 tools (workouts/schedule/history + the 5 coach tools).
+The MCP now exposes 23 tools: workouts/schedule + history detail (`last_workout`,
+`recent_workouts`, `workout_session`) + the coach tools, including a **stateful real-time
+feedback loop** (`log_feedback`, `get_feedback`, `set_readiness`) so an agent can report how
+a session went and the next `generate_program` adapts (back off / progress / avoid). See
+`docs/ai-coach.md`.
 All new endpoints degrade gracefully when logged out (zeroed data, valid empty
 calendar) and parse Speediance responses defensively.

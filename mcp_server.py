@@ -22,6 +22,8 @@ from api_client import SpeedianceClient
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
     _detailed_records, fetch_session_detail, _summarize_session, _unit_label,
+    _feedback_profile, _load_readiness,
+    log_feedback as _persist_feedback, save_readiness as _persist_readiness,
 )
 
 mcp = FastMCP(
@@ -319,9 +321,19 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
     exercise (standard/chain/eccentric/constant/spotter), setup-swap count, and a quality
     review (volume vs landmarks, push/pull balance, eccentric share)."""
     def run():
-        # require nothing — works offline as a PT; uses live readiness if a wearable fed it
+        # works offline as a PT; auto-applies any persisted readiness + feedback so the
+        # program adapts to what the user/agent has reported (real-time, stateful loop).
+        c = _client()
+        r = readiness
+        if r is None:
+            stored = _load_readiness(c.data_dir)
+            if any(k in stored for k in ("whoop_recovery", "hrv_vs_baseline",
+                                         "rhr_delta_bpm", "sleep_hours", "subjective")):
+                r = stored
+        prof = _feedback_profile(c.data_dir)
+        fb = prof if prof.get("events") else None
         return coach.generate_program(goal=goal, days_per_week=days_per_week,
-                                      experience=experience, readiness=readiness)
+                                      experience=experience, readiness=r, feedback=fb)
     return _safe(run)
 
 
@@ -362,6 +374,61 @@ def autoregulate(whoop_recovery: float = None, hrv_vs_baseline: str = None,
         "subjective": subjective, "acwr": acwr,
     }.items() if v is not None}
     return _safe(lambda: coach.autoregulate(r))
+
+
+@mcp.tool()
+def log_feedback(rpe: float = None, difficulty: str = None, completion: str = None,
+                 soreness: int = None, pain: bool = None, avoid: str = None,
+                 exercise: str = None, note: str = None) -> dict:
+    """Tell the coach how a session went — this PERSISTS and adapts future programs in real
+    time (the next generate_program automatically reflects it). Provide any subset:
+    rpe (1-10), difficulty (too_easy|ok|too_hard), completion (missed|as_prescribed|exceeded),
+    soreness (1-5), pain (true → flags `exercise` to avoid), avoid (exercise name to drop),
+    exercise (which lift this is about), note (free text). Returns the updated profile and how
+    the next program will change."""
+    def run():
+        c = _client()
+        payload = {k: v for k, v in {
+            "rpe": rpe, "difficulty": difficulty, "completion": completion,
+            "soreness": soreness, "pain": pain, "avoid": avoid,
+            "exercise": exercise, "note": note}.items() if v is not None}
+        ev = _persist_feedback(payload, c.data_dir)
+        if not ev:
+            return {"error": "empty", "message": "Provide at least one feedback field."}
+        prof = _feedback_profile(c.data_dir)
+        return {"logged": ev, "profile": prof,
+                "next_program_adjustment": coach.feedback_adjustment(prof)}
+    return _safe(run)
+
+
+@mcp.tool()
+def get_feedback() -> dict:
+    """Return the current accumulated feedback profile and how it will adjust the next
+    program (avg RPE, difficulty signal, exercises being avoided)."""
+    def run():
+        prof = _feedback_profile(_client().data_dir)
+        return {"profile": prof, "next_program_adjustment": coach.feedback_adjustment(prof)}
+    return _safe(run)
+
+
+@mcp.tool()
+def set_readiness(whoop_recovery: float = None, hrv_vs_baseline: str = None,
+                  rhr_delta_bpm: float = None, sleep_hours: float = None,
+                  subjective: int = None, acwr: float = None) -> dict:
+    """Persist today's recovery signals (from Whoop / Apple Health / a 1-5 subjective score)
+    so subsequent generate_program / recovery calls use them automatically. Returns today's
+    training adjustment."""
+    def run():
+        c = _client()
+        payload = {k: v for k, v in {
+            "whoop_recovery": whoop_recovery, "hrv_vs_baseline": hrv_vs_baseline,
+            "rhr_delta_bpm": rhr_delta_bpm, "sleep_hours": sleep_hours,
+            "subjective": subjective, "acwr": acwr}.items() if v is not None}
+        if not payload:
+            return {"error": "empty", "message": "Provide at least one readiness signal."}
+        keep = _persist_readiness(payload, c.data_dir)
+        return {"stored": keep, "adjustment": coach.autoregulate(keep)}
+    return _safe(run)
 
 
 if __name__ == "__main__":

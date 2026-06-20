@@ -70,6 +70,28 @@ curl -X POST https://gym.lan.doghous.cloud/api/coach/readiness \
 Agents can also pass readiness inline to `generate_program(..., readiness={...})` or call
 `autoregulate(...)` directly without persisting.
 
+## Real-time feedback loop (stateful)
+
+Agents don't just read — they can **tell the coach how a session went**, and the next
+program adapts automatically. Feedback persists to `DATA_DIR/coach_feedback.json` (shared
+by the app + MCP), and `generate_program` folds the derived profile in on every call.
+
+- **MCP:** `log_feedback(rpe, difficulty, completion, soreness, pain, avoid, exercise, note)`,
+  `get_feedback()`, `set_readiness(...)`.
+- **HTTP:** `POST/GET /api/coach/feedback`.
+
+How the profile steers the next program:
+
+| Signal | Effect on next `generate_program` |
+|--------|-----------------------------------|
+| `difficulty=too_hard` or avg RPE ≥ 9 | −1 set/muscle, +1 RIR (back off) |
+| `difficulty=too_easy` or avg RPE ≤ 6 | +1 set/muscle, −1 RIR (progress) |
+| `pain` on an exercise, or `avoid=<name>` | that exercise is dropped from selection |
+| `soreness` ≥ 4 (avg) | treated as too-hard |
+
+So a session like *"log_feedback(difficulty='too_hard', avoid='Lat pulldown')"* immediately
+yields a lighter next week with that lift removed — a closed real-time loop, not a one-shot.
+
 ## Applying a generated plan to the machine
 
 The coach proposes; the user approves; then the agent writes it:

@@ -287,14 +287,33 @@ def _sets_for(muscle, days_hitting, anchor, vol_pct=0):
     return max(2, min(7, round(per_session)))
 
 
+# ───────────────────────────────────────────── feedback loop (agent-supplied, stateful)
+def feedback_adjustment(profile):
+    """Turn a derived feedback profile into concrete program tweaks. `profile` (see
+    features._feedback_profile): {avg_rpe, difficulty_signal, avoid:[...], events}.
+    Returns volume/RIR deltas + the avoid list so the NEXT program adapts to what the
+    user/agent reported (too hard/easy, soreness, exercises to avoid)."""
+    p = profile or {}
+    rpe = p.get("avg_rpe")
+    sig = p.get("difficulty_signal")
+    sets_delta, rir_delta, action = 0, 0, "hold (feedback neutral)"
+    if sig == "too_hard" or (isinstance(rpe, (int, float)) and rpe >= 9):
+        sets_delta, rir_delta, action = -1, +1, "backed off — recent sessions reported too hard / high RPE"
+    elif sig == "too_easy" or (isinstance(rpe, (int, float)) and 0 < rpe <= 6):
+        sets_delta, rir_delta, action = +1, -1, "progressed — recent sessions reported too easy / low RPE"
+    return {"sets_delta": sets_delta, "rir_delta": rir_delta,
+            "avoid": list(p.get("avoid", []) or []), "action": action}
+
+
 # ───────────────────────────────────────────── program generation
 def generate_program(goal="general", days_per_week=4, experience="intermediate",
-                     one_rm=None, readiness=None, available_accessories=None):
+                     one_rm=None, readiness=None, available_accessories=None, feedback=None):
     """Generate a full weekly Speediance program.
 
     one_rm: optional {muscle_or_exercise_name: 1RM} to fill working loads.
-    readiness: optional dict (see autoregulate) → scales today's volume/intensity/RIR.
+    readiness: optional dict (see autoregulate) → today's daily-overlay guidance.
     available_accessories: optional list to restrict the catalog (PT-mode constraint).
+    feedback: optional derived feedback profile → adapts volume/RIR and avoids exercises.
     Returns a structured dict (JSON-serialisable).
     """
     goal = goal if goal in GOALS else "general"
@@ -303,6 +322,12 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
     g = GOALS[goal]
     exp = EXPERIENCE[experience]
     one_rm = one_rm or {}
+
+    # Stateful feedback: what the user/agent reported last session adapts THIS program.
+    fb = feedback_adjustment(feedback) if feedback else None
+    avoid = {a.lower() for a in (fb["avoid"] if fb else [])}
+    sets_delta = fb["sets_delta"] if fb else 0
+    base_rir = min(4, max(0, g["rir"][0] + (fb["rir_delta"] if fb else 0)))
 
     # Autoregulation is a *daily* overlay on top of the baseline week — it is reported as
     # guidance (band + how to adjust today's session), not applied to the weekly volume,
@@ -327,10 +352,12 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
         picks = _pick_for_day(focus, goal, experience, exp["advanced_modes"])
         if available_accessories:
             picks = [e for e in picks if e["accessory"] in set(available_accessories) | {"none"}] or picks
+        if avoid:  # drop exercises the user/agent asked to avoid (injury/preference)
+            picks = [e for e in picks if e["name"].lower() not in avoid] or picks
         ordered = _order(picks)
         # split each muscle's per-session set target across the exercises that hit it
         counts = Counter(e["muscles"][0] for e in ordered)
-        targets = {m: _sets_for(m, freq.get(m, 1), exp["vol_anchor"]) for m in counts}
+        targets = {m: max(2, _sets_for(m, freq.get(m, 1), exp["vol_anchor"]) + sets_delta) for m in counts}
         seen = {m: 0 for m in counts}
         exercises = []
         for e in ordered:
@@ -351,7 +378,7 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
             exercises.append({
                 "name": e["name"], "primary": m, "muscles": e["muscles"],
                 "sets": sets, "reps": reps, "pct1rm": round(pct_for_reps(reps), 2),
-                "load": load, "rir": g["rir"][0], "rest_sec": g["rest"][0],
+                "load": load, "rir": base_rir, "rest_sec": g["rest"][0],
                 "mode": mode, "mode_note": MODES[mode],
                 "accessory": e["accessory"], "belt": e["belt"], "unilateral": e["unilateral"],
             })
@@ -373,6 +400,7 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
         "prescription": {"reps": list(g["reps"]), "pct1rm": list(g["pct1rm"]),
                           "rest_sec": list(g["rest"]), "rir": list(g["rir"])},
         "autoregulation": auto,
+        "feedback_applied": fb,
         "days": days_out,
         "weekly_sets_per_muscle": weekly_sets,
         "review": review,

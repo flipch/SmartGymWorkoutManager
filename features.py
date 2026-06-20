@@ -256,17 +256,35 @@ def insights_page():
 # Evidence-based coaching engine (coach.py) surfaced over HTTP. The same logic is exposed to
 # AI agents via the MCP server and the portable Agent Skill.
 
-def _readiness_path():
-    d = getattr(_client, "data_dir", ".") if _client else "."
-    return os.path.join(d, "readiness.json")
+def _data_dir(data_dir=None):
+    """Shared /data dir. HTTP routes pass nothing (use the blueprint client); the MCP —
+    a separate process with its own client — passes its client's data_dir explicitly."""
+    return data_dir or (getattr(_client, "data_dir", ".") if _client else ".")
 
 
-def _load_readiness():
+def _readiness_path(data_dir=None):
+    return os.path.join(_data_dir(data_dir), "readiness.json")
+
+
+def _load_readiness(data_dir=None):
     try:
-        with open(_readiness_path()) as f:
+        with open(_readiness_path(data_dir)) as f:
             return json.load(f)
     except Exception:
         return {}
+
+
+READINESS_KEYS = ("whoop_recovery", "hrv_vs_baseline", "rhr_delta_bpm",
+                  "sleep_hours", "subjective", "acwr")
+
+
+def save_readiness(payload, data_dir=None):
+    """Persist a readiness payload (Whoop/Apple Health/subjective) for later use."""
+    keep = {k: payload[k] for k in READINESS_KEYS if k in payload}
+    keep["updated"] = datetime.utcnow().isoformat() + "Z"
+    with open(_readiness_path(data_dir), "w") as f:
+        json.dump(keep, f)
+    return keep
 
 
 def _coach_workout_to_exercises(detail):
@@ -300,13 +318,8 @@ def coach_readiness():
     (the integration point for Whoop / Apple Health auto-export shortcuts)."""
     if request.method == 'POST':
         data = request.get_json(silent=True) or {}
-        keep = {k: data[k] for k in
-                ("whoop_recovery", "hrv_vs_baseline", "rhr_delta_bpm", "sleep_hours", "subjective", "acwr")
-                if k in data}
-        keep["updated"] = datetime.utcnow().isoformat() + "Z"
         try:
-            with open(_readiness_path(), "w") as f:
-                json.dump(keep, f)
+            keep = save_readiness(data)
         except Exception as e:
             return jsonify({"error": "could_not_store", "message": str(e)}), 500
         return jsonify({"stored": keep, "adjustment": coach.autoregulate(keep)})
@@ -323,8 +336,15 @@ def coach_autoregulate():
 def coach_program():
     body = request.get_json(silent=True) or {}
     readiness = body.get("readiness")
-    if readiness is None and body.get("use_stored_readiness"):
-        readiness = _load_readiness() or None
+    if readiness is None and body.get("use_stored_readiness", True):
+        stored = _load_readiness()
+        if any(k in stored for k in ("whoop_recovery", "hrv_vs_baseline",
+                                     "rhr_delta_bpm", "sleep_hours", "subjective")):
+            readiness = stored
+    feedback = body.get("feedback")
+    if feedback is None and body.get("use_stored_feedback", True):
+        prof = _feedback_profile()
+        feedback = prof if prof.get("events") else None
     prog = coach.generate_program(
         goal=body.get("goal", "general"),
         days_per_week=body.get("days_per_week", 4),
@@ -332,8 +352,83 @@ def coach_program():
         one_rm=body.get("one_rm"),
         readiness=readiness,
         available_accessories=body.get("available_accessories"),
+        feedback=feedback,
     )
     return jsonify(prog)
+
+
+# ── stateful feedback loop: agents log how a session went; the next program adapts ──
+FEEDBACK_KEYS = ("exercise", "rpe", "difficulty", "completion", "soreness",
+                 "pain", "avoid", "prefer", "note", "workout_code")
+
+
+def _feedback_path(data_dir=None):
+    return os.path.join(_data_dir(data_dir), "coach_feedback.json")
+
+
+def _load_feedback_events(data_dir=None):
+    try:
+        with open(_feedback_path(data_dir)) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def log_feedback(payload, data_dir=None):
+    """Append one feedback event (any subset of FEEDBACK_KEYS) and return the event."""
+    event = {k: payload[k] for k in FEEDBACK_KEYS if k in payload}
+    if not event:
+        return None
+    event["ts"] = datetime.utcnow().isoformat() + "Z"
+    events = _load_feedback_events(data_dir)
+    events.append(event)
+    try:
+        with open(_feedback_path(data_dir), "w") as f:
+            json.dump(events[-100:], f)
+    except Exception:
+        pass
+    return event
+
+
+def _feedback_profile(data_dir=None, days=14):
+    """Derive a coaching profile from recent feedback events."""
+    events = _load_feedback_events(data_dir)
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"
+    recent = [e for e in events if e.get("ts", "") >= cutoff] or events[-10:]
+    rpes = [e["rpe"] for e in recent if isinstance(e.get("rpe"), (int, float))]
+    avg_rpe = round(sum(rpes) / len(rpes), 1) if rpes else None
+    votes = [e.get("difficulty") for e in recent if e.get("difficulty") in ("too_easy", "ok", "too_hard")]
+    sig = None
+    if votes:
+        hard, easy = votes.count("too_hard"), votes.count("too_easy")
+        sig = "too_hard" if hard > easy else "too_easy" if easy > hard else "balanced"
+    sore = [e["soreness"] for e in recent if isinstance(e.get("soreness"), (int, float))]
+    if sig is None and sore and sum(sore) / len(sore) >= 4:
+        sig = "too_hard"
+    avoid = sorted({e["avoid"] for e in events if e.get("avoid")} |
+                   {e["exercise"] for e in events if e.get("pain") and e.get("exercise")})
+    return {"events": len(events), "recent_events": len(recent), "avg_rpe": avg_rpe,
+            "difficulty_signal": sig, "avoid": avoid,
+            "recent_notes": [e["note"] for e in recent if e.get("note")][-5:]}
+
+
+@features_bp.route('/api/coach/feedback', methods=['GET', 'POST'])
+def coach_feedback():
+    """POST a feedback event from a session (any subset of: rpe 1-10, difficulty
+    too_easy|ok|too_hard, completion, soreness 1-5, pain, avoid <exercise>, note).
+    GET returns the derived profile + how it will adjust the next program."""
+    if request.method == 'POST':
+        event = log_feedback(request.get_json(silent=True) or {})
+        if not event:
+            return jsonify({"error": "empty",
+                            "message": "Provide at least one of: rpe, difficulty, completion, "
+                                       "soreness, pain, avoid, note."}), 400
+        prof = _feedback_profile()
+        return jsonify({"logged": event, "profile": prof,
+                        "next_program_adjustment": coach.feedback_adjustment(prof)})
+    prof = _feedback_profile()
+    return jsonify({"profile": prof, "next_program_adjustment": coach.feedback_adjustment(prof)})
 
 
 @features_bp.route('/api/coach/critique', methods=['POST'])
