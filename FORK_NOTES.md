@@ -41,6 +41,15 @@ Point an MCP client at `http://<host>:5002/mcp` (streamable-http).
    Apple/Google Calendar.
 3. **Recovery recommendation** — `/api/recovery` (surfaced on the Insights
    page). Train / rest / active-recovery suggestion from recent frequency.
+4. **AI Coach** — `/coach` (+ `/api/coach/program|critique|autoregulate|readiness|principles`).
+   An evidence-based program generator + safety critic + readiness autoregulator built on a
+   cited science corpus (`knowledge/*.md`, ~60 sources) and a deterministic engine
+   (`coach.py`). Maps goals → Speediance modes (chain/eccentric/constant/spotter), belt/
+   accessory ordering, 3/4/5-day splits, RM-based loads, and wearable (Whoop/Apple Health)
+   autoregulation. Exposed identically over **HTTP, the MCP, and a portable open Agent
+   Skill** (`skills/smart-gym-coach/SKILL.md`) so Claude/Codex/any agent can drive it.
+   See `docs/ai-coach.md`.
 
+The MCP now exposes 17 tools (workouts/schedule/history + the 5 coach tools).
 All new endpoints degrade gracefully when logged out (zeroed data, valid empty
 calendar) and parse Speediance responses defensively.
