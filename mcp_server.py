@@ -19,7 +19,10 @@ from mcp.server.fastmcp import FastMCP
 
 import coach
 from api_client import SpeedianceClient
-from features import _session_dates, _coach_workout_to_exercises  # shared so MCP == HTTP logic
+from features import (  # shared so MCP == HTTP logic
+    _session_dates, _coach_workout_to_exercises,
+    _detailed_records, fetch_session_detail, _summarize_session, _unit_label,
+)
 
 mcp = FastMCP(
     "smart-gym",
@@ -150,6 +153,53 @@ def training_history(days: int = 30) -> dict:
         return {"start": start.isoformat(), "end": end.isoformat(),
                 "count": len(recs) if isinstance(recs, list) else None,
                 "sessions": recs}
+    return _safe(run)
+
+
+@mcp.tool()
+def last_workout(n: int = 1, days: int = 60) -> dict:
+    """Full per-set detail of a recent COMPLETED workout (n=1 = most recent, n=2 = the one
+    before, …) — the same data as the web History detail view. Each exercise lists its sets
+    with reps done/target, the actual weight used (including any mid-set weight changes),
+    per-set volume, L/R side for unilateral work, and the rating; plus session totals
+    (duration, calories, volume). Use this to review or critique what the user actually did."""
+    def run():
+        c = _client(); _require_auth(c)
+        recs = _detailed_records(c, days)
+        if len(recs) < n:
+            return {"error": "not_found",
+                    "message": f"Fewer than {n} detailed workouts in the last {days} days."}
+        return fetch_session_detail(c, recs[n - 1])
+    return _safe(run)
+
+
+@mcp.tool()
+def recent_workouts(days: int = 30) -> dict:
+    """List recent completed workouts (name, date, duration, calories, volume, training_id)
+    newest first — a quick index. Use last_workout or workout_session for full per-set detail."""
+    def run():
+        c = _client(); _require_auth(c)
+        recs = _detailed_records(c, days)
+        return {"count": len(recs), "workouts": [{
+            "training_id": r.get("trainingId"), "name": r.get("title") or "Workout",
+            "type": r.get("type"), "start_ts": r.get("startTimestamp"),
+            "duration_sec": r.get("trainingTime"),
+            "calories": round(r.get("calorie") or 0),
+            "volume": round(r.get("totalCapacity") or 0),
+        } for r in recs]}
+    return _safe(run)
+
+
+@mcp.tool()
+def workout_session(training_id: int, training_type: str = "custom") -> dict:
+    """Full per-set detail for a specific completed session by training_id (from
+    recent_workouts). training_type: 'custom' or 'course'."""
+    def run():
+        c = _client(); _require_auth(c)
+        detail = c.get_training_detail(training_id, training_type)
+        record = {"trainingId": training_id, "title": None,
+                  "type": 2 if training_type == "course" else 5}
+        return _summarize_session(record, detail, _unit_label(c))
     return _safe(run)
 
 

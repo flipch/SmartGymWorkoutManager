@@ -419,3 +419,124 @@ function render(p){
 @features_bp.route('/coach')
 def coach_page():
     return render_template_string(_COACH_HTML)
+
+
+# ═══════════════════════ Completed-session detail (latest workout) ═══════════════════════
+# Mirrors the web History detail modal: get_training_records (list) -> get_training_detail
+# (per-set actuals). Helpers are client-parameterised so the MCP (fresh client per call) and
+# the HTTP route (shared blueprint client) can both use them.
+
+TRAINING_TYPE_MAP = {1: ("Free Lift", None), 2: ("Program", "course"),
+                     5: ("Custom", "custom"), 7: ("Quick", None)}
+
+
+def _fmt_secs(s):
+    s = int(s or 0)
+    h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+    return f"{h}h{m:02d}m" if h else f"{m}m{sec:02d}s"
+
+
+def _unit_label(client):
+    return "lbs" if (client and client.credentials.get("unit")) else "kg"
+
+
+def _summarize_set(s, unilateral):
+    d = s.get("trainingInfoDetail") or {}
+    side = {1: "L", 2: "R"}.get(s.get("leftRight")) if unilateral else None
+    warr = None
+    if unilateral and s.get("leftRight") == 1 and d.get("leftWeights"):
+        warr = d["leftWeights"]
+    elif unilateral and s.get("leftRight") == 2 and d.get("rightWeights"):
+        warr = d["rightWeights"]
+    elif d.get("weights"):
+        warr = d["weights"]
+    reps = s.get("finishedCount") or 0
+    tgt = s.get("targetCount") or 0
+    cap = s.get("capacity") or 0
+    out = {"reps": reps, "target_reps": tgt, "completed": bool(tgt and reps >= tgt),
+           "volume": round(cap, 1)}
+    if side:
+        out["side"] = side
+    if warr:
+        if len(set(warr)) == 1:
+            out["weight"] = warr[0]
+        else:  # weight changed mid-set — summarise as "8x43, 4x30" + first→last
+            segs, cw, c = [], warr[0], 1
+            for w in warr[1:]:
+                if w == cw:
+                    c += 1
+                else:
+                    segs.append((cw, c)); cw, c = w, 1
+            segs.append((cw, c))
+            out["weight"] = [segs[0][0], segs[-1][0]]
+            out["weight_note"] = ", ".join(f"{n}x{w}" for w, n in segs)
+    elif reps and cap:
+        out["weight"] = round(cap / reps, 1)
+    if s.get("time"):
+        out["duration_sec"] = s["time"]
+    return out
+
+
+def _summarize_session(record, detail, unit):
+    exercises = []
+    for ex in (detail if isinstance(detail, list) else []):
+        if not isinstance(ex, dict):
+            continue
+        uni = ex.get("isLeftRight") == 1
+        sets = [_summarize_set(s, uni) for s in (ex.get("finishedReps") or []) if isinstance(s, dict)]
+        exercises.append({
+            "name": ex.get("actionLibraryName") or "Exercise",
+            "group_id": ex.get("actionLibraryGroupId"),
+            "rating": ex.get("actionRating"),
+            "unilateral": uni, "timer": ex.get("completionMethod") == 0,
+            "total_volume": round(ex.get("totalCapacity") or 0, 1),
+            "max_weight": ex.get("maxWeight"),
+            "sets": sets,
+        })
+    ts = record.get("startTimestamp")
+    label = TRAINING_TYPE_MAP.get(record.get("type"), (f"Type {record.get('type')}", None))[0]
+    return {
+        "training_id": record.get("trainingId"), "name": record.get("title") or "Workout",
+        "type": label,
+        "date": datetime.utcfromtimestamp(ts).isoformat() + "Z" if ts else None,
+        "duration": _fmt_secs(record.get("trainingTime")), "duration_sec": record.get("trainingTime"),
+        "calories": round(record.get("calorie") or 0),
+        "volume": round(record.get("totalCapacity") or 0), "unit": unit,
+        "exercise_count": len(exercises),
+        "total_sets": sum(len(e["sets"]) for e in exercises),
+        "exercises": exercises,
+    }
+
+
+def _detailed_records(client, days=60):
+    """Recent completed sessions that have a per-set breakdown, newest first."""
+    end = date.today(); start = end - timedelta(days=days)
+    recs = client.get_training_records(start.isoformat(), end.isoformat())
+    recs = [r for r in (recs if isinstance(recs, list) else []) if isinstance(r, dict)
+            and TRAINING_TYPE_MAP.get(r.get("type"), (None, None))[1]]
+    recs.sort(key=lambda r: r.get("startTimestamp") or 0, reverse=True)
+    return recs
+
+
+def fetch_session_detail(client, record):
+    api_type = TRAINING_TYPE_MAP.get(record.get("type"), ("?", "custom"))[1] or "custom"
+    detail = client.get_training_detail(record["trainingId"], api_type)
+    return _summarize_session(record, detail, _unit_label(client))
+
+
+@features_bp.route('/api/last_workout')
+def api_last_workout():
+    """Full per-set detail of a recent completed workout (newest = n=1)."""
+    if not _authed():
+        return jsonify({"error": "not_authenticated",
+                        "message": "Log in at /settings with your Speediance account."}), 401
+    days = int(request.args.get("days", 60))
+    n = max(1, int(request.args.get("n", 1)))
+    try:
+        recs = _detailed_records(_client, days)
+    except Exception as e:
+        return jsonify({"error": "fetch_failed", "message": str(e)}), 502
+    if len(recs) < n:
+        return jsonify({"error": "not_found",
+                        "message": f"Fewer than {n} detailed workouts in the last {days} days."}), 404
+    return jsonify(fetch_session_detail(_client, recs[n - 1]))
