@@ -778,8 +778,14 @@ def apply_program(client, program, day_index=None, name=None, dry_run=False):
                  "resolved": resolved, "unresolved": unresolved, "created": False}
         if not dry_run and exercises:
             try:
-                client.save_workout(nm, exercises)
+                resp = client.save_workout(nm, exercises)
                 entry["created"] = True
+                data = resp.get("data") if isinstance(resp, dict) else None
+                if isinstance(data, dict):
+                    entry["template_id"] = data.get("id") or data.get("templateId")
+                    entry["code"] = data.get("code")
+                elif data:
+                    entry["template_id"] = data
             except Exception as e:
                 entry["error"] = str(e)
         results.append(entry)
