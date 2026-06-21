@@ -408,11 +408,98 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
     }
 
 
+# ───────────────────────────────────────────── exercise classifier (arbitrary names)
+# Real Speediance names ("Barbell Romanian Deadlift", "Seated Dual-Handle Row") don't match
+# the CATALOG, so critique + insights classify by keyword. Order matters: most specific first.
+CLASSIFY_RULES = [
+    (("face pull", "rear delt", "rear-delt", "reverse fly", "reverse cable fly", "rear fly",
+      "reverse pec", "bent-over fly", "bent over fly"), ("rear_delts", "h_pull")),
+    (("romanian deadlift", "rdl", "stiff-leg", "stiff leg", "good morning", "pull-through",
+      "pull through", "leg curl", "lying curl", "seated leg curl", "nordic", "hamstring"), ("hamstrings", "hinge")),
+    (("hip thrust", "glute bridge", "hip bridge", "kickback", "glute kick", "hip abduction",
+      "hip abductor", "hip extension", "glute", "frog pump"), ("glutes", "hinge")),
+    (("leg extension", "leg press", "hack squat", "front squat", "back squat", "goblet squat",
+      "split squat", "bulgarian", "lunge", "step-up", "step up", "sissy", "squat", "quad"), ("quads", "squat")),
+    (("calf", "calve", "soleus", "gastroc", "toe raise"), ("calves", "knee")),
+    (("lat pulldown", "pulldown", "pull-down", "pull-up", "pull up", "pullup", "chin-up",
+      "chin up", "straight arm", "straight-arm", "pullover"), ("back", "v_pull")),
+    (("row", "t-bar", "t bar"), ("back", "h_pull")),
+    (("lateral raise", "lat raise", "side raise", "side delt", "y-raise"), ("shoulders", "v_push")),
+    (("overhead press", "shoulder press", "military press", "arnold", "ohp", "upright row",
+      "delt", "shoulder"), ("shoulders", "v_push")),
+    (("shrug", "trap raise", "trapezius"), ("traps", "v_pull")),
+    (("preacher", "hammer curl", "concentration curl", "ez curl", "bicep", "biceps", "curl"), ("biceps", "h_pull")),
+    (("triceps pushdown", "tricep pushdown", "pushdown", "triceps extension", "tricep extension",
+      "overhead extension", "skull", "skullcrusher", "dip", "triceps", "tricep"), ("triceps", "v_push")),
+    (("bench press", "chest press", "incline press", "decline press", "incline fly", "chest fly",
+      "pec fly", "pec deck", "fly", "push-up", "push up", "pushup", "chest", "pec "), ("chest", "h_push")),
+    (("crunch", "plank", "sit-up", "sit up", "leg raise", "knee raise", "dead bug", "dead-bug",
+      "woodchop", "wood chop", "pallof", "russian twist", "ab wheel", "rollout", "hollow",
+      "oblique", "core", " abs"), ("abs", "core")),
+    (("deadlift",), ("hamstrings", "hinge")),
+    (("rowing", "row erg", "bike", "run", "treadmill", "ski erg", "elliptical", "zone 2",
+      "stretch", "mobility", "warm-up", "warm up"), (None, "cardio")),
+]
+
+_MUSCLE_TAG_MAP = {
+    "chest": "chest", "pecs": "chest", "back": "back", "lats": "back", "upper back": "back",
+    "quads": "quads", "quadriceps": "quads", "hamstrings": "hamstrings", "glutes": "glutes",
+    "shoulders": "shoulders", "side delts": "shoulders", "front delts": "shoulders",
+    "rear delts": "rear_delts", "biceps": "biceps", "triceps": "triceps",
+    "calves": "calves", "abs": "abs", "core": "abs", "traps": "traps",
+}
+
+_UNI_KEYS = ("single", "one-arm", "one arm", "single-arm", "single-leg", "single leg",
+             "unilateral", "split squat", "bulgarian", "lunge", "step-up", "step up", "1-arm", "1 arm")
+_COMPOUND_KW = ("press", "row", "pulldown", "pull-up", "pull up", "squat", "deadlift",
+                "thrust", "lunge", "dip", "chin", "clean", "snatch")
+_ISO_KW = ("fly", "raise", "curl", "extension", "pushdown", "kickback", "crunch", "calf",
+           "shrug", "pull-through", "pullover", "straight-arm", "straight arm", "pec deck")
+
+
+def classify_exercise(name, api_muscle=None):
+    """(muscle, pattern, unilateral) for an arbitrary exercise name. Prefer the device's own
+    muscle tag (api_muscle, e.g. 'Side Delts') when given; else keyword-classify the name."""
+    n = (name or "").lower().strip()
+    unilateral = any(k in n for k in _UNI_KEYS)
+    muscle = _MUSCLE_TAG_MAP.get((api_muscle or "").lower().strip()) if api_muscle else None
+    pattern = None
+    for keys, (mus, pat) in CLASSIFY_RULES:
+        if any(k in n for k in keys):
+            if muscle is None:
+                muscle = mus
+            pattern = pat
+            break
+    return muscle, pattern, unilateral
+
+
+def _movement_rank(name):
+    """1 = compound, 3 = isolation, 2 = other (for exercise-order checks)."""
+    n = (name or "").lower()
+    if any(k in n for k in _ISO_KW):
+        return 3
+    if any(k in n for k in _COMPOUND_KW):
+        return 1
+    return 2
+
+
+def _classify_items(exercises):
+    items = []
+    for ex in (exercises or []):
+        name = ex.get("name") or ex.get("exercise") or ""
+        api_m = ex.get("muscle") or ex.get("api_muscle") or ex.get("mainMuscleGroupName")
+        muscle, pattern, uni = classify_exercise(name, api_m)
+        items.append({"name": name, "muscle": muscle, "pattern": pattern,
+                      "sets": int(ex.get("sets") or 0), "reps": ex.get("reps"),
+                      "mode": ex.get("mode") or "standard", "unilateral": uni,
+                      "rank": _movement_rank(name)})
+    return items
+
+
 # ───────────────────────────────────────────── critique / safety ("not training wrong things")
 def critique_program(weekly_sets, days, goal="general"):
-    """Check weekly volume vs landmarks, push/pull balance, eccentric share, and order."""
+    """WEEKLY-program review: per-muscle volume vs MEV/MAV/MRV, push/pull, eccentric, order."""
     findings, warnings = [], []
-
     for m, (mev, mav, mrv) in VOLUME.items():
         s = weekly_sets.get(m, 0)
         if s == 0:
@@ -421,67 +508,91 @@ def critique_program(weekly_sets, days, goal="general"):
             warnings.append(f"{m}: {s} sets/wk is below MEV ({mev}) — likely too little to grow.")
         elif s > mrv:
             warnings.append(f"{m}: {s} sets/wk exceeds MRV ({mrv}) — recovery risk, trim volume.")
-    # muscles entirely missing that the goal usually wants
     for m in ("back", "hamstrings", "rear_delts"):
         if weekly_sets.get(m, 0) == 0:
             findings.append(f"No direct {m} volume — common imbalance; add a movement.")
-
-    # push/pull balance across the week
-    push = pull = ecc = total = 0
+    push = pull = ecc = 0
     for d in days:
         for e in d["exercises"]:
-            total += 1
-            pat = next((x["pattern"] for x in CATALOG if x["name"] == e["name"]), "")
+            pat = e.get("pattern") or classify_exercise(e.get("name", ""))[1]
             if pat in PUSH_PATTERNS:
                 push += e["sets"]
             elif pat in PULL_PATTERNS:
                 pull += e["sets"]
             if e.get("mode") == "eccentric":
                 ecc += e["sets"]
+        ranks = [e.get("rank") or _movement_rank(e.get("name", "")) for e in d["exercises"]]
+        if ranks != sorted(ranks):
+            findings.append(f"{d.get('name', 'day')}: order isn't compound→isolation (double-check).")
     allsets = sum(weekly_sets.values()) or 1
     if push and pull and push > pull * 1.2:
         warnings.append(f"Push:pull = {push}:{pull} sets — bias toward MORE pulling (target ~1:1 to 1:2).")
     if ecc / allsets > 0.30:
         warnings.append(f"Eccentric-overload is {round(100*ecc/allsets)}% of volume — keep <=~25-30% (high fatigue).")
-
-    # exercise order: isolation should not precede a compound for the same region within a day
-    for d in days:
-        prios = [ORDER_PRIORITY.get(next((x["priority"] for x in CATALOG if x["name"] == e["name"]), "compound"), 3)
-                 for e in d["exercises"]]
-        if prios != sorted(prios):
-            findings.append(f"{d['name']}: exercise order isn't compound→isolation (auto-ordered, double-check).")
-
     score = max(0, 100 - 12 * len(warnings) - 4 * len(findings))
-    return {"score": score, "warnings": warnings, "notes": findings,
+    return {"mode": "weekly", "score": score, "warnings": warnings, "notes": findings,
             "balance": {"push_sets": push, "pull_sets": pull, "eccentric_share_pct": round(100 * ecc / allsets)}}
 
 
-def critique_workout(exercises, goal="general"):
-    """Critique an ad-hoc/imported workout: a list of dicts with at least
-    {name|muscle, sets, reps} (mode optional). Returns findings + suggestions."""
-    weekly = {}
-    norm_days = [{"name": "session", "exercises": []}]
-    for ex in (exercises or []):
-        name = ex.get("name") or ex.get("exercise") or ""
-        cat = next((x for x in CATALOG if x["name"].lower() == name.lower()), None)
-        muscle = (ex.get("muscle") or (cat["muscles"][0] if cat else "") or "").lower()
-        sets = int(ex.get("sets") or 0)
-        if muscle:
-            weekly[muscle] = weekly.get(muscle, 0) + sets
-        norm_days[0]["exercises"].append({
-            "name": name or muscle, "sets": sets, "reps": ex.get("reps"),
-            "mode": (ex.get("mode") or (cat["default_mode"] if cat else "standard")),
-        })
+def critique_workout(exercises, goal="general", mode="session"):
+    """Critique a workout. mode='session' (a single workout — the default) judges per-session
+    quality and does NOT apply weekly volume landmarks (which would falsely flag every muscle
+    as below-MEV). mode='weekly' treats the list as a whole week and checks MEV/MAV/MRV.
+    Exercises are classified by keyword, so real Speediance names work."""
     g = GOALS.get(goal, GOALS["general"])
-    rep_flags = []
-    for ex in (exercises or []):
-        reps = ex.get("reps")
-        if isinstance(reps, (int, float)) and not (g["reps"][0] <= reps <= g["reps"][1] + 4):
-            rep_flags.append(f"{ex.get('name','exercise')}: {reps} reps is off-target for {goal} ({g['reps'][0]}-{g['reps'][1]}).")
-    rev = critique_program(weekly, norm_days, goal)
-    rev["rep_range_flags"] = rep_flags
-    rev["weekly_sets_per_muscle"] = weekly
-    return rev
+    items = _classify_items(exercises)
+    sets_by_muscle = {}
+    for it in items:
+        if it["muscle"]:
+            sets_by_muscle[it["muscle"]] = sets_by_muscle.get(it["muscle"], 0) + it["sets"]
+    if mode == "weekly":
+        rev = critique_program(sets_by_muscle, [{"name": "week", "exercises": items}], goal)
+        rev["weekly_sets_per_muscle"] = sets_by_muscle
+        rev["classified"] = [{"name": it["name"], "muscle": it["muscle"], "sets": it["sets"]} for it in items]
+        return rev
+    return _critique_session(items, sets_by_muscle, g, goal)
+
+
+def _critique_session(items, sets_by_muscle, g, goal):
+    findings, warnings = [], []
+    unclassified = [it["name"] for it in items if it["muscle"] is None and it["pattern"] != "cardio"]
+    for it in items:
+        if it["sets"] and (it["sets"] < 2 or it["sets"] > 6):
+            findings.append(f"{it['name'] or 'exercise'}: {it['sets']} sets is unusual for one session (2–6 typical).")
+        r = it["reps"]
+        if isinstance(r, (int, float)) and r and not (g["reps"][0] - 2 <= r <= g["reps"][1] + 4):
+            warnings.append(f"{it['name'] or 'exercise'}: {int(r)} reps is off-target for {goal} ({g['reps'][0]}–{g['reps'][1]}).")
+    push = pull = ecc = total = 0
+    for it in items:
+        total += it["sets"]
+        if it["pattern"] in PUSH_PATTERNS:
+            push += it["sets"]
+        elif it["pattern"] in PULL_PATTERNS:
+            pull += it["sets"]
+        if it["mode"] == "eccentric":
+            ecc += it["sets"]
+    if push and pull and max(push, pull) > 2 * min(push, pull):
+        warnings.append(f"This session skews push:pull = {push}:{pull} sets.")
+    ranks = [it["rank"] for it in items if it["sets"]]
+    if ranks != sorted(ranks):
+        findings.append("Order: an isolation precedes a compound — do compounds first while fresh.")
+    if total and ecc / total > 0.35:
+        warnings.append(f"Eccentric sets are {round(100*ecc/total)}% of this session — keep ≤~30% (high fatigue).")
+    for m, s in sets_by_muscle.items():
+        if s > 9:
+            warnings.append(f"{m}: {s} sets in one session is high (junk-volume risk) — spread across days.")
+    if total > 30:
+        findings.append(f"{total} working sets is a long session; consider trimming.")
+    score = max(0, 100 - 10 * len(warnings) - 4 * len(findings))
+    out = {"mode": "session", "score": score, "warnings": warnings, "notes": findings,
+           "session_sets_per_muscle": sets_by_muscle,
+           "classified": [{"name": it["name"], "muscle": it["muscle"], "pattern": it["pattern"],
+                           "sets": it["sets"]} for it in items],
+           "balance": {"push_sets": push, "pull_sets": pull,
+                       "eccentric_share_pct": round(100 * ecc / (total or 1))}}
+    if unclassified:
+        out["unclassified"] = unclassified
+    return out
 
 
 def principles(topic=None):

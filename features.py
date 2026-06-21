@@ -14,6 +14,7 @@ since field names vary by region/firmware.
 """
 from flask import Blueprint, jsonify, Response, render_template_string, request
 from datetime import datetime, date, timedelta
+from collections import defaultdict
 import json
 import os
 import re
@@ -105,7 +106,151 @@ def healthz():
                     "authenticated": _authed()}), 200
 
 
-# ----------------------------------------------------- Feature 1: insights
+# ----------------------------------------------------- Feature 1: insights (deep)
+def _iso_week(d):
+    y, w, _ = d.isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+def _set_weight(s):
+    w = s.get("weight")
+    if isinstance(w, list):
+        return max(w) if w else 0
+    return w or 0
+
+
+def _epley(w, reps):
+    return round(w * (1 + reps / 30.0), 1)
+
+
+def _working_sets(ex):
+    """Count sets that were actually worked (have reps); unilateral counts L+R as 0.5 each."""
+    n = sum(1 for s in ex.get("sets", []) if (s.get("reps") or _set_weight(s) > 0))
+    _, _, uni = coach.classify_exercise(ex["name"])
+    return n / 2.0 if uni else n
+
+
+def _deep_insights(days=90, max_sessions=24):
+    """Compute the rich analytics: per-muscle weekly volume vs landmarks, e1RM progression,
+    balance, frequency, weekly trends, PRs, distribution — from real per-set history."""
+    recs = []
+    detailed = []
+    try:
+        detailed = _detailed_records(_client, days)
+    except Exception:
+        detailed = []
+    sessions = []
+    for r in detailed[:max_sessions]:
+        try:
+            sessions.append(fetch_session_detail(_client, r))
+        except Exception:
+            pass
+
+    weeks = set()
+    wk_muscle = defaultdict(lambda: defaultdict(float))
+    muscle_days = defaultdict(set)
+    push = pull = upper = lower = 0.0
+    lift_series = defaultdict(list)
+    prs = {}
+
+    for sess in sorted(sessions, key=lambda s: s.get("date") or ""):
+        if not sess.get("date"):
+            continue
+        d = date.fromisoformat(sess["date"][:10])
+        wk = _iso_week(d)
+        weeks.add(wk)
+        for ex in sess.get("exercises", []):
+            muscle, pattern, uni = coach.classify_exercise(ex["name"])
+            n = _working_sets(ex)
+            if muscle:
+                wk_muscle[wk][muscle] += n
+                muscle_days[muscle].add(sess["date"][:10])
+            if pattern in ("h_push", "v_push"):
+                push += n
+            elif pattern in ("h_pull", "v_pull"):
+                pull += n
+            if muscle in ("quads", "hamstrings", "glutes", "calves"):
+                lower += n
+            elif muscle:
+                upper += n
+            # e1RM top set + PR
+            best, mw = None, 0
+            for s in ex.get("sets", []):
+                w, reps = _set_weight(s), (s.get("reps") or 0)
+                mw = max(mw, w)
+                if w > 0 and reps > 0:
+                    e = _epley(w, reps)
+                    if best is None or e > best:
+                        best = e
+            if best:
+                lift_series[ex["name"]].append({"date": sess["date"][:10], "e1rm": best})
+            if mw > prs.get(ex["name"], 0):
+                prs[ex["name"]] = mw
+
+    nweeks = max(1, len(weeks))
+    muscle_volume, distribution = [], []
+    for m, (mev, mav, mrv) in coach.VOLUME.items():
+        total = sum(wk_muscle[w].get(m, 0) for w in weeks)
+        spw = round(total / nweeks, 1)
+        if spw <= 0:
+            continue
+        status = "under_mev" if spw < mev else "over_mrv" if spw > mrv else "in_range"
+        muscle_volume.append({"muscle": m, "sets_per_wk": spw, "mev": mev, "mav": mav,
+                              "mrv": mrv, "status": status,
+                              "freq_per_wk": round(len(muscle_days[m]) / nweeks, 1)})
+        distribution.append({"muscle": m, "sets_per_wk": spw})
+    muscle_volume.sort(key=lambda x: x["sets_per_wk"], reverse=True)
+    tot_sets = sum(d["sets_per_wk"] for d in distribution) or 1
+    for d in distribution:
+        d["pct"] = round(100 * d["sets_per_wk"] / tot_sets)
+    distribution.sort(key=lambda x: x["sets_per_wk"], reverse=True)
+    untrained = [m for m in coach.VOLUME if sum(wk_muscle[w].get(m, 0) for w in weeks) == 0]
+
+    lifts = []
+    for name, series in lift_series.items():
+        if len(series) < 2:
+            continue
+        s = series[-6:]
+        delta = round(s[-1]["e1rm"] - s[0]["e1rm"], 1)
+        lifts.append({"name": name, "e1rm_series": s, "e1rm_now": s[-1]["e1rm"],
+                      "e1rm_delta": delta,
+                      "trend": "up" if delta > 0.5 else "down" if delta < -0.5 else "flat"})
+    lifts.sort(key=lambda l: -abs(l["e1rm_delta"]))
+
+    ratio = round(push / pull, 2) if pull else None
+    balance = {"push_sets": round(push), "pull_sets": round(pull), "push_pull_ratio": ratio,
+               "upper_sets": round(upper), "lower_sets": round(lower),
+               "verdict": ("push_biased" if ratio and ratio > 1.2 else
+                           "pull_biased" if ratio and ratio < 0.8 else "balanced")}
+    below_2x = sorted(m for m in muscle_days if len(muscle_days[m]) / nweeks < 2)
+
+    weekly = defaultdict(lambda: {"sessions": 0, "tonnage": 0, "calories": 0, "minutes": 0})
+    for r in (_history(days) or []):
+        ts = r.get("startTimestamp")
+        if not ts:
+            continue
+        wk = _iso_week(datetime.utcfromtimestamp(ts).date())
+        weekly[wk]["sessions"] += 1
+        weekly[wk]["tonnage"] += round(r.get("totalCapacity") or 0)
+        weekly[wk]["calories"] += round(r.get("calorie") or 0)
+        weekly[wk]["minutes"] += round((r.get("trainingTime") or 0) / 60)
+    weekly_list = [{"week": w, **v} for w, v in sorted(weekly.items())][-8:]
+
+    pr_list = sorted(({"name": n, "weight": w} for n, w in prs.items() if w > 0),
+                     key=lambda x: -x["weight"])[:10]
+
+    return {
+        "detail_sessions": len(sessions), "detail_weeks": len(weeks),
+        "data_note": (f"Per-muscle & strength metrics from {len(sessions)} detailed "
+                      f"sessions over {len(weeks)} week(s)." if sessions else
+                      "No per-set workout detail yet — log a Speediance workout to populate."),
+        "muscle_volume": muscle_volume, "untrained_muscles": untrained,
+        "lifts": lifts[:10], "balance": balance,
+        "frequency": {"muscles_below_2x": below_2x},
+        "weekly": weekly_list, "prs": pr_list, "volume_distribution": distribution,
+    }
+
+
 @features_bp.route('/api/insights')
 def api_insights():
     recs = _history(90)
@@ -120,17 +265,21 @@ def api_insights():
             cur -= timedelta(days=1)
     last7 = sum(1 for d in dates if d >= today - timedelta(days=7))
     last30 = sum(1 for d in dates if d >= today - timedelta(days=30))
-    return jsonify({
+    out = {
         "authenticated": _authed(),
-        "window_days": 90,
-        "total_sessions": len(recs),
-        "active_days": len(dates),
-        "current_streak_days": streak,
-        "sessions_last_7d": last7,
+        "window_days": 90, "unit": _unit_label(_client),
+        "total_sessions": len(recs), "active_days": len(dates),
+        "current_streak_days": streak, "sessions_last_7d": last7,
         "sessions_last_30d": last30,
         "avg_sessions_per_week": round(last30 / (30 / 7), 1) if last30 else 0,
         "last_session": dates[-1].isoformat() if dates else None,
-    })
+    }
+    if _authed():
+        try:
+            out.update(_deep_insights(90))
+        except Exception as e:
+            out["deep_error"] = str(e)
+    return jsonify(out)
 
 
 @features_bp.route('/api/recovery')
@@ -215,34 +364,106 @@ def calendar_ics():
 _INSIGHTS_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>Insights · Smart Gym</title><style>
-:root{color-scheme:dark}body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#0f1419;color:#e6edf3;margin:0;padding:32px;max-width:880px;margin:0 auto}
-h1{font-weight:650;margin:0 0 4px}.sub{color:#8b98a5;margin:0 0 28px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px}
-.card{background:#161b22;border:1px solid #21262d;border-radius:14px;padding:20px}
-.val{font-size:2.1rem;font-weight:700;line-height:1}.lbl{color:#8b98a5;font-size:.8rem;margin-top:6px;text-transform:uppercase;letter-spacing:.04em}
-.rec{margin-top:24px;border-radius:14px;padding:20px;border:1px solid #21262d;background:#161b22}
-.rec b{font-size:1.1rem}.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:.75rem;font-weight:700;margin-right:8px}
+:root{color-scheme:dark}body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#0f1419;color:#e6edf3;margin:0;padding:32px;max-width:980px;margin:0 auto}
+h1{font-weight:650;margin:0 0 2px}h2{font-size:1.05rem;margin:30px 0 12px;font-weight:650}.sub{color:#8b98a5;margin:0 0 6px}
+.badge{display:inline-block;background:#1f2630;color:#8b98a5;border-radius:999px;padding:2px 10px;font-size:.74rem;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px}
+.card{background:#161b22;border:1px solid #21262d;border-radius:14px;padding:18px}
+.val{font-size:1.9rem;font-weight:700;line-height:1}.lbl{color:#8b98a5;font-size:.74rem;margin-top:6px;text-transform:uppercase;letter-spacing:.04em}
+.rec{margin-top:18px;border-radius:14px;padding:16px 18px;border:1px solid #21262d;background:#161b22}
+.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:.74rem;font-weight:700;margin-right:8px}
 .train{background:#163a2b;color:#3fb950}.rest{background:#3a2a16;color:#d29922}.active_recovery{background:#16303a;color:#39a7d2}.log_in{background:#2d333b;color:#8b98a5}
-a{color:#58a6ff}.foot{margin-top:28px;color:#8b98a5;font-size:.85rem}
+.panel{background:#161b22;border:1px solid #21262d;border-radius:14px;padding:16px 18px}
+.vrow{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:.86rem}
+.vname{width:90px;color:#c9d1d9;text-transform:capitalize}.vtrack{position:relative;flex:1;height:14px;background:#0d1117;border-radius:7px;overflow:hidden}
+.vfill{position:absolute;left:0;top:0;bottom:0;border-radius:7px}.tick{position:absolute;top:-2px;bottom:-2px;width:2px;background:#5b6673}
+.vmeta{width:120px;text-align:right;color:#8b98a5;font-size:.78rem}
+.liftgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.lift{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:12px 14px}
+.up{color:#3fb950}.down{color:#f0883e}.flat{color:#8b98a5}
+.gauge{height:20px;border-radius:10px;overflow:hidden;display:flex;background:#0d1117}
+.gp{background:#1f6feb}.gpull{background:#3fb950}.gl{background:#bc8cff}.glo{background:#d29922}
+a{color:#58a6ff}.muted{color:#8b98a5;font-size:.82rem}.foot{margin-top:30px;color:#8b98a5;font-size:.85rem}
+table{width:100%;border-collapse:collapse;font-size:.85rem}td{padding:4px 6px;border-bottom:1px solid #21262d}
 </style></head><body>
 <h1>🏋 Workout Insights</h1><p class=sub>flipch fork · last 90 days</p>
+<div class=badge id=badge></div>
 <div class=grid id=cards></div>
-<div class=rec id=rec>Loading…</div>
-<p class=foot>📅 Subscribe to your schedule: <a href="/calendar.ics">/calendar.ics</a> · <a href="/">← back to app</a></p>
+<div class=rec id=rec></div>
+<div id=deep></div>
+<p class=foot>📅 Subscribe to your schedule: <a href="/calendar.ics">/calendar.ics</a> · <a href="/coach">AI Coach →</a> · <a href="/">← back to app</a></p>
 <script>
 async function j(u){try{return await (await fetch(u)).json()}catch(e){return{}}}
+function spark(series){const v=series.map(p=>p.e1rm),w=130,h=30,n=v.length;if(n<2)return'';
+ const mn=Math.min(...v),mx=Math.max(...v),r=(mx-mn)||1;
+ const pts=v.map((x,i)=>`${(i/(n-1))*w},${(h-3)-((x-mn)/r)*(h-8)}`).join(' ');
+ return `<svg width=${w} height=${h} style="display:block;margin-top:6px"><polyline fill=none stroke=#58a6ff stroke-width=2 points="${pts}"/></svg>`;}
 (async()=>{
- const i=await j('/api/insights'), r=await j('/api/recovery');
+ const i=await j('/api/insights'), r=await j('/api/recovery'), U=i.unit||'';
+ document.getElementById('badge').textContent = i.authenticated
+   ? (i.data_note||'') : 'Not logged in — set up in Settings to populate.';
  const cards=[['current_streak_days','Day streak'],['sessions_last_7d','This week'],
   ['sessions_last_30d','Last 30 days'],['avg_sessions_per_week','Avg / week'],
   ['active_days','Active days'],['total_sessions','Total sessions']];
  document.getElementById('cards').innerHTML=cards.map(([k,l])=>
   `<div class=card><div class=val>${i[k]??'0'}</div><div class=lbl>${l}</div></div>`).join('');
  const cls=r.recommendation||'log_in';
- document.getElementById('rec').innerHTML=
-  `<span class="pill ${cls}">${cls.replace('_',' ')}</span><b>${r.message||''}</b>`+
-  (i.last_session?`<div class=foot>Last session: ${i.last_session}</div>`:
-   (i.authenticated?'<div class=foot>No sessions found in window.</div>':'<div class=foot>Not logged in — set up in Settings to populate.</div>'));
+ document.getElementById('rec').innerHTML=`<span class="pill ${cls}">${cls.replace('_',' ')}</span><b>${r.message||''}</b>`;
+ if(!i.authenticated)return;
+ let h='';
+ // 1) volume vs landmarks
+ if((i.muscle_volume||[]).length){
+  h+='<h2>🎯 Weekly volume vs landmarks <span class=muted>(sets/muscle/wk)</span></h2><div class=panel>';
+  for(const m of i.muscle_volume){
+   const max=m.mrv*1.12, col=m.status=='under_mev'?'#f0883e':m.status=='over_mrv'?'#d29922':'#3fb950';
+   const fp=Math.min(100,100*m.sets_per_wk/max),mev=100*m.mev/max,mav=100*m.mav/max;
+   const fl=m.freq_per_wk<2?` <span class=down>⚠ ${m.freq_per_wk}×/wk</span>`:` ${m.freq_per_wk}×/wk`;
+   h+=`<div class=vrow><div class=vname>${m.muscle.replace('_',' ')}</div>
+     <div class=vtrack><div class=vfill style="width:${fp}%;background:${col}"></div>
+     <div class=tick style="left:${mev}%" title="MEV ${m.mev}"></div><div class=tick style="left:${mav}%" title="MAV ${m.mav}"></div></div>
+     <div class=vmeta>${m.sets_per_wk}${fl}</div></div>`;
+  }
+  h+='<div class=muted style="margin-top:8px">Ticks = MEV / MAV. Red below MEV (too little to grow), amber over MRV (recovery risk).</div>';
+  if((i.untrained_muscles||[]).length)h+=`<div class=muted style="margin-top:4px">Untrained: ${i.untrained_muscles.join(', ')}</div>`;
+  h+='</div>';
+ }
+ // 2) strength progression
+ if((i.lifts||[]).length){
+  h+='<h2>💪 Strength progression <span class=muted>(estimated 1RM, Epley)</span></h2><div class=liftgrid>';
+  for(const l of i.lifts){const a=l.trend=='up'?'▲':l.trend=='down'?'▼':'■';
+   h+=`<div class=lift><div style="font-size:.86rem">${l.name}</div>
+     <div style="margin-top:4px"><b style="font-size:1.3rem">${l.e1rm_now}</b> ${U}
+     <span class=${l.trend}>${a} ${l.e1rm_delta>0?'+':''}${l.e1rm_delta}</span></div>${spark(l.e1rm_series)}</div>`;}
+  h+='</div>';
+ }
+ // 3) balance
+ if(i.balance && (i.balance.push_sets||i.balance.pull_sets)){
+  const b=i.balance,tot=(b.push_sets+b.pull_sets)||1,ut=(b.upper_sets+b.lower_sets)||1;
+  h+='<h2>⚖ Balance</h2><div class=panel>';
+  h+=`<div class=muted>Push : Pull — ${b.push_sets}:${b.pull_sets} (${b.push_pull_ratio??'–'}) <b class=${b.verdict=='balanced'?'up':'down'}>${b.verdict.replace('_',' ')}</b></div>
+   <div class=gauge style="margin:6px 0 12px"><div class=gp style="width:${100*b.push_sets/tot}%"></div><div class=gpull style="width:${100*b.pull_sets/tot}%"></div></div>
+   <div class=muted>Upper : Lower — ${b.upper_sets}:${b.lower_sets}</div>
+   <div class=gauge style="margin-top:6px"><div class=gl style="width:${100*b.upper_sets/ut}%"></div><div class=glo style="width:${100*b.lower_sets/ut}%"></div></div>`;
+  if((i.frequency||{}).muscles_below_2x||[].length){const bl=i.frequency.muscles_below_2x||[];
+   if(bl.length)h+=`<div class=muted style="margin-top:10px">Trained &lt;2×/wk: ${bl.join(', ')}</div>`;}
+  h+='</div>';
+ }
+ // 4) weekly trend
+ if((i.weekly||[]).length){
+  const mx=Math.max(...i.weekly.map(w=>w.tonnage))||1;
+  h+='<h2>📈 Weekly tonnage</h2><div class=panel><div style="display:flex;align-items:flex-end;gap:10px;height:120px">';
+  for(const w of i.weekly)h+=`<div style="flex:1;text-align:center">
+    <div style="background:#1f6feb;border-radius:4px 4px 0 0;height:${Math.max(3,100*w.tonnage/mx)}px" title="${w.tonnage} ${U}"></div>
+    <div class=muted style="font-size:.68rem;margin-top:4px">${w.week.split('-')[1]}</div><div class=muted style="font-size:.66rem">${Math.round(w.tonnage/1000)}k</div></div>`;
+  h+='</div><div class=muted style="margin-top:6px">Per ISO week · sessions/cal/min also tracked.</div></div>';
+ }
+ // 5) PRs
+ if((i.prs||[]).length){
+  h+='<h2>🏆 Top weights</h2><div class=panel><table>';
+  for(const p of i.prs)h+=`<tr><td>${p.name}</td><td style="text-align:right">${p.weight} ${U}</td></tr>`;
+  h+='</table></div>';
+ }
+ document.getElementById('deep').innerHTML=h||'<p class=muted style="margin-top:20px">No per-set detail yet — log a Speediance workout to unlock deep analytics.</p>';
 })();
 </script></body></html>"""
 
@@ -288,21 +509,30 @@ def save_readiness(payload, data_dir=None):
 
 
 def _coach_workout_to_exercises(detail):
-    """Best-effort map a Speediance workout detail into coach critique input."""
+    """Map a Speediance workout detail into coach critique input. The display name lives under
+    `title` (not `name`), and `mainMuscleGroupName` is the device's own muscle tag — pass it
+    through so the classifier is anchored on ground truth. setsAndReps is one CSV entry/set."""
     out = []
     if not isinstance(detail, dict):
         return out
-    actions = detail.get("actionLibraryList") or detail.get("actions") or detail.get("list") or []
+    actions = (detail.get("actionLibraryList") or detail.get("actionInfoList")
+               or detail.get("actions") or detail.get("list") or [])
     for a in actions if isinstance(actions, list) else []:
+        if isinstance(a, list):          # actionInfoList is a list-of-lists
+            a = a[0] if a and isinstance(a[0], dict) else {}
         if not isinstance(a, dict):
             continue
-        name = a.get("name") or a.get("actionName") or a.get("groupName") or ""
-        reps_csv = str(a.get("setsAndReps") or a.get("reps") or "")
-        reps_list = [int(x) for x in re.findall(r"\d+", reps_csv)] or None
+        name = a.get("title") or a.get("name") or a.get("actionName") or a.get("groupName") or ""
+        parts = [p for p in str(a.get("setsAndReps") or a.get("reps") or "").split(",") if p.strip()]
+        reps = None
+        if parts:
+            mm = re.search(r"\d+", parts[0])
+            reps = int(mm.group()) if mm else None
         out.append({
             "name": name,
-            "sets": len(reps_list) if reps_list else int(a.get("sets") or 0),
-            "reps": reps_list[0] if reps_list else a.get("rep"),
+            "muscle": a.get("mainMuscleGroupName"),
+            "sets": len(parts) if parts else int(a.get("sets") or 0),
+            "reps": reps,
         })
     return out
 
@@ -447,7 +677,132 @@ def coach_critique():
     if not exercises:
         return jsonify({"error": "no_exercises",
                         "message": "Provide 'exercises' (list of {name,sets,reps}) or an authenticated 'code'."}), 400
-    return jsonify(coach.critique_workout(exercises, goal))
+    mode = body.get("mode", "session")
+    return jsonify(coach.critique_workout(exercises, goal, mode))
+
+
+# ── import a generated program into real Speediance workout templates ──
+_EQUIP_STOP = {"cable", "dual", "handle", "handles", "barbell", "rope", "tricep", "triceps",
+               "ankle", "belt", "machine", "frame", "main", "floor", "standing", "seated",
+               "prone", "incline", "decline", "bench", "mat", "smith", "single", "arm", "leg",
+               "the", "with", "to", "of", "and", "for", "on", "at", "in", "a", "bar", "grip",
+               "wide", "close", "neutral", "v", "straight"}
+_MUSCLE_ANCHOR = {
+    "chest": {"pecs", "chest"}, "back": {"lats", "back", "upper back", "mid back"},
+    "shoulders": {"front delts", "side delts", "shoulders", "delts"}, "rear_delts": {"rear delts"},
+    "quads": {"quads", "quadriceps"}, "glutes": {"glutes"}, "hamstrings": {"hamstrings", "glutes"},
+    "biceps": {"biceps", "forearms"}, "triceps": {"triceps"}, "calves": {"calves"},
+    "abs": {"abs", "core"}, "traps": {"traps"},
+}
+
+
+def _norm_tokens(s):
+    toks = re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split()
+    toks = [t for t in toks if t not in _EQUIP_STOP]
+    return [t[:-1] if t.endswith("s") and len(t) > 3 else t for t in toks]
+
+
+def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
+    """Match a coach exercise name to a real library {groupId, title, mainMuscleGroupName} via
+    token overlap + muscle-anchor scoring. Returns {groupId, matched_name, muscle, confidence}."""
+    coach_tokens = set(_norm_tokens(name))
+    if not coach_tokens:
+        return None
+    anchor = _MUSCLE_ANCHOR.get((goal_muscle or "").lower(), set())
+    best = None  # (key, gid, title, mg, score)
+    for ex in library:
+        if not isinstance(ex, dict):
+            continue
+        title = ex.get("title") or ex.get("name") or ""
+        gid = ex.get("id") or ex.get("groupId")
+        if not gid or not title:
+            continue
+        lib_tokens = set(_norm_tokens(title))
+        overlap = len(coach_tokens & lib_tokens)
+        if not overlap:
+            continue
+        score = overlap / len(coach_tokens) + 0.25 * overlap / len(lib_tokens)
+        mg = (ex.get("mainMuscleGroupName") or "").lower()
+        if anchor:
+            score += 0.5 if mg in anchor else -0.15
+        is_uni = ex.get("isLeftRight") == 1 or "single" in title.lower()
+        if unilateral and is_uni:
+            score += 0.15
+        elif not unilateral and is_uni:
+            score -= 0.10
+        key = (score, -len(lib_tokens))
+        if best is None or key > best[0]:
+            best = (key, gid, title, mg, score)
+    if best is None:
+        cands = sorted((len(_norm_tokens(ex.get("title") or "")), ex.get("id"), ex.get("title"))
+                       for ex in library if isinstance(ex, dict) and ex.get("id")
+                       and (ex.get("mainMuscleGroupName") or "").lower() in anchor)
+        if cands:
+            return {"groupId": cands[0][1], "matched_name": cands[0][2], "confidence": "low"}
+        return None
+    score = best[4]
+    conf = "high" if score >= 1.0 else "med" if score >= 0.55 else "low"
+    return {"groupId": best[1], "matched_name": best[2], "muscle": best[3], "confidence": conf}
+
+
+def program_day_to_payload(library, day):
+    """Build save_workout's exercises payload for one program day + a resolution report."""
+    exercises, resolved, unresolved = [], [], []
+    for e in day.get("exercises", []):
+        r = resolve_exercise(library, e.get("name", ""), e.get("primary"), e.get("unilateral"))
+        if not r:
+            unresolved.append({"name": e.get("name"), "muscle": e.get("primary")})
+            continue
+        n_sets = int(e.get("sets") or 0)
+        sets = [{"reps": int(e.get("reps") or 0), "weight": float(e.get("load") or 0),
+                 "rest": int(e.get("rest_sec") or 90), "unit": "reps"} for _ in range(n_sets)]
+        exercises.append({"groupId": r["groupId"], "sets": sets})
+        resolved.append({"coach_name": e.get("name"), "groupId": r["groupId"],
+                         "matched_name": r["matched_name"], "confidence": r["confidence"]})
+    return exercises, resolved, unresolved
+
+
+def apply_program(client, program, day_index=None, name=None, dry_run=False):
+    """Resolve + (optionally) save a generated program's day(s) as Speediance templates."""
+    library = client.get_library() or []
+    days = program.get("days", [])
+    if isinstance(day_index, int) and 0 <= day_index < len(days):
+        targets = [(day_index, days[day_index])]
+    else:
+        targets = list(enumerate(days))
+    results = []
+    for idx, day in targets:
+        exercises, resolved, unresolved = program_day_to_payload(library, day)
+        nm = name or f"{program.get('goal_label', 'Workout')} — {day.get('name', 'Day ' + str(idx + 1))}"
+        entry = {"day_index": idx, "name": nm, "exercise_count": len(exercises),
+                 "resolved": resolved, "unresolved": unresolved, "created": False}
+        if not dry_run and exercises:
+            try:
+                client.save_workout(nm, exercises)
+                entry["created"] = True
+            except Exception as e:
+                entry["error"] = str(e)
+        results.append(entry)
+    return {"dry_run": dry_run, "results": results}
+
+
+@features_bp.route('/api/coach/apply', methods=['POST'])
+def coach_apply():
+    """Import a generated program into the user's Speediance workouts. Body:
+    {program:<generate_program output>, day_index?:int, name?:str, dry_run?:bool}."""
+    if not _authed():
+        return jsonify({"error": "not_authenticated",
+                        "message": "Log in at /settings to save to your Speediance account."}), 401
+    body = request.get_json(silent=True) or {}
+    program = body.get("program")
+    if not isinstance(program, dict) or not program.get("days"):
+        return jsonify({"error": "no_program",
+                        "message": "POST {program:<generate_program output>, day_index?, name?, dry_run?}"}), 400
+    try:
+        return jsonify(apply_program(_client, program, body.get("day_index"),
+                                     body.get("name"), bool(body.get("dry_run"))))
+    except Exception as e:
+        return jsonify({"error": "apply_failed", "message": str(e)}), 502
 
 
 _COACH_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
@@ -492,21 +847,36 @@ async function gen(){
   render(p);
 }
 function render(p){
+  window.__P=p;
   let h=`<div class=review style="background:#161b22"><span class=score>${p.review.score}</span> <span class=muted>/100 program quality · ${p.goal_label} · ${p.days_per_week}×/wk · ${p.experience}</span>`;
   if(p.autoregulation){h+=`<div style="margin-top:8px">Readiness: <b>${p.autoregulation.band.toUpperCase()}</b> — ${p.autoregulation.message}</div>`;}
   if(p.review.warnings.length){h+='<ul>'+p.review.warnings.map(w=>`<li class=warn>⚠ ${w}</li>`).join('')+'</ul>';}
   else{h+='<div class=ok style="margin-top:8px">✓ Volume, balance and order all within evidence-based ranges.</div>';}
   h+=`<div class=muted style="margin-top:6px">Weekly sets/muscle: ${Object.entries(p.weekly_sets_per_muscle).map(([k,v])=>k+' '+v).join(' · ')}</div></div>`;
-  for(const d of p.days){
+  p.days.forEach((d,i)=>{
     h+=`<div class=day><h3>${d.name}</h3><div class=muted>${d.warmup} · ~${d.setup_swaps} setup changes</div>`;
     h+='<table><tr><th>Exercise</th><th>Sets×Reps</th><th>%1RM</th><th>RIR</th><th>Rest</th><th>Mode</th><th>Setup</th></tr>';
     for(const e of d.exercises){h+=`<tr><td>${e.name}${e.unilateral?' <span class=muted>(L/R)</span>':''}</td><td>${e.sets}×${e.reps}${e.load?(' @'+e.load):''}</td><td>${e.pct1rm}</td><td>${e.rir}</td><td>${e.rest_sec}s</td><td><span class="pill ${e.mode}" title="${e.mode_note}">${e.mode}</span></td><td class=muted>${e.accessory}/${e.belt}</td></tr>`;}
     h+='</table>';
     if(d.conditioning)h+=`<div class=muted style="margin-top:8px">🏃 ${d.conditioning}</div>`;
+    h+=`<div style="margin-top:10px"><button class=alt onclick="saveDay(${i})">💾 Save to my workouts</button> <span id=save${i} class=muted></span></div>`;
     h+='</div>';
-  }
+  });
   h+=`<p class=muted>${p.disclaimer}</p>`;
   $('out').innerHTML=h;
+}
+async function saveDay(i){
+  const el=$('save'+i); el.textContent='Saving…';
+  let resp;
+  try{ resp=await fetch('/api/coach/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({program:window.__P,day_index:i})}); }
+  catch(e){ el.innerHTML='<span class=warn>Network error</span>'; return; }
+  if(resp.status===401){ el.innerHTML='<span class=warn>Log in at /settings to save to your Speediance account.</span>'; return; }
+  const d=await resp.json(); const r=(d.results&&d.results[0])||{};
+  if(r.created){
+    let m=`<span class=ok>✓ Saved "${r.name}" (${r.exercise_count} exercises)</span>`;
+    if(r.unresolved&&r.unresolved.length)m+=` <span class=warn>· couldn't match: ${r.unresolved.map(u=>u.name).join(', ')}</span>`;
+    el.innerHTML=m;
+  } else { el.innerHTML='<span class=warn>'+(r.error||d.message||'Could not save')+'</span>'; }
 }
 </script></body></html>"""
 

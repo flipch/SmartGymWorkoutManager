@@ -22,7 +22,7 @@ from api_client import SpeedianceClient
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
     _detailed_records, fetch_session_detail, _summarize_session, _unit_label,
-    _feedback_profile, _load_readiness,
+    _feedback_profile, _load_readiness, apply_program,
     log_feedback as _persist_feedback, save_readiness as _persist_readiness,
 )
 
@@ -285,12 +285,14 @@ def search_exercises(query: str = "", limit: int = 25) -> list:
         for ex in lib:
             if not isinstance(ex, dict):
                 continue
-            name = str(ex.get("name") or ex.get("actionName") or "")
+            # the library stores the display name under `title` (name is null)
+            name = str(ex.get("title") or ex.get("name") or ex.get("actionName") or "")
             if q and q not in name.lower():
                 continue
             out.append({
                 "groupId": ex.get("id") or ex.get("groupId"),
                 "name": name,
+                "muscle": ex.get("mainMuscleGroupName"),
                 "category": ex.get("category_name"),
                 "device_type": ex.get("device_type"),
             })
@@ -338,24 +340,42 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
 
 
 @mcp.tool()
-def critique_exercises(exercises: list, goal: str = "general") -> dict:
-    """Critique an ad-hoc workout for safety/balance. `exercises`: list of
-    {name, sets, reps, mode?}. Flags volume vs landmarks, push/pull imbalance, excessive
-    eccentric load, exercise-order issues, and off-target rep ranges."""
-    return _safe(lambda: coach.critique_workout(exercises, goal))
+def create_workout_from_program(program: dict, day_index: int = None,
+                                name: str = None, dry_run: bool = False) -> dict:
+    """Import a generated program (the `generate_program` result) into REAL Speediance workout
+    templates. Resolves each exercise name to a library groupId, builds the sets payload, and
+    saves it (set dry_run=true to preview the resolution without saving). day_index saves a
+    single day; omit it to save every day as its own template. Unresolved exercises are
+    reported, never silently dropped. This is the one-call 'generate then save to my gym' path."""
+    def run():
+        c = _client(); _require_auth(c)
+        if not isinstance(program, dict) or not program.get("days"):
+            return {"error": "no_program", "message": "Pass a generate_program result as `program`."}
+        return apply_program(c, program, day_index, name, dry_run)
+    return _safe(run)
+
+
+@mcp.tool()
+def critique_exercises(exercises: list, goal: str = "general", mode: str = "session") -> dict:
+    """Critique a workout for safety/balance. `exercises`: list of {name, sets, reps, mode?}
+    (real Speediance names work — they're classified by keyword). mode='session' (default,
+    for a single workout) judges per-session quality; mode='weekly' checks weekly MEV/MAV/MRV
+    volume landmarks. Flags push/pull imbalance, eccentric overload, order, off-target reps."""
+    return _safe(lambda: coach.critique_workout(exercises, goal, mode))
 
 
 @mcp.tool()
 def critique_my_workout(code: str, goal: str = "general") -> dict:
     """Critique one of the user's saved Speediance workouts by its template `code`
-    (from list_workouts). Fetches the live workout and runs the coach safety review."""
+    (from list_workouts). Fetches the live workout and runs the per-session safety review
+    (a single workout is judged as a session, not against weekly volume landmarks)."""
     def run():
         c = _client(); _require_auth(c)
         detail = c.get_workout_detail(code)
         exercises = _coach_workout_to_exercises(detail)
         if not exercises:
             return {"error": "empty", "message": f"Could not parse exercises from workout {code}."}
-        result = coach.critique_workout(exercises, goal)
+        result = coach.critique_workout(exercises, goal, "session")
         result["parsed_exercises"] = exercises
         return result
     return _safe(run)
