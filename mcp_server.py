@@ -97,9 +97,9 @@ def get_workout(code: str) -> dict:
 
 
 @mcp.tool()
-def delete_workout(template_id: int) -> dict:
-    """Permanently delete a custom workout template by its numeric id.
-    Destructive — confirm the id with list_workouts first."""
+def delete_workout(template_id: str) -> dict:
+    """Permanently delete a custom workout template by its id (Speediance ids can be long
+    hex strings, so this is a string). Destructive — confirm the id with list_workouts first."""
     def run():
         c = _client(); _require_auth(c)
         c.delete_workout(template_id)
