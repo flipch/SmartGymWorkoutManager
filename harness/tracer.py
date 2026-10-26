@@ -10,6 +10,7 @@ import argparse
 import dataclasses
 import glob
 import json
+import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -110,12 +111,17 @@ def main(argv=None) -> int:
     p.add_argument("--goal", default="muscle", choices=sorted(__import__("coach").GOALS))
     p.add_argument("--days-per-week", type=int, default=4, choices=range(1, 6))
     p.add_argument("--experience", default="intermediate", choices=sorted(__import__("coach").EXPERIENCE))
-    p.add_argument("--unit", choices=("kg", "lb"), help="only labels output; never inferred")
+    p.add_argument("--unit", choices=("kg", "lb"), default=os.environ.get("GYM_UNIT", "lb"),
+                   help="how loads are LABELLED (default: $GYM_UNIT, else lb, the unit Felipe's app shows). "
+                        "Never inferred from the vendor, and the planner works in ratios so it cannot change a load")
     p.add_argument("--history-days", type=int, default=28)
     p.add_argument("--detail", type=int, default=1, help="live mode: max per-session detail reads (0-5); 1 = just the chosen template")
     p.add_argument("--template", help="plan this template instead of the rotation pick (substring of its title)")
     p.add_argument("--json", action="store_true")
     a = p.parse_args(argv)
+    if a.unit not in ("kg", "lb"):  # a bad $GYM_UNIT default is not checked by argparse
+        print("error: GYM_UNIT must be kg or lb", file=sys.stderr)
+        return 1
     if not 0 <= a.detail <= 5:
         p.error("--detail must be 0..5")
 

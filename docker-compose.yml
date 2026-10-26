@@ -17,6 +17,12 @@ services:
       - TZ=${TZ:-America/Los_Angeles}
       # shared secret for the web UI (HTTP Basic, any username) — set in .env (gitignored)
       - GYM_API_TOKEN=${GYM_API_TOKEN:?set GYM_API_TOKEN in .env}
+      # account-changing browser actions (create/edit/schedule/delete/unit/logout) need this; also set on the MCP below
+      - GYM_ALLOW_WRITES=${GYM_ALLOW_WRITES:-0}
+      # extra browser origins allowed to POST (comma separated); empty = same host only
+      - GYM_ALLOWED_ORIGINS=${GYM_ALLOWED_ORIGINS:-}
+      # signs flash cookies; random per start when empty
+      - GYM_SECRET_KEY=${GYM_SECRET_KEY:-}
     volumes:
       - gym-data:/data
     command: ["gunicorn", "-w", "1", "-b", "0.0.0.0:5001", "--timeout", "120", "app:app"]

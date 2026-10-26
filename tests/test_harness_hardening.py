@@ -80,6 +80,39 @@ class TracerBadInput(unittest.TestCase):
             self.assertEqual(err.count("\n"), 1, "one line")
 
 
+class TracerUnit(unittest.TestCase):
+    """The unit only LABELS loads; it defaults to lb (Felipe's app) and is switchable, never inferred."""
+
+    def unit_seen(self, *args, env=None):
+        import os
+        from unittest import mock
+        seen = []
+
+        def fake(directory, tz, unit):
+            seen.append(unit)
+            return []
+
+        base = {k: v for k, v in os.environ.items() if k != "GYM_UNIT"}
+        with mock.patch.dict(os.environ, {**base, **(env or {})}, clear=True), \
+                mock.patch.object(tracer, "load_recordings", side_effect=fake), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = tracer.main(["--recordings", "/x", "--subjective", "3", *args])
+        return code, seen
+
+    def test_default_is_lb(self):
+        self.assertEqual(self.unit_seen()[1], ["lb"])
+
+    def test_env_switches_it(self):
+        self.assertEqual(self.unit_seen(env={"GYM_UNIT": "kg"})[1], ["kg"])
+
+    def test_flag_beats_env(self):
+        self.assertEqual(self.unit_seen("--unit", "lb", env={"GYM_UNIT": "kg"})[1], ["lb"])
+
+    def test_bad_env_is_a_one_line_error(self):
+        code, seen = self.unit_seen(env={"GYM_UNIT": "stone"})
+        self.assertEqual((code, seen), (1, []))
+
+
 class ReadingsDisagree(unittest.TestCase):
     def test_a_newer_reading_overriding_an_older_one_of_the_same_kind_is_reported(self):
         from datetime import datetime, timedelta
