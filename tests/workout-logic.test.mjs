@@ -19,6 +19,8 @@ const {
     kgToLbs,
     parseImportedSets,
     buildExportJSON,
+    getSetGoalUnit,
+    effectiveSetUnit,
 } = require(path.join(__dirname, '..', 'static', 'workout-logic.js'));
 
 // ---------------------------------------------------------------------------
@@ -261,4 +263,35 @@ test('buildExportJSON: name is used', () => {
 test('buildExportJSON: fallback name when empty', () => {
     const result = buildExportJSON([], '');
     assert.equal(result.name, 'Custom Workout');
+});
+
+// ---------------------------------------------------------------------------
+// getSetGoalUnit / effectiveSetUnit: what is shown must be what is saved
+// ---------------------------------------------------------------------------
+test('getSetGoalUnit follows the API completion metadata', () => {
+    assert.equal(getSetGoalUnit({ completionMethod: 0, selectCompletionMethod: 1 }), 'sec');
+    assert.equal(getSetGoalUnit({ completionMethod: 0, selectCompletionMethod: '1' }), 'sec');
+    assert.equal(getSetGoalUnit({ completionMethod: 0, selectCompletionMethod: 0 }), null);
+    assert.equal(getSetGoalUnit({ completionMethod: 1 }), 'reps');
+    assert.equal(getSetGoalUnit({ completionMethod: 2 }), 'sec');
+    assert.equal(getSetGoalUnit({ completionMethod: 5 }), 'kcal');
+    assert.equal(getSetGoalUnit({}), null);
+    assert.equal(getSetGoalUnit({ completionMethod: null }), null);
+});
+
+test('a timed exercise saves seconds even when the set still says reps', () => {
+    const timed = { completionMethod: 0, selectCompletionMethod: 1 };
+    assert.equal(effectiveSetUnit(timed, { unit: 'reps' }), 'sec');
+    assert.equal(effectiveSetUnit({ completionMethod: 2 }, { unit: 'reps' }), 'sec');
+});
+
+test('a rep exercise saves reps even when the set toggle says sec', () => {
+    assert.equal(effectiveSetUnit({ completionMethod: 1 }, { unit: 'sec' }), 'reps');
+});
+
+test('with no API rule the per-set toggle decides, defaulting to reps', () => {
+    assert.equal(effectiveSetUnit({}, { unit: 'sec' }), 'sec');
+    assert.equal(effectiveSetUnit({}, { unit: 'reps' }), 'reps');
+    assert.equal(effectiveSetUnit({}, {}), 'reps');
+    assert.equal(effectiveSetUnit({}, undefined), 'reps');
 });

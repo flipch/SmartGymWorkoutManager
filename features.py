@@ -1003,7 +1003,7 @@ function render(p){
 async function saveDay(i){
   const el=$('save'+i); el.textContent='Saving…';
   let resp;
-  try{ resp=await fetch('/api/coach/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({program:window.__P,day_index:i})}); }
+  try{ resp=await fetch('/api/coach/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({program:window.__P,day_index:i,dry_run:false})}); }
   catch(e){ el.innerHTML='<span class=warn>Network error</span>'; return; }
   if(resp.status===401){ el.innerHTML='<span class=warn>Log in at /settings to save to your Speediance account.</span>'; return; }
   const d=await resp.json(); const r=(d.results&&d.results[0])||{};

@@ -39,7 +39,7 @@ def main(argv=None) -> int:
                 print(f"note: {n}")
             return 0
         print(f"Opening WHOOP consent. If the browser does not open, visit the URL printed below.\n"
-              f"Redirect must be {wc.REDIRECT_URI}; scopes: {', '.join(wc.SCOPES)}.")
+              f"Redirect must be {wc.redirect_uri_for(a.port)} (registered in the WHOOP app); scopes: {', '.join(wc.SCOPES)}.")
 
         def open_url(url):
             print(url)

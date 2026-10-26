@@ -76,7 +76,10 @@ def parse_recovery(payload) -> tuple[list[Reading], list[str]]:
         for key in ("score_state", "created_at", "cycle_id"):
             if key not in r:
                 raise SchemaDrift(SOURCE, f"recovery record lacks {key}")
-    newest = max(records, key=lambda r: _parse_ts(r["created_at"], "created_at"), default=None)
+    for r in records:  # cycle ids grow with time; a backfilled older cycle can have the newest created_at
+        if not isinstance(r["cycle_id"], int) or isinstance(r["cycle_id"], bool):
+            raise SchemaDrift(SOURCE, "recovery cycle_id is not an integer")
+    newest = max(records, key=lambda r: (r["cycle_id"], _parse_ts(r["created_at"], "created_at")), default=None)
     if newest is None:
         return [], ["no recovery records returned"]
     if newest["score_state"] != "SCORED":

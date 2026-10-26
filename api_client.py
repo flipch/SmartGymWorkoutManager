@@ -25,6 +25,30 @@ class UpstreamError(Exception):
     """Speediance could not be reached, or answered with an error: never to be read as "no data"."""
 
 
+def _json_data(resp, what, kind):
+    """The `data` of a vendor answer, or an error: a failed read must never look like an empty history ("well rested")."""
+    if resp.status_code == 401:
+        raise Exception("Unauthorized")
+    if resp.status_code != 200:
+        raise UpstreamError(f"{what} failed (HTTP {resp.status_code})")
+    try:
+        body = resp.json()
+    except ValueError:
+        raise UpstreamError(f"{what} response was not JSON") from None
+    if not isinstance(body, dict) or body.get('code') not in (None, 0):
+        raise UpstreamError(f"{what} was rejected")
+    if 'data' not in body:
+        if body.get('code') == 0:  # an explicit success with nothing in it
+            return kind()
+        raise UpstreamError(f"{what} response had no data")
+    data = body['data']
+    if data is None:
+        return kind()
+    if not isinstance(data, kind):
+        raise UpstreamError(f"{what} response had an unexpected shape")
+    return data
+
+
 def _require_ok(resp, what):
     """Raise unless the vendor accepted a write: HTTP < 400 and, when the body carries a `code`, code == 0."""
     if resp.status_code == 401:
@@ -584,7 +608,7 @@ class SpeedianceClient:
         url = f"{self.base_url}/api/mobile/v2/report/userTrainingDataRecord?startDate={_d(start_date)}&endDate={_d(end_date)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
-            return resp.json().get('data', [])
+            return _json_data(resp, "training history", list)
         except Exception as e:
             # Do NOT return []: callers read an empty list as "no training" ("well rested") during an outage.
             print(f"Error fetching history: {type(e).__name__}")
@@ -781,9 +805,7 @@ class SpeedianceClient:
         url = f"{self.base_url}/api/mobile/v2/report/userTrainingDataRecord?startDate={_d(start_date)}&endDate={_d(end_date)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            return resp.json().get('data', [])
+            return _json_data(resp, "training records", list)
         except Exception as e:
             if str(e) == "Unauthorized": raise e
             print(f"Error fetching training records: {type(e).__name__}")
@@ -796,9 +818,7 @@ class SpeedianceClient:
         url = f"{self.base_url}/api/mobile/v2/report/userTrainingDataStat?startDate={_d(start_date)}&endDate={_d(end_date)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            return resp.json().get('data', {})
+            return _json_data(resp, "training stats", dict)
         except Exception as e:
             if str(e) == "Unauthorized": raise e
             print(f"Error fetching training stats: {type(e).__name__}")
@@ -816,9 +836,7 @@ class SpeedianceClient:
             url = f"{self.base_url}/api/app/trainingInfo/cttTrainingInfoDetail/{_q(training_id)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            return resp.json().get('data', {})
+            return _json_data(resp, "training detail", (dict, list))
         except Exception as e:
             if str(e) == "Unauthorized": raise e
             print(f"Error fetching training detail: {type(e).__name__}")

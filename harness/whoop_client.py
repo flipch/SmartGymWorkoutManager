@@ -33,6 +33,10 @@ AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth"
 SCOPES = ("offline", "read:recovery", "read:sleep")
 REQUIRED_GRANTED = ("offline", "read:recovery", "read:sleep")
 REDIRECT_URI = "http://localhost:8000/callback"
+
+
+def redirect_uri_for(port: int) -> str:
+    return f"http://localhost:{int(port)}/callback"
 DEFAULT_CREDS = localsecrets.CONFIG_DIR / "whoop.txt"
 DEFAULT_TOKENS = localsecrets.CONFIG_DIR / "whoop.token.json"
 HTTP_TIMEOUT_S = 15
@@ -83,9 +87,9 @@ def load_app_credentials(path=DEFAULT_CREDS) -> AppCredentials:
     return AppCredentials(ids[0], secrets_found[0])
 
 
-def authorize_url(creds: AppCredentials, state: str) -> str:
+def authorize_url(creds: AppCredentials, state: str, redirect_uri: str = REDIRECT_URI) -> str:
     return AUTH_URL + "?" + urlencode({"response_type": "code", "client_id": creds.client_id,
-                                       "redirect_uri": REDIRECT_URI, "scope": " ".join(SCOPES), "state": state})
+                                       "redirect_uri": redirect_uri, "scope": " ".join(SCOPES), "state": state})
 
 
 def _token_request(http, data: dict, what: str) -> dict:
@@ -113,8 +117,9 @@ def _keep(body: dict, now: float) -> dict:
     return kept
 
 
-def exchange_code(creds: AppCredentials, code: str, http=requests, now=time.time) -> dict:
-    body = _token_request(http, {"grant_type": "authorization_code", "code": code, "redirect_uri": REDIRECT_URI,
+def exchange_code(creds: AppCredentials, code: str, http=requests, now=time.time,
+                  redirect_uri: str = REDIRECT_URI) -> dict:
+    body = _token_request(http, {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
                                  "client_id": creds.client_id, "client_secret": creds.client_secret},
                           "authorization-code exchange")
     granted = set(str(body.get("scope", "")).split())
@@ -179,7 +184,7 @@ def run_consent(creds: AppCredentials, store: TokenStore, *, open_url, port: int
     server.expected_state = state
     server.timeout = 0.25
     try:
-        open_url(authorize_url(creds, state))
+        open_url(authorize_url(creds, state, redirect_uri_for(port)))
         deadline = time.monotonic() + timeout_s
         while server.result is None and time.monotonic() < deadline:
             server.handle_request()
@@ -190,7 +195,7 @@ def run_consent(creds: AppCredentials, store: TokenStore, *, open_url, port: int
         raise SourceDown(SOURCE, f"no consent received within {timeout_s:g} s")
     if "error" in result:
         raise SourceAuthError(SOURCE, f"consent declined ({result['error']})")
-    tokens = exchange_code(creds, result["code"], http, now)
+    tokens = exchange_code(creds, result["code"], http, now, redirect_uri_for(port))
     store.save(tokens)
     return {"scope": tokens.get("scope"), "expires_in": tokens.get("expires_in")}
 

@@ -243,16 +243,17 @@ def _swap_count(ordered):
     return swaps
 
 
-def _pick_for_day(focus, goal, experience, allow_eccentric):
+def _pick_for_day(focus, goal, experience, allow_eccentric, exclude=frozenset()):
     """Choose exercises covering the day's focus muscles, preferring compounds that hit
     several focus muscles, capped at a sensible session size."""
     per_muscle = EXPERIENCE[experience]["ex_per_muscle"]
+    pool = [e for e in CATALOG if e["name"].lower() not in exclude]  # exercises the user asked to avoid never get picked
     chosen, covered = [], {}
     # pass 1: one compound per focus muscle (prefer multi-focus compounds)
     for m in focus:
         if covered.get(m, 0) >= 1:
             continue
-        cands = [e for e in CATALOG if e["muscles"][0] == m and e["priority"] in ("heavy_compound", "compound")]
+        cands = [e for e in pool if e["muscles"][0] == m and e["priority"] in ("heavy_compound", "compound")]
         cands.sort(key=lambda e: (-len(set(e["muscles"]) & set(focus)), ORDER_PRIORITY[e["priority"]], e["name"]))
         if cands:
             e = cands[0]
@@ -264,7 +265,7 @@ def _pick_for_day(focus, goal, experience, allow_eccentric):
         for m in focus:
             if covered.get(m, 0) >= 2:
                 continue
-            cands = [e for e in CATALOG if e["muscles"][0] == m and e not in chosen]
+            cands = [e for e in pool if e["muscles"][0] == m and e not in chosen]
             if goal in ("muscle", "general") and allow_eccentric:
                 # prefer an eccentric-overload isolation as the hypertrophy finisher
                 cands.sort(key=lambda e: (0 if e["default_mode"] == "eccentric" else 1,
@@ -349,11 +350,9 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
     for name, focus in split:
         if available_accessories:
             focus = focus  # focus unchanged; catalog filter happens in selection
-        picks = _pick_for_day(focus, goal, experience, exp["advanced_modes"])
+        picks = _pick_for_day(focus, goal, experience, exp["advanced_modes"], avoid)
         if available_accessories:
             picks = [e for e in picks if e["accessory"] in set(available_accessories) | {"none"}] or picks
-        if avoid:  # drop exercises the user/agent asked to avoid (injury/preference)
-            picks = [e for e in picks if e["name"].lower() not in avoid] or picks
         ordered = _order(picks)
         # split each muscle's per-session set target across the exercises that hit it
         counts = Counter(e["muscles"][0] for e in ordered)

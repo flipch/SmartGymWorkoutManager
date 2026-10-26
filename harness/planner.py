@@ -240,6 +240,9 @@ def todays_plan(*, sessions: list[SessionResult] | None, readings: list[Reading]
     auto = coach.autoregulate(readiness)
 
     warnings: list[str] = []
+    for r in stale:  # a dropped reading may be the bad news (e.g. low recovery), so it must be visible
+        warnings.append(f"ignored stale {r.kind} {r.value:g} from {r.as_of.isoformat(timespec='minutes')} "
+                        f"(older than {max_reading_age_h:g} h)")
     by_kind: dict[str, list[Reading]] = {}
     for r in fresh:
         by_kind.setdefault(r.kind, []).append(r)

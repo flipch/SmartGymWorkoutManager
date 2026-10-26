@@ -490,15 +490,7 @@
 
     // Determine the goal unit for an exercise based on its completionMethod from the API.
     // Returns 'sec', 'kcal', 'reps', or null (null = fall back to per-set toggle).
-    function getSetGoalUnit(ex) {
-        const cm = ex.completionMethod;
-        const scm = String(ex.selectCompletionMethod ?? '');
-        if (cm === 0 && scm === '1') return 'sec';   // timed via selectCompletionMethod
-        if (cm === 1) return 'reps';
-        if (cm === 2) return 'sec';                  // Row/Ski timed
-        if (cm === 5) return 'kcal';                 // Vita burn-to-complete
-        return null;                                 // unknown — use set.unit toggle
-    }
+    function getSetGoalUnit(ex) { return WorkoutLogic.getSetGoalUnit(ex); }
 
     function shouldLoadLastMaxWeight(ex) {
         const unit = getSetGoalUnit(ex);
@@ -1398,6 +1390,9 @@ You must output a JSON object with the following structure:
             data_stat_type: ex.dataStatType,
             sets: ex.sets.map(s => {
                 const newSet = {...s};
+                // save the unit the editor SHOWS (a timed exercise displays seconds whatever set.unit holds)
+                const shown = WorkoutLogic.effectiveSetUnit(ex, s);
+                if (shown === 'sec' || shown === 'reps') newSet.unit = shown;
                 return newSet;
             })
         }));

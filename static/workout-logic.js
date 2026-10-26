@@ -158,11 +158,34 @@ function buildExportJSON(workoutData, planName) {
 }
 
 // ---------------------------------------------------------------------------
+/**
+ * The goal unit an exercise's API metadata forces on its sets: 'sec' (timed), 'reps', 'kcal', or null (the per-set
+ * toggle decides).
+ */
+function getSetGoalUnit(ex) {
+    const cm = ex.completionMethod;
+    const scm = String(ex.selectCompletionMethod ?? '');
+    if (cm === 0 && scm === '1') return 'sec';   // timed via selectCompletionMethod
+    if (cm === 1) return 'reps';
+    if (cm === 2) return 'sec';                  // Row/Ski timed
+    if (cm === 5) return 'kcal';                 // Vita burn-to-complete
+    return null;
+}
+
+/**
+ * The unit a set is DISPLAYED and must be SAVED in: the API's unit when it mandates one, else the set's own toggle.
+ * Saving set.unit unchanged would store a timed target (shown as seconds) as repetitions.
+ */
+function effectiveSetUnit(ex, set) {
+    const forced = getSetGoalUnit(ex);
+    return forced !== null ? forced : ((set && set.unit) || 'reps');
+}
+
 // Export for Node.js (tests) and browser (WorkoutLogic namespace)
 // ---------------------------------------------------------------------------
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { PRESET_RULES, getRules, validateAndClamp, lbsToKg, kgToLbs, parseImportedSets, buildExportJSON };
+    module.exports = { PRESET_RULES, getRules, validateAndClamp, lbsToKg, kgToLbs, parseImportedSets, buildExportJSON, getSetGoalUnit, effectiveSetUnit };
 } else if (typeof window !== 'undefined') {
     // Use a namespace to avoid colliding with identically-named functions in create.html
-    window.WorkoutLogic = { PRESET_RULES, getRules, validateAndClamp, lbsToKg, kgToLbs, parseImportedSets, buildExportJSON };
+    window.WorkoutLogic = { PRESET_RULES, getRules, validateAndClamp, lbsToKg, kgToLbs, parseImportedSets, buildExportJSON, getSetGoalUnit, effectiveSetUnit };
 }
