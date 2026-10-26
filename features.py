@@ -24,7 +24,7 @@ import coach
 from api_client import MAX_EXERCISES, MAX_REPS, MAX_REST_S, MAX_SETS, validate_workout
 from auth import writes_enabled
 import state_io
-from insights_core import clamp_days, clamp_n, recovery_advice, summarize
+from insights_core import clamp_days, clamp_n, json_object, recovery_advice, summarize
 
 features_bp = Blueprint('features', __name__)
 _client = None
@@ -634,7 +634,7 @@ def coach_readiness():
 @features_bp.route('/api/coach/autoregulate', methods=['POST'])
 def coach_autoregulate():
     try:
-        readiness = state_io.validate_readiness(request.get_json(silent=True) or {})
+        readiness = state_io.validate_readiness(json_object(request.get_json(silent=True)))
     except ValueError as e:
         return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
     return jsonify(coach.autoregulate(readiness))
@@ -642,7 +642,7 @@ def coach_autoregulate():
 
 @features_bp.route('/api/coach/program', methods=['POST'])
 def coach_program():
-    body = request.get_json(silent=True) or {}
+    body = json_object(request.get_json(silent=True))
     readiness = body.get("readiness")
     if readiness is not None:
         try:
@@ -783,7 +783,7 @@ def coach_feedback():
 def coach_critique():
     """Critique an explicit list of exercises, or — if {code} is given and authenticated —
     critique one of the user's saved Speediance workouts."""
-    body = request.get_json(silent=True) or {}
+    body = json_object(request.get_json(silent=True))
     goal = body.get("goal", "general")
     exercises = body.get("exercises")
     if not exercises and body.get("code") and _authed():
@@ -1032,7 +1032,7 @@ def coach_apply():
     if not _authed():
         return jsonify({"error": "not_authenticated",
                         "message": "Log in at /settings to save to your Speediance account."}), 401
-    body = request.get_json(silent=True) or {}
+    body = json_object(request.get_json(silent=True))
     program = body.get("program")
     if not isinstance(program, dict) or not program.get("days"):
         return jsonify({"error": "no_program",

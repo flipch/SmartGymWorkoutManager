@@ -84,6 +84,11 @@ def valid_record_id(value) -> bool:
     return isinstance(value, str) and _RECORD_ID.fullmatch(value) is not None
 
 
+def json_object(value):
+    """A request body is only usable as a dict; a JSON list, string or number is "no body" (never an AttributeError)."""
+    return value if isinstance(value, dict) else {}
+
+
 def valid_iso_date(value) -> bool:
     if not isinstance(value, str):
         return False

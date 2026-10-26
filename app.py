@@ -3,7 +3,7 @@ from api_client import SpeedianceClient
 from auth import load_token, install_flask_auth, install_flask_write_gate
 from features import init_features
 import media
-from insights_core import valid_iso_date, valid_record_id
+from insights_core import json_object, valid_iso_date, valid_record_id
 import json
 import os
 import sys
@@ -507,19 +507,26 @@ def api_calendar():
             return jsonify({"error": "Unauthorized"}), 401
         return jsonify({"error": str(e)}), 500
 
+def _valid_schedule_status(status):
+    """1 schedules, 0 removes; a bool or anything else is refused rather than forwarded to the vendor."""
+    return type(status) is int and status in (0, 1)
+
+
 @app.route('/api/schedule', methods=['POST'])
 def api_schedule():
     """Schedules or unschedules a workout."""
     if not client.credentials.get("token"):
         return jsonify({"error": "Unauthorized"}), 401
 
-    data = request.json
+    data = json_object(request.get_json(silent=True))
     date_str = data.get('date')
     template_code = data.get('templateCode')
     status = data.get('status')
 
     if not date_str or not template_code or status is None:
         return jsonify({"error": "Missing parameters"}), 400
+    if not (valid_iso_date(date_str) and _valid_schedule_status(status) and valid_record_id(str(template_code))):
+        return jsonify({"error": "Invalid parameters"}), 400  # nothing the caller sent is echoed back
 
     try:
         success = client.schedule_workout(date_str, template_code, status)
@@ -535,13 +542,15 @@ def api_schedule_course():
     if not client.credentials.get("token"):
         return jsonify({"error": "Unauthorized"}), 401
 
-    data = request.json
+    data = json_object(request.get_json(silent=True))
     date_str = data.get('date')
     course_id = data.get('courseId')
     status = data.get('status', 1)
 
     if not date_str or not course_id:
         return jsonify({"error": "Missing parameters"}), 400
+    if not (valid_iso_date(date_str) and _valid_schedule_status(status) and valid_record_id(str(course_id))):
+        return jsonify({"error": "Invalid parameters"}), 400
 
     try:
         success = client.schedule_course(date_str, course_id, status)

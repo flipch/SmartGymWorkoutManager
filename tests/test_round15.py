@@ -381,5 +381,54 @@ class TheSessionTokenNeverFollowsARedirect(unittest.TestCase):
         self.assertIsNone(handler.redirect_request(None, None, 302, "Found", {}, "http://elsewhere.invalid/"))
 
 
+class RequestBodiesAreAlwaysObjects(unittest.TestCase):
+    ROUTES = ("/api/coach/readiness", "/api/coach/autoregulate", "/api/coach/program", "/api/coach/feedback",
+              "/api/coach/critique", "/api/coach/apply", "/api/schedule", "/api/schedule_course")
+
+    def post(self, path, body, client=None):
+        import app as gym_app
+        import base64
+        basic = {"Authorization": "Basic " + base64.b64encode(f"gym:{TOKEN}".encode()).decode()}
+        fake = client or make_client({"token": "x", "unit": 1, "unit_confirmed": True})
+        fake.data_dir = tempfile.mkdtemp(prefix="gym-body-")
+        with mock.patch.object(gym_app, "client", fake), mock.patch.object(features, "_client", fake), \
+                mock.patch.object(features, "_authed", return_value=True), \
+                mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}):
+            return gym_app.app.test_client().post(path, headers=basic, json=body)
+
+    def test_a_list_string_or_number_body_is_a_client_error_never_a_500(self):
+        for path in self.ROUTES:
+            for body in ([1, 2], "text", 7, [], None):
+                resp = self.post(path, body)
+                self.assertLess(resp.status_code, 500, (path, body, resp.status_code))
+
+    def test_schedule_validates_before_anything_is_forwarded(self):
+        client = make_client({"token": "x", "unit": 1})
+        client.schedule_workout.return_value = True
+        client.schedule_course.return_value = True
+        good = {"date": "2026-10-27", "templateCode": "abc123", "status": 1}
+        self.assertEqual(self.post("/api/schedule", good, client).status_code, 200)
+        for patch_ in ({"date": "tomorrow"}, {"date": "2026-13-40"}, {"date": "2026-10-27&x=1"}, {"status": 2}, {"status": True},
+                       {"status": "1"}, {"status": -1}, {"templateCode": "a/../b"}, {"templateCode": "a,b"}, {"templateCode": "a b"}):
+            client.schedule_workout.reset_mock()
+            resp = self.post("/api/schedule", {**good, **patch_}, client)
+            self.assertEqual(resp.status_code, 400, patch_)
+            client.schedule_workout.assert_not_called()
+            self.assertNotIn("x=1", resp.get_data(as_text=True))
+        goodc = {"date": "2026-10-27", "courseId": 55, "status": 1}
+        self.assertEqual(self.post("/api/schedule_course", goodc, client).status_code, 200)
+        for patch_ in ({"date": "nope"}, {"status": 9}, {"status": False}, {"courseId": "5/../6"}):
+            client.schedule_course.reset_mock()
+            self.assertEqual(self.post("/api/schedule_course", {**goodc, **patch_}, client).status_code, 400, patch_)
+            client.schedule_course.assert_not_called()
+
+    def test_removing_a_schedule_with_status_zero_still_works(self):
+        client = make_client({"token": "x", "unit": 1})
+        client.schedule_workout.return_value = True
+        resp = self.post("/api/schedule", {"date": "2026-10-27", "templateCode": "abc", "status": 0}, client)
+        self.assertEqual(resp.status_code, 200)
+        client.schedule_workout.assert_called_once_with("2026-10-27", "abc", 0)
+
+
 if __name__ == "__main__":
     unittest.main()
