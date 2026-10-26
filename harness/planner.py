@@ -35,6 +35,10 @@ def _norm(name: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", name.lower()).split())
 
 
+# Words that only say WHERE on the machine a lift is done ("(Main Frame)"), not which movement it is.
+LOCATION_WORDS = frozenset({"main", "frame"})
+
+
 def _fold(word: str) -> str:
     """Fold simple plurals so 'Presses'/'Press', 'Abs'/'Ab', 'Dips'/'Dip' compare equal (both sides use this)."""
     if word.endswith("sses") and len(word) > 5:
@@ -47,7 +51,7 @@ def _fold(word: str) -> str:
 def _tokens(name: str) -> frozenset[str]:
     """Normalised word set: lowercase, punctuation removed (parenthetical words are KEPT: '(Seated)' vs '(Standing)'
     is a different movement), plurals folded."""
-    return frozenset(_fold(w) for w in re.sub(r"[^a-z0-9 ]", " ", name.lower()).split())
+    return frozenset(_fold(w) for w in re.sub(r"[^a-z0-9 ]", " ", name.lower()).split() if w not in LOCATION_WORDS)
 
 
 def _same_exercise(a: str, b: str) -> bool:

@@ -215,6 +215,11 @@ class HistoryTrust(unittest.TestCase):
                      ("Chest Press (Main Frame)", "Chest Press (Seated)"), ("Squat (Barbell)", "Squat (Smith)")):
             self.assertFalse(planner._same_exercise(a, b), f"{a} / {b}")
 
+    def test_a_main_frame_location_note_does_not_change_the_movement(self):
+        self.assertTrue(planner._same_exercise("Dual-Handle Bench Press", "Dual-Handle Bench Press (Main Frame)"))
+        self.assertTrue(planner._same_exercise("Tricep Rope Pushdown (Main Frame)", "tricep rope pushdown"))
+        self.assertFalse(planner._same_exercise("Chest Press (Main Frame)", "Chest Press (Seated)"))
+
     def test_plural_and_hyphen_variants_of_the_same_name_still_match(self):
         for a, b in (("Leg Press", "Leg Presses"), ("Abs Crunch", "Ab Crunch"), ("Dual-Handle Bench Press", "Bench Press (Dual Handle)"),
                      ("Kneeling Dips", "Kneeling Dip")):

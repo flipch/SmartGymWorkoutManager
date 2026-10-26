@@ -89,7 +89,7 @@ def allowed_origins(host: str, forwarded_host: str | None = None, extra: str | N
         hosts.add(forwarded_host.split(",")[0].strip())
     hosts.update(h.strip() for h in (extra or "").split(","))
     hosts.discard("")  # an empty host would let Origin "null" (which parses to netloc "") through
-    return hosts
+    return {h.lower() for h in hosts}  # hostnames are case-insensitive; browsers send them lowercase
 
 
 def cross_site(headers, hosts) -> bool:
@@ -105,7 +105,7 @@ def cross_site(headers, hosts) -> bool:
     origin = headers.get("Origin")
     if not origin:
         return False
-    return urlparse(origin).netloc not in hosts  # Origin "null" (sandboxed iframe, redirect) parses to "" and is refused
+    return urlparse(origin).netloc.lower() not in hosts  # Origin "null" (sandboxed iframe, redirect) parses to "" and is refused
 
 
 def install_flask_write_gate(app):

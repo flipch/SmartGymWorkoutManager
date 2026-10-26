@@ -216,6 +216,25 @@ class Tokens(unittest.TestCase):
         self.assertNotIn("During handling of the above exception", text)
         self.assertNotIn("direct cause", text)
 
+    def test_source_down_paths_also_hide_the_callers_exception(self):
+        import traceback
+        from harness.errors import SourceDown as Down
+
+        def down(old):
+            raise Down("whoop", "503")
+
+        for refresh in (down, lambda old: {"access_token": "a2"}):  # SourceDown from refresh_fn, and from save()
+            try:
+                try:
+                    raise ValueError("outer-401-secret-token")
+                except ValueError:
+                    self.store.refresh_if_still_stale("r1", refresh)
+            except Down as err:
+                text = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+            self.assertNotIn("secret", text)
+            self.assertNotIn("During handling of the above exception", text)
+            self.assertEqual(self.store.load()["refresh_token"], "r1")
+
     def test_a_hung_refresher_cannot_block_everyone_forever(self):
         import fcntl
         self.store.path.parent.mkdir(parents=True, exist_ok=True)

@@ -149,18 +149,20 @@ class TokenStore:
             current = self.load()
             if current and current.get("refresh_token") != seen_refresh_token:
                 return current
-            failure = None
+            failure, down = None, None
             try:
                 fresh = refresh_fn(seen_refresh_token)
-            except SourceDown:  # refresh_fn contract: SourceDown messages must never contain response bodies/tokens
-                raise
+                self.save(fresh)
+            except SourceDown as err:  # refresh_fn contract: SourceDown messages never contain response bodies/tokens
+                down = err
             except Exception as err:  # noqa: BLE001
-                failure = type(err).__name__  # keep only the class name; raising outside this block drops __context__
+                failure = type(err).__name__  # keep only the class name
+            # Raise OUTSIDE the except blocks, always `from None`: refresh_fn's exception stays out of the chain, and
+            # an exception the CALLER is handling (e.g. the 401 that triggered the refresh) is not printed either.
+            if down is not None:
+                raise down from None
             if failure:
-                # `from None` hides any exception the CALLER is handling (e.g. the 401 that triggered the refresh) from
-                # tracebacks; raising outside our own except block keeps refresh_fn's exception out of the chain.
                 raise SourceAuthError(SOURCE, f"token refresh failed: {failure}") from None
-            self.save(fresh)
             return fresh
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)

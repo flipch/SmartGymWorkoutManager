@@ -115,6 +115,13 @@ class RealFlaskApp(unittest.TestCase):
         self.assertIn(b'<form method="post" action="/logout"', settings.data)
         self.assertNotIn(b'href="/logout"', settings.data)
 
+    def test_host_comparison_ignores_case(self):
+        from auth import allowed_origins, cross_site
+        hosts = allowed_origins("localhost", "Gym.Lan.Doghous.Cloud", "OTHER.example")
+        for origin in ("https://gym.lan.doghous.cloud", "https://Gym.Lan.Doghous.Cloud", "http://other.example"):
+            self.assertFalse(cross_site({"Origin": origin}, hosts), origin)
+        self.assertTrue(cross_site({"Origin": "https://gym.lan.doghous.cloud.evil.com"}, hosts))
+
     def test_malformed_forwarded_host_cannot_whitelist_a_null_origin(self):
         from auth import allowed_origins, cross_site
         for xfh in (", x", ",", " ", ""):
