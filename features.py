@@ -21,6 +21,7 @@ import re
 
 import coach
 from auth import writes_enabled
+from insights_core import clamp_days, clamp_n, recovery_advice, summarize
 
 features_bp = Blueprint('features', __name__)
 _client = None
@@ -48,7 +49,7 @@ def _parse_date(v):
             if n > 10_000_000_000:        # epoch millis
                 n //= 1000
             if 946684800 < n < 4102444800:  # ~2000..2100
-                return datetime.utcfromtimestamp(n).date()
+                return datetime.fromtimestamp(n).date()  # container TZ (America/Los_Angeles), not UTC
         except Exception:
             return None
         return None
@@ -85,15 +86,27 @@ def _as_list(data):
     return []
 
 
+class HistoryUnavailable(Exception):
+    """The training history could not be read (token expired, network, vendor outage)."""
+
+
 def _history(days=90):
+    """Sessions in the last `days` days. [] only when NOT signed in; an outage raises HistoryUnavailable so an error
+    can never read as "no training -> well rested"."""
     if not _authed():
         return []
+    days = clamp_days(days, 90)
     end = date.today()
     start = end - timedelta(days=days)
     try:
         return _as_list(_client.get_training_history(start.isoformat(), end.isoformat()))
-    except Exception:
-        return []
+    except Exception as err:
+        raise HistoryUnavailable(type(err).__name__) from None
+
+
+def _history_unavailable_response(err):
+    return jsonify({"error": "history_unavailable",
+                    "message": f"Could not read your training history ({err}); no recommendation was made."}), 503
 
 
 def _session_dates(recs):
@@ -229,7 +242,7 @@ def _deep_insights(days=90, max_sessions=24):
         ts = r.get("startTimestamp")
         if not ts:
             continue
-        wk = _iso_week(datetime.utcfromtimestamp(ts).date())
+        wk = _iso_week(datetime.fromtimestamp(ts).date())
         weekly[wk]["sessions"] += 1
         weekly[wk]["tonnage"] += round(r.get("totalCapacity") or 0)
         weekly[wk]["calories"] += round(r.get("calorie") or 0)
@@ -253,26 +266,16 @@ def _deep_insights(days=90, max_sessions=24):
 
 @features_bp.route('/api/insights')
 def api_insights():
-    recs = _history(90)
+    try:
+        recs = _history(90)
+    except HistoryUnavailable as err:
+        return _history_unavailable_response(err)
     dates = _session_dates(recs)
-    today = date.today()
-    streak = 0
-    if dates:
-        dset = set(dates)
-        cur = today if today in dset else (today - timedelta(days=1))
-        while cur in dset:
-            streak += 1
-            cur -= timedelta(days=1)
-    last7 = sum(1 for d in dates if d >= today - timedelta(days=7))
-    last30 = sum(1 for d in dates if d >= today - timedelta(days=30))
     out = {
         "authenticated": _authed(),
         "window_days": 90, "unit": _unit_label(_client),
-        "total_sessions": len(recs), "active_days": len(dates),
-        "current_streak_days": streak, "sessions_last_7d": last7,
-        "sessions_last_30d": last30,
-        "avg_sessions_per_week": round(last30 / (30 / 7), 1) if last30 else 0,
-        "last_session": dates[-1].isoformat() if dates else None,
+        "total_sessions": len(recs),
+        **summarize(dates, date.today()),
     }
     if _authed():
         try:
@@ -284,23 +287,15 @@ def api_insights():
 
 @features_bp.route('/api/recovery')
 def api_recovery():
-    recs = _history(21)
-    dates = _session_dates(recs)
-    today = date.today()
-    last7 = sum(1 for d in dates if d >= today - timedelta(days=7))
-    days_since = (today - dates[-1]).days if dates else None
     if not _authed():
-        rec, msg = "log_in", "Log in to get personalized recovery guidance."
-    elif days_since is None or days_since >= 3:
-        rec, msg = "train", "Well rested — a great day to train. 💪"
-    elif last7 >= 6:
-        rec, msg = "rest", "6+ sessions in 7 days. Take a rest or active-recovery day. 🛌"
-    elif days_since == 0 and last7 >= 2:
-        rec, msg = "active_recovery", "Already trained today — keep it light if anything. 🚶"
-    else:
-        rec, msg = "train", "Good to train today. ✅"
-    return jsonify({"authenticated": _authed(), "recommendation": rec, "message": msg,
-                    "days_since_last": days_since, "sessions_last_7d": last7})
+        return jsonify({"authenticated": False, "recommendation": "log_in",
+                        "message": "Log in to get personalized recovery guidance.",
+                        "days_since_last": None, "sessions_last_7d": 0})
+    try:
+        recs = _history(21)
+    except HistoryUnavailable as err:
+        return _history_unavailable_response(err)
+    return jsonify({"authenticated": True, **recovery_advice(_session_dates(recs), date.today())})
 
 
 # --------------------------------------------------- Feature 2: iCal feed
@@ -673,7 +668,7 @@ def coach_critique():
             detail = _client.get_workout_detail(body["code"])
             exercises = _coach_workout_to_exercises(detail)
         except Exception as e:
-            return jsonify({"error": "fetch_failed", "message": str(e)}), 502
+            return jsonify({"error": "fetch_failed", "message": type(e).__name__}), 502
     if not exercises:
         return jsonify({"error": "no_exercises",
                         "message": "Provide 'exercises' (list of {name,sets,reps}) or an authenticated 'code'."}), 400
@@ -971,7 +966,7 @@ def _summarize_session(record, detail, unit):
     return {
         "training_id": record.get("trainingId"), "name": record.get("title") or "Workout",
         "type": label,
-        "date": datetime.utcfromtimestamp(ts).isoformat() + "Z" if ts else None,
+        "date": datetime.fromtimestamp(ts).isoformat() if ts else None,  # local wall time, no misleading "Z"
         "duration": _fmt_secs(record.get("trainingTime")), "duration_sec": record.get("trainingTime"),
         "calories": round(record.get("calorie") or 0),
         "volume": round(record.get("totalCapacity") or 0), "unit": unit,
@@ -983,6 +978,7 @@ def _summarize_session(record, detail, unit):
 
 def _detailed_records(client, days=60):
     """Recent completed sessions that have a per-set breakdown, newest first."""
+    days = clamp_days(days, 60)
     end = date.today(); start = end - timedelta(days=days)
     recs = client.get_training_records(start.isoformat(), end.isoformat())
     recs = [r for r in (recs if isinstance(recs, list) else []) if isinstance(r, dict)
@@ -1003,12 +999,12 @@ def api_last_workout():
     if not _authed():
         return jsonify({"error": "not_authenticated",
                         "message": "Log in at /settings with your Speediance account."}), 401
-    days = int(request.args.get("days", 60))
-    n = max(1, int(request.args.get("n", 1)))
+    days = clamp_days(request.args.get("days", 60), 60)
+    n = clamp_n(request.args.get("n", 1), 1)
     try:
         recs = _detailed_records(_client, days)
     except Exception as e:
-        return jsonify({"error": "fetch_failed", "message": str(e)}), 502
+        return jsonify({"error": "fetch_failed", "message": type(e).__name__}), 502
     if len(recs) < n:
         return jsonify({"error": "not_found",
                         "message": f"Fewer than {n} detailed workouts in the last {days} days."}), 404

@@ -3,6 +3,7 @@ from api_client import SpeedianceClient
 from auth import load_token, install_flask_auth, install_flask_write_gate
 from features import init_features
 import media
+from insights_core import valid_iso_date, valid_record_id
 import json
 import os
 import sys
@@ -567,7 +568,7 @@ def api_history():
     except Exception as e:
         if str(e) == "Unauthorized":
             return jsonify({"error": "Unauthorized"}), 401
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "history_unavailable", "detail": type(e).__name__}), 502
 
 @app.route('/api/history/detail/<int:training_id>')
 def api_history_detail(training_id):
@@ -582,7 +583,7 @@ def api_history_detail(training_id):
     except Exception as e:
         if str(e) == "Unauthorized":
             return jsonify({"error": "Unauthorized"}), 401
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "history_unavailable", "detail": type(e).__name__}), 502
 
 @app.route('/browse')
 def browse_page():
@@ -753,15 +754,19 @@ def api_workout_history():
     end = request.args.get('end')
     if not start or not end:
         return jsonify({"error": "Missing dates"}), 400
+    if not (valid_iso_date(start) and valid_iso_date(end)):
+        return jsonify({"error": "start and end must be YYYY-MM-DD"}), 400
 
     try:
         data = client.get_training_history(start, end)
         return jsonify(data)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "history_unavailable", "detail": type(e).__name__}), 502
 
 @app.route('/api/workout_history/detail/<path:record_id>')
 def api_workout_history_detail(record_id):
+    if not valid_record_id(record_id):
+        return jsonify({"error": "invalid record id"}), 400
     training_type = request.args.get('type', default=2, type=int)
 
     if training_type == 5:
@@ -778,11 +783,10 @@ def api_workout_history_detail(record_id):
         else:
             return jsonify({
                 "error": f"Speediance API Error: {response.status_code}",
-                "url": target_url,
                 "type_requested": training_type
             }), response.status_code
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "upstream_error", "detail": type(e).__name__}), 502
 
 class TextRedirector(object):
     def __init__(self, widget, tag="stdout"):

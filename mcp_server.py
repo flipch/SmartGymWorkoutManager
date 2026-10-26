@@ -20,6 +20,7 @@ from mcp.server.mcpserver import MCPServer
 import coach
 from auth import BearerAuthASGI, load_token, writes_enabled
 from api_client import SpeedianceClient
+from insights_core import clamp_days, clamp_n, recovery_advice, summarize
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
     _detailed_records, fetch_session_detail, _summarize_session, _unit_label,
@@ -164,7 +165,7 @@ def training_history(days: int = 30) -> dict:
     """List completed training sessions in the last `days` days."""
     def run():
         c = _client(); _require_auth(c)
-        end = date.today(); start = end - timedelta(days=max(1, days))
+        end = date.today(); start = end - timedelta(days=clamp_days(days, 30))
         recs = c.get_training_history(start.isoformat(), end.isoformat())
         return {"start": start.isoformat(), "end": end.isoformat(),
                 "count": len(recs) if isinstance(recs, list) else None,
@@ -181,6 +182,7 @@ def last_workout(n: int = 1, days: int = 60) -> dict:
     (duration, calories, volume). Use this to review or critique what the user actually did."""
     def run():
         c = _client(); _require_auth(c)
+        n, days = clamp_n(n, 1), clamp_days(days, 60)
         recs = _detailed_records(c, days)
         if len(recs) < n:
             return {"error": "not_found",
@@ -224,7 +226,7 @@ def training_stats(days: int = 30) -> dict:
     """Aggregated training stats (volume, calories, etc.) over the last `days`."""
     def run():
         c = _client(); _require_auth(c)
-        end = date.today(); start = end - timedelta(days=max(1, days))
+        end = date.today(); start = end - timedelta(days=clamp_days(days, 30))
         return c.get_training_stats(start.isoformat(), end.isoformat())
     return _safe(run)
 
@@ -233,56 +235,26 @@ def training_stats(days: int = 30) -> dict:
 @mcp.tool()
 def workout_insights() -> dict:
     """Computed training summary over the last 90 days: streak, weekly frequency,
-    last session. Mirrors the web /api/insights dashboard."""
+    last session. Mirrors the web /api/insights dashboard. An outage is an error, never zero sessions."""
     def run():
         c = _client(); _require_auth(c)
         end = date.today(); start = end - timedelta(days=90)
         recs = c.get_training_history(start.isoformat(), end.isoformat())
         recs = recs if isinstance(recs, list) else []
-        dates = _session_dates(recs)
-        today = date.today()
-        streak = 0
-        if dates:
-            dset = set(dates)
-            cur = today if today in dset else today - timedelta(days=1)
-            while cur in dset:
-                streak += 1
-                cur -= timedelta(days=1)
-        last30 = sum(1 for d in dates if d >= today - timedelta(days=30))
-        return {
-            "total_sessions": len(recs),
-            "active_days": len(dates),
-            "current_streak_days": streak,
-            "sessions_last_7d": sum(1 for d in dates if d >= today - timedelta(days=7)),
-            "sessions_last_30d": last30,
-            "avg_sessions_per_week": round(last30 / (30 / 7), 1) if last30 else 0,
-            "last_session": dates[-1].isoformat() if dates else None,
-        }
+        return {"total_sessions": len(recs), **summarize(_session_dates(recs), date.today())}
     return _safe(run)
 
 
 @mcp.tool()
 def recovery_recommendation() -> dict:
     """Should the user train, rest, or do active recovery today? Based on recent
-    training frequency. Mirrors the web /api/recovery endpoint."""
+    training frequency. Mirrors the web /api/recovery endpoint. If the history cannot be read this returns an
+    error, NOT a "train" recommendation."""
     def run():
         c = _client(); _require_auth(c)
         end = date.today(); start = end - timedelta(days=21)
         recs = c.get_training_history(start.isoformat(), end.isoformat())
-        dates = _session_dates(recs if isinstance(recs, list) else [])
-        today = date.today()
-        last7 = sum(1 for d in dates if d >= today - timedelta(days=7))
-        days_since = (today - dates[-1]).days if dates else None
-        if days_since is None or days_since >= 3:
-            rec, msg = "train", "Well rested — a great day to train."
-        elif last7 >= 6:
-            rec, msg = "rest", "6+ sessions in 7 days. Take a rest/active-recovery day."
-        elif days_since == 0 and last7 >= 2:
-            rec, msg = "active_recovery", "Already trained today — keep it light."
-        else:
-            rec, msg = "train", "Good to train today."
-        return {"recommendation": rec, "message": msg,
-                "days_since_last": days_since, "sessions_last_7d": last7}
+        return recovery_advice(_session_dates(recs if isinstance(recs, list) else []), date.today())
     return _safe(run)
 
 

@@ -2,6 +2,22 @@ import time
 import json
 import requests
 import os
+from urllib.parse import quote
+
+from insights_core import valid_iso_date
+
+def _q(value, safe: str = "") -> str:
+    """Percent-encode an id/code before it goes into an upstream URL (no path or query injection)."""
+    return quote(str(value), safe=safe)
+
+
+def _d(value) -> str:
+    """A YYYY-MM-DD date for an upstream query string; anything else is a caller bug, not a request to forward."""
+    text = str(value)
+    if not valid_iso_date(text):
+        raise ValueError("date must be YYYY-MM-DD")
+    return text
+
 
 class SpeedianceClient:
     def __init__(self):
@@ -398,7 +414,7 @@ class SpeedianceClient:
             return []
         
     def get_workout_detail(self, code):
-        url = f"{self.base_url}/api/app/v3/customTrainingTemplate/detailByCode?code={code}"
+        url = f"{self.base_url}/api/app/v3/customTrainingTemplate/detailByCode?code={_q(code)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             if resp.status_code == 401:
@@ -417,11 +433,11 @@ class SpeedianceClient:
         return resp.json().get('data', [])
 
     def delete_workout(self, template_id):
-        url = f"{self.base_url}/api/app/customTrainingTemplate?ids={template_id}"
+        url = f"{self.base_url}/api/app/customTrainingTemplate?ids={_q(template_id, ',')}"
         self._request('DELETE', url, headers=self._get_headers())
 
     def get_exercise_detail(self, exercise_id):
-        url = f"{self.base_url}/api/app/actionLibraryGroup/{exercise_id}?isDisplay=1"
+        url = f"{self.base_url}/api/app/actionLibraryGroup/{_q(exercise_id)}?isDisplay=1"
         resp = self._request('GET', url, headers=self._get_headers())
         return resp.json().get('data', {})
 
@@ -449,7 +465,7 @@ class SpeedianceClient:
         Fetches calendar data for a specific month.
         date_str: 'YYYY-MM'
         """
-        url = f"{self.base_url}/api/app/v5/trainingCalendar/monthNew?date={date_str}&selectedDeviceType={self.device_type}"
+        url = f"{self.base_url}/api/app/v5/trainingCalendar/monthNew?date={_q(date_str)}&selectedDeviceType={self.device_type}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             if resp.status_code == 401:
@@ -487,25 +503,14 @@ class SpeedianceClient:
         Fetches the list of training records between two dates.
         Dates should be in 'YYYY-MM-DD' format.
         """
-        url = f"{self.base_url}/api/mobile/v2/report/userTrainingDataRecord?startDate={start_date}&endDate={end_date}"
+        url = f"{self.base_url}/api/mobile/v2/report/userTrainingDataRecord?startDate={_d(start_date)}&endDate={_d(end_date)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             return resp.json().get('data', [])
         except Exception as e:
-            print(f"Error fetching history: {e}")
-            return []
-
-    def get_training_detail(self, training_id):
-        """
-        Fetches the full details (sets, reps, graphs) for a specific workout ID.
-        """
-        url = f"{self.base_url}/api/app/trainingInfo/cttTrainingInfoDetail/{training_id}"
-        try:
-            resp = self._request('GET', url, headers=self._get_headers())
-            return resp.json().get('data', {})
-        except Exception as e:
-            print(f"Error fetching training detail: {e}")
-            return {}
+            # Do NOT return []: callers read an empty list as "no training" ("well rested") during an outage.
+            print(f"Error fetching history: {type(e).__name__}")
+            raise
 
     def schedule_course(self, date_str, course_id, status):
         """
@@ -692,7 +697,7 @@ class SpeedianceClient:
         """Fetches training session records for a date range.
         GET /api/mobile/v2/report/userTrainingDataRecord?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
         """
-        url = f"{self.base_url}/api/mobile/v2/report/userTrainingDataRecord?startDate={start_date}&endDate={end_date}"
+        url = f"{self.base_url}/api/mobile/v2/report/userTrainingDataRecord?startDate={_d(start_date)}&endDate={_d(end_date)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             if resp.status_code == 401:
@@ -700,14 +705,14 @@ class SpeedianceClient:
             return resp.json().get('data', [])
         except Exception as e:
             if str(e) == "Unauthorized": raise e
-            print(f"Error fetching training records: {e}")
-            return []
+            print(f"Error fetching training records: {type(e).__name__}")
+            raise
 
     def get_training_stats(self, start_date, end_date):
         """Fetches aggregated training stats for a date range.
         GET /api/mobile/v2/report/userTrainingDataStat?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
         """
-        url = f"{self.base_url}/api/mobile/v2/report/userTrainingDataStat?startDate={start_date}&endDate={end_date}"
+        url = f"{self.base_url}/api/mobile/v2/report/userTrainingDataStat?startDate={_d(start_date)}&endDate={_d(end_date)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             if resp.status_code == 401:
@@ -715,8 +720,8 @@ class SpeedianceClient:
             return resp.json().get('data', {})
         except Exception as e:
             if str(e) == "Unauthorized": raise e
-            print(f"Error fetching training stats: {e}")
-            return {}
+            print(f"Error fetching training stats: {type(e).__name__}")
+            raise
 
     def get_training_detail(self, training_id, training_type):
         """Fetches detailed info for a completed training session.
@@ -725,9 +730,9 @@ class SpeedianceClient:
           - Custom Templates → /api/app/trainingInfo/cttTrainingInfoDetail/{id}
         """
         if training_type == 'course':
-            url = f"{self.base_url}/api/app/trainingInfo/courseTrainingInfoDetail/{training_id}"
+            url = f"{self.base_url}/api/app/trainingInfo/courseTrainingInfoDetail/{_q(training_id)}"
         else:
-            url = f"{self.base_url}/api/app/trainingInfo/cttTrainingInfoDetail/{training_id}"
+            url = f"{self.base_url}/api/app/trainingInfo/cttTrainingInfoDetail/{_q(training_id)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             if resp.status_code == 401:
@@ -735,14 +740,14 @@ class SpeedianceClient:
             return resp.json().get('data', {})
         except Exception as e:
             if str(e) == "Unauthorized": raise e
-            print(f"Error fetching training detail: {e}")
-            return {}
+            print(f"Error fetching training detail: {type(e).__name__}")
+            raise  # an empty detail would read as "a workout with no sets"
 
     def get_training_session_info(self, training_id):
         """Fetches overall session info (name, duration, calories, capacity).
         GET /api/app/trainingInfo/courseTrainingInfo/{id}
         """
-        url = f"{self.base_url}/api/app/trainingInfo/courseTrainingInfo/{training_id}"
+        url = f"{self.base_url}/api/app/trainingInfo/courseTrainingInfo/{_q(training_id)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             if resp.status_code == 401:
@@ -786,7 +791,7 @@ class SpeedianceClient:
         """Fetches full course detail including exercise list.
         GET /api/app/v2/course/info/{id}?weightConfig=1
         """
-        url = f"{self.base_url}/api/app/v2/course/info/{course_id}?weightConfig=1"
+        url = f"{self.base_url}/api/app/v2/course/info/{_q(course_id)}?weightConfig=1"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             if resp.status_code == 401:
@@ -817,7 +822,7 @@ class SpeedianceClient:
         """Fetches full program detail including week/day structure.
         GET /api/app/exclusivePlan/{id}
         """
-        url = f"{self.base_url}/api/app/exclusivePlan/{plan_id}"
+        url = f"{self.base_url}/api/app/exclusivePlan/{_q(plan_id)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             if resp.status_code == 401:
