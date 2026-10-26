@@ -13,6 +13,7 @@ class SetResult:
     load: float | None = None
     seconds: float | None = None
     unit: str | None = None  # "kg" | "lb" | None (unknown: never guess)
+    target: int | None = None  # the rep target the template asked for (None/0 = none recorded)
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ class Unavailable:
 class ProposedExercise:
     name: str
     sets: int
-    reps: int
+    reps: int | None  # None = no recorded rep target; use your template's
     rir: int
     mode: str
     load: float | None  # None = no logged history to anchor on; choose by RIR
@@ -68,3 +69,5 @@ class Plan:
     exercises: tuple[ProposedExercise, ...]
     inputs: dict = field(default_factory=dict)  # provenance: which feeds, as-of times, session count
     warnings: tuple[str, ...] = ()
+    template_title: str | None = None  # the user's own template this was built from, if any
+    source: str = "coach_catalog"  # "user_template" | "coach_catalog"

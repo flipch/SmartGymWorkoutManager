@@ -65,7 +65,8 @@ def session_with_sets(record: dict, detail, tz: str = DEFAULT_TZ, unit: str | No
             timed = ex.get("completionMethod") == 0  # timer-based exercise: reps are not meaningful
             reps = None if timed else (row.get("finishedCount") or None)
             sets.append(SetResult(exercise=name, reps=reps, load=set_load(row),
-                                  seconds=row.get("time") if timed else None, unit=unit))
+                                  seconds=row.get("time") if timed else None, unit=unit,
+                                  target=row.get("targetCount") or None))
     header = session_header(record, tz)
     return SessionResult(header.source_id, header.local_day, header.started_at_ms, header.title,
                          header.duration_s, header.total_volume, tuple(sets))
