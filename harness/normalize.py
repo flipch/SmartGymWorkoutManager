@@ -13,10 +13,13 @@ SOURCE = "speediance"
 
 
 def _first_nonzero_weights(set_row: dict) -> list:
-    """The per-rep load array for a set, preferring the side that was actually trained."""
+    """The per-rep load array for a set. `weights` is the machine's own load figure: on real one-sided sets it equals
+    capacity/reps (74 on a Bulgarian split squat) while leftWeights/rightWeights hold half of it (37), and bilateral
+    sets use it too, so it is the only figure that is comparable across sets of the same lift. The trained side's array
+    is only a fallback for a set that has no `weights`."""
     info = set_row.get("trainingInfoDetail") or {}
     side = {1: "leftWeights", 2: "rightWeights"}.get(set_row.get("leftRight"))
-    for key in (side, "weights", "leftWeights", "rightWeights"):
+    for key in ("weights", side, "leftWeights", "rightWeights"):
         arr = info.get(key) if key else None
         if isinstance(arr, list) and any(isinstance(w, (int, float)) and w > 0 for w in arr):
             return [w for w in arr if isinstance(w, (int, float))]

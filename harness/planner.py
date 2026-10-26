@@ -240,6 +240,14 @@ def todays_plan(*, sessions: list[SessionResult] | None, readings: list[Reading]
     auto = coach.autoregulate(readiness)
 
     warnings: list[str] = []
+    by_kind: dict[str, list[Reading]] = {}
+    for r in fresh:
+        by_kind.setdefault(r.kind, []).append(r)
+    for kind, rs in sorted(by_kind.items()):
+        if len({r.value for r in rs}) > 1:
+            newest = max(rs, key=lambda r: r.as_of)
+            warnings.append(f"{kind}: readings disagree ({', '.join(f'{r.value} {r.source}' for r in rs)}); "
+                            f"used the newest ({newest.value} from {newest.source})")
     trained_today = [s for s in sessions if s.local_day == day]
     if trained_today:
         warnings.append(f"already logged {len(trained_today)} session(s) today")

@@ -130,6 +130,43 @@ class Sleep(unittest.TestCase):
         readings, _ = whoop.parse_sleep(page(rescored))
         self.assertEqual(readings[0].as_of, datetime(2026, 10, 23, 14, 0, tzinfo=timezone.utc))
 
+    def test_a_night_split_over_two_records_counts_as_one_night(self):
+        late = sleep(end="2026-10-26T14:00:00Z", light=1 * HOUR, sws=0, rem=0)
+        early = sleep(end="2026-10-26T06:00:00Z", light=5 * HOUR, sws=1.5 * HOUR, rem=1.5 * HOUR)
+        readings, _ = whoop.parse_sleep(page(late, early))
+        self.assertEqual(readings[0].value, 9.0)
+        self.assertEqual(readings[0].as_of, datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc))
+
+    def test_a_different_cycles_sleep_is_not_added(self):
+        today = sleep(end="2026-10-26T14:00:00Z")
+        yesterday = {**sleep(end="2026-10-25T14:00:00Z"), "cycle_id": 0}
+        readings, _ = whoop.parse_sleep(page(today, yesterday))
+        self.assertEqual(readings[0].value, 7.0)
+
+    def test_a_partly_scored_night_gives_no_reading(self):
+        late = sleep(state="PENDING_SCORE", end="2026-10-26T14:00:00Z")
+        early = sleep(end="2026-10-26T06:00:00Z")
+        readings, notes = whoop.parse_sleep(page(late, early))
+        self.assertEqual(readings, [])
+        self.assertIn("PENDING_SCORE", notes[0])
+
+    def test_wrong_typed_or_impossible_fields_are_schema_drift_never_a_raw_error(self):
+        def with_stage(key, value):
+            rec = sleep()
+            rec["score"]["stage_summary"][key] = value
+            return page(rec)
+
+        bad_sleep = [with_stage("total_light_sleep_time_milli", None), with_stage("total_light_sleep_time_milli", "x"),
+                     with_stage("total_light_sleep_time_milli", -5 * HOUR), with_stage("total_rem_sleep_time_milli", True),
+                     page(5), page("x"), {"records": [5]}, page({**sleep(), "score": [1]}),
+                     page(sleep(light=0, sws=0, rem=0))]  # a SCORED night with zero sleep is not real
+        for bad in bad_sleep:
+            with self.assertRaises(SchemaDrift, msg=repr(bad)[:100]):
+                whoop.parse_sleep(bad)
+        for bad in (page({**recovery(), "score": [1]}), page(5), {"records": [None]}, page({**recovery(), "score": "x"})):
+            with self.assertRaises(SchemaDrift, msg=repr(bad)[:100]):
+                whoop.parse_recovery(bad)
+
     def test_only_naps_means_no_reading(self):
         readings, notes = whoop.parse_sleep(page(sleep(nap=True)))
         self.assertEqual((readings, notes), ([], ["no non-nap sleep records returned"]))

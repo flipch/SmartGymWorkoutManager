@@ -1,0 +1,19 @@
+# Docker ignores .gitignore: list every secret / local-state path explicitly.
+.git
+.venv
+.claude
+.env
+.env.*
+*.env
+config.json
+readiness.json
+coach_feedback.json
+data/
+recordings/
+tests/fixtures/real/
+.harness/
+*.token.json
+*.token.json.lock
+__pycache__/
+*.pyc
+.pytest_cache/

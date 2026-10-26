@@ -62,5 +62,56 @@ class TracerFailureSemantics(unittest.TestCase):
         self.assertEqual(code, 0)
 
 
+class TracerBadInput(unittest.TestCase):
+    def run_args(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = tracer.main(["--recordings", str(Path(tempfile.mkdtemp())), *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_bad_arguments_are_a_one_line_error_with_exit_1(self):
+        cases = [("--subjective", "nan"), ("--whoop-recovery", "-5"), ("--sleep-hours", "1e308"), ("--as-of", "garbage"),
+                 ("--tz", "Nowhere/City"), ("--as-of", "2026-10-26T07:00:00"), ("--readiness-file", "/nonexistent.json")]
+        for args in cases:
+            code, out, err = self.run_args("--subjective", "3", *args)
+            self.assertEqual(code, 1, args)
+            self.assertTrue(err.startswith("error: "), (args, err))
+            self.assertNotIn("Traceback", err + out)
+            self.assertEqual(err.count("\n"), 1, "one line")
+
+
+class ReadingsDisagree(unittest.TestCase):
+    def test_a_newer_reading_overriding_an_older_one_of_the_same_kind_is_reported(self):
+        from datetime import datetime, timedelta
+        from harness import planner
+        from harness.model import Plan, Reading
+        now = datetime(2026, 10, 26, 7, 0, tzinfo=synth.PT)
+        rd = [Reading("subjective", 1.0, "file", now - timedelta(minutes=1)), Reading("subjective", 5.0, "manual", now)]
+        plan = planner.todays_plan(sessions=[], readings=rd, now=now)
+        self.assertIsInstance(plan, Plan)
+        self.assertTrue(any("subjective: readings disagree" in w and "5.0 from manual" in w for w in plan.warnings), plan.warnings)
+        agree = [Reading("subjective", 3.0, "file", now), Reading("subjective", 3.0, "manual", now)]
+        self.assertFalse(any("disagree" in w for w in planner.todays_plan(sessions=[], readings=agree, now=now).warnings))
+
+
+class DockerIgnore(unittest.TestCase):
+    def test_every_secret_or_local_state_path_is_excluded_from_the_image(self):
+        """Docker ignores .gitignore: without these lines `COPY . .` bakes tokens into image layers."""
+        root = Path(__file__).parent.parent
+        lines = {l.strip() for l in (root / ".dockerignore").read_text().splitlines() if l.strip() and not l.startswith("#")}
+        for needed in (".git", ".venv", ".env", "config.json", "readiness.json", "coach_feedback.json", "recordings/",
+                       "*.token.json", ".harness/", "tests/fixtures/real/", "data/"):
+            self.assertIn(needed, lines, needed)
+
+    def test_every_gitignored_secret_pattern_is_also_dockerignored(self):
+        root = Path(__file__).parent.parent
+        git = {l.strip() for l in (root / ".gitignore").read_text().splitlines() if l.strip() and not l.startswith("#")}
+        docker = {l.strip() for l in (root / ".dockerignore").read_text().splitlines() if l.strip() and not l.startswith("#")}
+        secretish = {g for g in git if any(w in g for w in ("env", "token", "config", "readiness", "recordings", "harness",
+                                                             "real", "feedback", "data"))}
+        missing = sorted(g for g in secretish if g.rstrip("/") not in {d.rstrip("/") for d in docker})
+        self.assertEqual(missing, [], "gitignored secret/state patterns missing from .dockerignore")
+
+
 if __name__ == "__main__":
     unittest.main()

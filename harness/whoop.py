@@ -20,6 +20,7 @@ Semantics enforced here (from the spec + research):
     encodes them, and unvalidated thresholds would only add noise).
 """
 import fcntl
+import functools
 import os
 import pathlib
 import time
@@ -46,9 +47,22 @@ def _parse_ts(value: str, what: str) -> datetime:
     return ts
 
 
+def _guard_shape(fn):
+    """A well-formed-looking payload with wrong-typed fields must surface as SchemaDrift, not a raw TypeError."""
+    @functools.wraps(fn)
+    def wrapper(payload):
+        try:
+            return fn(payload)
+        except (TypeError, AttributeError, KeyError) as err:
+            raise SchemaDrift(SOURCE, f"unexpected payload shape ({type(err).__name__})") from None
+    return wrapper
+
+
 def _records(payload) -> list[dict]:
     if not isinstance(payload, dict) or not isinstance(payload.get("records"), list):
         raise SchemaDrift(SOURCE, "collection payload lacked a `records` list")
+    if not all(isinstance(r, dict) for r in payload["records"]):
+        raise SchemaDrift(SOURCE, "a record was not an object")
     return payload["records"]
 
 
@@ -57,6 +71,7 @@ def _newest(records: list[dict], keep) -> dict | None:
     return max(candidates, key=lambda r: _parse_ts(r["end"], "end")) if candidates else None
 
 
+@_guard_shape
 def parse_recovery(payload) -> tuple[list[Reading], list[str]]:
     """RecoveryCollection -> ([whoop_recovery reading] or [], notes explaining any absence)."""
     records = _records(payload)
@@ -80,30 +95,41 @@ def parse_recovery(payload) -> tuple[list[Reading], list[str]]:
     return [Reading("whoop_recovery", float(value), SOURCE, _parse_ts(newest["created_at"], "created_at"))], []
 
 
+@_guard_shape
 def parse_sleep(payload) -> tuple[list[Reading], list[str]]:
-    """PaginatedSleepResponse -> ([sleep_hours reading] or [], notes). Naps are ignored."""
+    """PaginatedSleepResponse -> ([sleep_hours reading] or [], notes).
+
+    Naps are ignored. sleep_hours is the TOTAL non-nap sleep of the newest cycle (a night split in two records counts
+    as one night); if any record of that cycle is not SCORED yet the night is incomplete, so no reading."""
     records = _records(payload)
     for r in records:
-        for key in ("score_state", "end", "nap"):
+        for key in ("score_state", "end", "nap", "cycle_id"):
             if key not in r:
                 raise SchemaDrift(SOURCE, f"sleep record lacks {key}")
     newest = _newest(records, lambda r: not r["nap"])
     if newest is None:
         return [], ["no non-nap sleep records returned"]
-    if newest["score_state"] != "SCORED":
-        return [], [f"latest sleep is {newest['score_state']}: not scored yet"]
-    stages = (newest.get("score") or {}).get("stage_summary")
-    if not isinstance(stages, dict):
-        raise SchemaDrift(SOURCE, "SCORED sleep without score.stage_summary")
-    try:
-        asleep_ms = sum(stages[k] for k in ("total_light_sleep_time_milli", "total_slow_wave_sleep_time_milli",
-                                           "total_rem_sleep_time_milli"))
-    except KeyError as err:
-        raise SchemaDrift(SOURCE, f"stage_summary lacks {err.args[0]}") from err
+    night = [r for r in records if not r["nap"] and r["cycle_id"] == newest["cycle_id"]]
+    unscored = sorted({r["score_state"] for r in night if r["score_state"] != "SCORED"})
+    if unscored:
+        return [], [f"latest night has {', '.join(unscored)} sleep record(s): not fully scored yet"]
+    asleep_ms = 0
+    for r in night:
+        stages = (r.get("score") or {}).get("stage_summary")
+        if not isinstance(stages, dict):
+            raise SchemaDrift(SOURCE, "SCORED sleep without score.stage_summary")
+        for key in ("total_light_sleep_time_milli", "total_slow_wave_sleep_time_milli", "total_rem_sleep_time_milli"):
+            if key not in stages:
+                raise SchemaDrift(SOURCE, f"stage_summary lacks {key}")
+            value = stages[key]
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not value >= 0:
+                raise SchemaDrift(SOURCE, f"stage_summary.{key} is not a non-negative number")
+            asleep_ms += value
     hours = asleep_ms / MS_PER_HOUR
-    if not 0 <= hours <= 16:
+    if not 0 < hours <= 16:
         raise SchemaDrift(SOURCE, f"implausible sleep duration: {hours:.1f} h")
-    return [Reading("sleep_hours", round(hours, 2), SOURCE, _parse_ts(newest["end"], "end"))], []
+    as_of = max(_parse_ts(r["end"], "end") for r in night)
+    return [Reading("sleep_hours", round(hours, 2), SOURCE, as_of)], []
 
 
 class TokenStore:

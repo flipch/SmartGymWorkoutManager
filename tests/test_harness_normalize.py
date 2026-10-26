@@ -47,6 +47,15 @@ class SetLoad(unittest.TestCase):
         row["trainingInfoDetail"]["leftWeights"] = [99.0] * 6
         self.assertEqual(set_load(row), 32.0)
 
+    def test_one_sided_sets_use_the_machine_total_not_half_of_it(self):
+        """Real recording (barbell split squat): weights=74, leftWeights=rightWeights=37, capacity/rep=74."""
+        for left_right in (0, 1, 2):
+            row = synth._set_row(6, 74, left_right=left_right)
+            row["trainingInfoDetail"]["leftWeights"] = [37.0] * 6
+            row["trainingInfoDetail"]["rightWeights"] = [37.0] * 6
+            row["capacity"] = 74.0 * 6
+            self.assertEqual(set_load(row), 74.0, f"leftRight={left_right}")
+
     def test_falls_back_to_capacity_over_reps_then_none(self):
         row = synth._set_row(10, 25)
         row["trainingInfoDetail"] = {}

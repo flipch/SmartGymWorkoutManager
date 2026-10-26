@@ -13,7 +13,7 @@ import json
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import localsecrets, planner, readiness
 from .errors import SourceDown
@@ -119,13 +119,18 @@ def main(argv=None) -> int:
     if not 0 <= a.detail <= 5:
         p.error("--detail must be 0..5")
 
-    now = datetime.fromisoformat(a.as_of) if a.as_of else datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        p.error("--as-of must include a timezone offset")
-    readings = readiness.from_manual(now, whoop_recovery=a.whoop_recovery, sleep_hours=a.sleep_hours,
-                                     rhr_delta_bpm=a.rhr_delta, hrv_vs_baseline=a.hrv, subjective=a.subjective)
-    if a.readiness_file:
-        readings += readiness.from_file(a.readiness_file)
+    try:
+        ZoneInfo(a.tz)
+        now = datetime.fromisoformat(a.as_of) if a.as_of else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            raise ValueError("--as-of must include a timezone offset")
+        readings = readiness.from_manual(now, whoop_recovery=a.whoop_recovery, sleep_hours=a.sleep_hours,
+                                         rhr_delta_bpm=a.rhr_delta, hrv_vs_baseline=a.hrv, subjective=a.subjective)
+        if a.readiness_file:
+            readings += readiness.from_file(a.readiness_file)
+    except (ValueError, KeyError, TypeError, OSError, ZoneInfoNotFoundError) as err:  # bad input is not a crash
+        print(f"error: {type(err).__name__}: {err}", file=sys.stderr)
+        return 1
 
     sessions, errors = None, {}
     try:
