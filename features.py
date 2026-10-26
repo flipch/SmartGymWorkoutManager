@@ -388,6 +388,7 @@ table{width:100%;border-collapse:collapse;font-size:.85rem}td{padding:4px 6px;bo
 <div id=deep></div>
 <p class=foot>📅 Subscribe to your schedule: <a href="/calendar.ics">/calendar.ics</a> · <a href="/coach">AI Coach →</a> · <a href="/">← back to app</a></p>
 <script>
+const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function j(u){try{return await (await fetch(u)).json()}catch(e){return{}}}
 function spark(series){const v=series.map(p=>p.e1rm),w=130,h=30,n=v.length;if(n<2)return'';
  const mn=Math.min(...v),mx=Math.max(...v),r=(mx-mn)||1;
@@ -401,9 +402,9 @@ function spark(series){const v=series.map(p=>p.e1rm),w=130,h=30,n=v.length;if(n<
   ['sessions_last_30d','Last 30 days'],['avg_sessions_per_week','Avg / week'],
   ['active_days','Active days'],['total_sessions','Total sessions']];
  document.getElementById('cards').innerHTML=cards.map(([k,l])=>
-  `<div class=card><div class=val>${i[k]??'0'}</div><div class=lbl>${l}</div></div>`).join('');
+  `<div class=card><div class=val>${esc(i[k]??'0')}</div><div class=lbl>${esc(l)}</div></div>`).join('');
  const cls=r.recommendation||'log_in';
- document.getElementById('rec').innerHTML=`<span class="pill ${cls}">${cls.replace('_',' ')}</span><b>${r.message||''}</b>`;
+ document.getElementById('rec').innerHTML=`<span class="pill ${esc(cls)}">${esc(cls.replace('_',' '))}</span><b>${esc(r.message||'')}</b>`;
  if(!i.authenticated)return;
  let h='';
  // 1) volume vs landmarks
@@ -412,35 +413,35 @@ function spark(series){const v=series.map(p=>p.e1rm),w=130,h=30,n=v.length;if(n<
   for(const m of i.muscle_volume){
    const max=m.mrv*1.12, col=m.status=='under_mev'?'#f0883e':m.status=='over_mrv'?'#d29922':'#3fb950';
    const fp=Math.min(100,100*m.sets_per_wk/max),mev=100*m.mev/max,mav=100*m.mav/max;
-   const fl=m.freq_per_wk<2?` <span class=down>⚠ ${m.freq_per_wk}×/wk</span>`:` ${m.freq_per_wk}×/wk`;
-   h+=`<div class=vrow><div class=vname>${m.muscle.replace('_',' ')}</div>
+   const fl=m.freq_per_wk<2?` <span class=down>⚠ ${esc(m.freq_per_wk)}×/wk</span>`:` ${esc(m.freq_per_wk)}×/wk`;
+   h+=`<div class=vrow><div class=vname>${esc(m.muscle.replace('_',' '))}</div>
      <div class=vtrack><div class=vfill style="width:${fp}%;background:${col}"></div>
-     <div class=tick style="left:${mev}%" title="MEV ${m.mev}"></div><div class=tick style="left:${mav}%" title="MAV ${m.mav}"></div></div>
-     <div class=vmeta>${m.sets_per_wk}${fl}</div></div>`;
+     <div class=tick style="left:${mev}%" title="MEV ${esc(m.mev)}"></div><div class=tick style="left:${mav}%" title="MAV ${esc(m.mav)}"></div></div>
+     <div class=vmeta>${esc(m.sets_per_wk)}${fl}</div></div>`;
   }
   h+='<div class=muted style="margin-top:8px">Ticks = MEV / MAV. Red below MEV (too little to grow), amber over MRV (recovery risk).</div>';
-  if((i.untrained_muscles||[]).length)h+=`<div class=muted style="margin-top:4px">Untrained: ${i.untrained_muscles.join(', ')}</div>`;
+  if((i.untrained_muscles||[]).length)h+=`<div class=muted style="margin-top:4px">Untrained: ${i.untrained_muscles.map(esc).join(', ')}</div>`;
   h+='</div>';
  }
  // 2) strength progression
  if((i.lifts||[]).length){
   h+='<h2>💪 Strength progression <span class=muted>(estimated 1RM, Epley)</span></h2><div class=liftgrid>';
   for(const l of i.lifts){const a=l.trend=='up'?'▲':l.trend=='down'?'▼':'■';
-   h+=`<div class=lift><div style="font-size:.86rem">${l.name}</div>
-     <div style="margin-top:4px"><b style="font-size:1.3rem">${l.e1rm_now}</b> ${U}
-     <span class=${l.trend}>${a} ${l.e1rm_delta>0?'+':''}${l.e1rm_delta}</span></div>${spark(l.e1rm_series)}</div>`;}
+   h+=`<div class=lift><div style="font-size:.86rem">${esc(l.name)}</div>
+     <div style="margin-top:4px"><b style="font-size:1.3rem">${esc(l.e1rm_now)}</b> ${esc(U)}
+     <span class="${esc(l.trend)}">${a} ${l.e1rm_delta>0?'+':''}${esc(l.e1rm_delta)}</span></div>${spark(l.e1rm_series)}</div>`;}
   h+='</div>';
  }
  // 3) balance
  if(i.balance && (i.balance.push_sets||i.balance.pull_sets)){
   const b=i.balance,tot=(b.push_sets+b.pull_sets)||1,ut=(b.upper_sets+b.lower_sets)||1;
   h+='<h2>⚖ Balance</h2><div class=panel>';
-  h+=`<div class=muted>Push : Pull — ${b.push_sets}:${b.pull_sets} (${b.push_pull_ratio??'–'}) <b class=${b.verdict=='balanced'?'up':'down'}>${b.verdict.replace('_',' ')}</b></div>
+  h+=`<div class=muted>Push : Pull — ${esc(b.push_sets)}:${esc(b.pull_sets)} (${esc(b.push_pull_ratio??'–')}) <b class=${b.verdict=='balanced'?'up':'down'}>${esc(b.verdict.replace('_',' '))}</b></div>
    <div class=gauge style="margin:6px 0 12px"><div class=gp style="width:${100*b.push_sets/tot}%"></div><div class=gpull style="width:${100*b.pull_sets/tot}%"></div></div>
-   <div class=muted>Upper : Lower — ${b.upper_sets}:${b.lower_sets}</div>
+   <div class=muted>Upper : Lower — ${esc(b.upper_sets)}:${esc(b.lower_sets)}</div>
    <div class=gauge style="margin-top:6px"><div class=gl style="width:${100*b.upper_sets/ut}%"></div><div class=glo style="width:${100*b.lower_sets/ut}%"></div></div>`;
   if((i.frequency||{}).muscles_below_2x||[].length){const bl=i.frequency.muscles_below_2x||[];
-   if(bl.length)h+=`<div class=muted style="margin-top:10px">Trained &lt;2×/wk: ${bl.join(', ')}</div>`;}
+   if(bl.length)h+=`<div class=muted style="margin-top:10px">Trained &lt;2×/wk: ${bl.map(esc).join(', ')}</div>`;}
   h+='</div>';
  }
  // 4) weekly trend
@@ -448,14 +449,14 @@ function spark(series){const v=series.map(p=>p.e1rm),w=130,h=30,n=v.length;if(n<
   const mx=Math.max(...i.weekly.map(w=>w.tonnage))||1;
   h+='<h2>📈 Weekly tonnage</h2><div class=panel><div style="display:flex;align-items:flex-end;gap:10px;height:120px">';
   for(const w of i.weekly)h+=`<div style="flex:1;text-align:center">
-    <div style="background:#1f6feb;border-radius:4px 4px 0 0;height:${Math.max(3,100*w.tonnage/mx)}px" title="${w.tonnage} ${U}"></div>
-    <div class=muted style="font-size:.68rem;margin-top:4px">${w.week.split('-')[1]}</div><div class=muted style="font-size:.66rem">${Math.round(w.tonnage/1000)}k</div></div>`;
+    <div style="background:#1f6feb;border-radius:4px 4px 0 0;height:${Math.max(3,100*w.tonnage/mx)}px" title="${esc(w.tonnage)} ${esc(U)}"></div>
+    <div class=muted style="font-size:.68rem;margin-top:4px">${esc(w.week.split('-')[1])}</div><div class=muted style="font-size:.66rem">${Math.round(w.tonnage/1000)}k</div></div>`;
   h+='</div><div class=muted style="margin-top:6px">Per ISO week · sessions/cal/min also tracked.</div></div>';
  }
  // 5) PRs
  if((i.prs||[]).length){
   h+='<h2>🏆 Top weights</h2><div class=panel><table>';
-  for(const p of i.prs)h+=`<tr><td>${p.name}</td><td style="text-align:right">${p.weight} ${U}</td></tr>`;
+  for(const p of i.prs)h+=`<tr><td>${esc(p.name)}</td><td style="text-align:right">${esc(p.weight)} ${esc(U)}</td></tr>`;
   h+='</table></div>';
  }
  document.getElementById('deep').innerHTML=h||'<p class=muted style="margin-top:20px">No per-set detail yet — log a Speediance workout to unlock deep analytics.</p>';
@@ -840,6 +841,7 @@ a{color:#58a6ff}
 </div>
 <div id=out class=muted>Pick options and generate a program. Runs fully offline (PT mode); add readiness to autoregulate.</div>
 <script>
+const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const $=id=>document.getElementById(id);
 async function gen(){
   $('out').innerHTML='<p class=muted>Generating…</p>';
@@ -851,21 +853,21 @@ async function gen(){
 }
 function render(p){
   window.__P=p;
-  let h=`<div class=review style="background:#161b22"><span class=score>${p.review.score}</span> <span class=muted>/100 program quality · ${p.goal_label} · ${p.days_per_week}×/wk · ${p.experience}</span>`;
-  if(p.autoregulation){h+=`<div style="margin-top:8px">Readiness: <b>${p.autoregulation.band.toUpperCase()}</b> — ${p.autoregulation.message}</div>`;}
-  if(p.review.warnings.length){h+='<ul>'+p.review.warnings.map(w=>`<li class=warn>⚠ ${w}</li>`).join('')+'</ul>';}
+  let h=`<div class=review style="background:#161b22"><span class=score>${esc(p.review.score)}</span> <span class=muted>/100 program quality · ${esc(p.goal_label)} · ${esc(p.days_per_week)}×/wk · ${esc(p.experience)}</span>`;
+  if(p.autoregulation){h+=`<div style="margin-top:8px">Readiness: <b>${esc(p.autoregulation.band.toUpperCase())}</b> — ${esc(p.autoregulation.message)}</div>`;}
+  if(p.review.warnings.length){h+='<ul>'+p.review.warnings.map(w=>`<li class=warn>⚠ ${esc(w)}</li>`).join('')+'</ul>';}
   else{h+='<div class=ok style="margin-top:8px">✓ Volume, balance and order all within evidence-based ranges.</div>';}
-  h+=`<div class=muted style="margin-top:6px">Weekly sets/muscle: ${Object.entries(p.weekly_sets_per_muscle).map(([k,v])=>k+' '+v).join(' · ')}</div></div>`;
+  h+=`<div class=muted style="margin-top:6px">Weekly sets/muscle: ${Object.entries(p.weekly_sets_per_muscle).map(([k,v])=>esc(k)+' '+esc(v)).join(' · ')}</div></div>`;
   p.days.forEach((d,i)=>{
-    h+=`<div class=day><h3>${d.name}</h3><div class=muted>${d.warmup} · ~${d.setup_swaps} setup changes</div>`;
+    h+=`<div class=day><h3>${esc(d.name)}</h3><div class=muted>${esc(d.warmup)} · ~${esc(d.setup_swaps)} setup changes</div>`;
     h+='<table><tr><th>Exercise</th><th>Sets×Reps</th><th>%1RM</th><th>RIR</th><th>Rest</th><th>Mode</th><th>Setup</th></tr>';
-    for(const e of d.exercises){h+=`<tr><td>${e.name}${e.unilateral?' <span class=muted>(L/R)</span>':''}</td><td>${e.sets}×${e.reps}${e.load?(' @'+e.load):''}</td><td>${e.pct1rm}</td><td>${e.rir}</td><td>${e.rest_sec}s</td><td><span class="pill ${e.mode}" title="${e.mode_note}">${e.mode}</span></td><td class=muted>${e.accessory}/${e.belt}</td></tr>`;}
+    for(const e of d.exercises){h+=`<tr><td>${esc(e.name)}${e.unilateral?' <span class=muted>(L/R)</span>':''}</td><td>${esc(e.sets)}×${esc(e.reps)}${e.load?(' @'+esc(e.load)):''}</td><td>${esc(e.pct1rm)}</td><td>${esc(e.rir)}</td><td>${esc(e.rest_sec)}s</td><td><span class="pill ${esc(e.mode)}" title="${esc(e.mode_note)}">${esc(e.mode)}</span></td><td class=muted>${esc(e.accessory)}/${esc(e.belt)}</td></tr>`;}
     h+='</table>';
-    if(d.conditioning)h+=`<div class=muted style="margin-top:8px">🏃 ${d.conditioning}</div>`;
-    h+=`<div style="margin-top:10px"><button class=alt onclick="saveDay(${i})">💾 Save to my workouts</button> <span id=save${i} class=muted></span></div>`;
+    if(d.conditioning)h+=`<div class=muted style="margin-top:8px">🏃 ${esc(d.conditioning)}</div>`;
+    h+=`<div style="margin-top:10px"><button class=alt onclick="saveDay(${Number(i)})">💾 Save to my workouts</button> <span id=save${Number(i)} class=muted></span></div>`;
     h+='</div>';
   });
-  h+=`<p class=muted>${p.disclaimer}</p>`;
+  h+=`<p class=muted>${esc(p.disclaimer)}</p>`;
   $('out').innerHTML=h;
 }
 async function saveDay(i){
@@ -876,10 +878,10 @@ async function saveDay(i){
   if(resp.status===401){ el.innerHTML='<span class=warn>Log in at /settings to save to your Speediance account.</span>'; return; }
   const d=await resp.json(); const r=(d.results&&d.results[0])||{};
   if(r.created){
-    let m=`<span class=ok>✓ Saved "${r.name}" (${r.exercise_count} exercises)</span>`;
-    if(r.unresolved&&r.unresolved.length)m+=` <span class=warn>· couldn't match: ${r.unresolved.map(u=>u.name).join(', ')}</span>`;
+    let m=`<span class=ok>✓ Saved "${esc(r.name)}" (${esc(r.exercise_count)} exercises)</span>`;
+    if(r.unresolved&&r.unresolved.length)m+=` <span class=warn>· couldn't match: ${r.unresolved.map(u=>esc(u.name)).join(', ')}</span>`;
     el.innerHTML=m;
-  } else { el.innerHTML='<span class=warn>'+(r.error||d.message||'Could not save')+'</span>'; }
+  } else { el.innerHTML='<span class=warn>'+esc(r.error||d.message||'Could not save')+'</span>'; }
 }
 </script></body></html>"""
 
