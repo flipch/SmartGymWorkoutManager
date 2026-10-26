@@ -18,13 +18,14 @@ from datetime import date, timedelta
 from mcp.server.mcpserver import MCPServer
 
 import coach
+import state_io
 from auth import BearerAuthASGI, load_token, writes_enabled
 from api_client import SpeedianceClient
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
     _detailed_records, fetch_session_detail, _summarize_session, _unit_label,
-    _feedback_profile, _load_readiness, apply_program,
+    _feedback_profile, _fresh_readiness, apply_program,
     log_feedback as _persist_feedback, save_readiness as _persist_readiness,
 )
 
@@ -312,9 +313,9 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
         # works offline as a PT; auto-applies any persisted readiness + feedback so the
         # program adapts to what the user/agent has reported (real-time, stateful loop).
         c = _client()
-        r = readiness
+        r = state_io.validate_readiness(readiness) if readiness is not None else None
         if r is None:
-            stored = _load_readiness(c.data_dir)
+            stored = _fresh_readiness(c.data_dir)
             if any(k in stored for k in ("whoop_recovery", "hrv_vs_baseline",
                                          "rhr_delta_bpm", "sleep_hours", "subjective")):
                 r = stored

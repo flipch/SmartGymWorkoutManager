@@ -13,7 +13,8 @@ data rather than erroring), and parse the Speediance responses defensively
 since field names vary by region/firmware.
 """
 from flask import Blueprint, jsonify, Response, render_template_string, request
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
+import hashlib
 from collections import defaultdict
 import json
 import os
@@ -21,6 +22,7 @@ import re
 
 import coach
 from auth import writes_enabled
+import state_io
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize
 
 features_bp = Blueprint('features', __name__)
@@ -318,11 +320,34 @@ def _walk_events(node, out):
             _walk_events(v, out)
 
 
-def _build_ics(events):
+def _ics_text(value):
+    """RFC 5545 TEXT: no control characters (a CR/LF would inject new properties), backslash first, then , ;"""
+    cleaned = "".join(" " if ch in "\r\n\t" else ch for ch in str(value) if ch >= " " or ch in "\r\n\t")
+    return cleaned.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;")
+
+
+def _ics_fold(line):
+    """Fold at 75 octets (RFC 5545 3.1) without splitting a UTF-8 character."""
+    raw, out, first = line.encode("utf-8"), [], True
+    while raw:
+        limit = 75 if first else 74
+        chunk = raw[:limit]
+        while True:
+            try:
+                piece = chunk.decode("utf-8")
+                break
+            except UnicodeDecodeError:
+                chunk = chunk[:-1]
+        out.append(piece if first else " " + piece)
+        raw, first = raw[len(chunk):], False
+    return "\r\n".join(out)
+
+
+def _build_ics(events, now=None):
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0",
              "PRODID:-//flipch//SmartGymWorkoutManager//EN",
              "CALSCALE:GREGORIAN", "X-WR-CALNAME:Smart Gym Workouts"]
-    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
     seen = set()
     for d, name in events:
         key = (d.isoformat(), name)
@@ -331,26 +356,32 @@ def _build_ics(events):
         seen.add(key)
         ds = d.strftime("%Y%m%d")
         de = (d + timedelta(days=1)).strftime("%Y%m%d")
-        uid = f"{ds}-{abs(hash(key)) % 10**10}@smartgym.local"
-        safe = name.replace("\n", " ").replace(",", "\\,").replace(";", "\\;")
+        # stable across restarts: hash() is salted per process, so every restart made clients duplicate every event
+        uid = f"{ds}-{hashlib.sha256(repr(key).encode()).hexdigest()[:20]}@smartgym.local"
         lines += ["BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{stamp}",
                   f"DTSTART;VALUE=DATE:{ds}", f"DTEND;VALUE=DATE:{de}",
-                  f"SUMMARY:🏋 {safe}", "END:VEVENT"]
+                  _ics_fold(f"SUMMARY:🏋 {_ics_text(name)}"), "END:VEVENT"]
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
 
 
 @features_bp.route('/calendar.ics')
 def calendar_ics():
-    events = []
-    if _authed():
-        today = date.today()
-        next_month = (today.replace(day=28) + timedelta(days=10)).strftime('%Y-%m')
-        for m in {today.strftime('%Y-%m'), next_month}:
-            try:
-                _walk_events(_client.get_calendar_month(m), events)
-            except Exception:
-                pass
+    if not _authed():
+        return Response("Not signed in to Speediance.", status=503, mimetype='text/plain')
+    events, months, failed = [], set(), 0
+    today = date.today()
+    months = {today.strftime('%Y-%m'), (today.replace(day=28) + timedelta(days=10)).strftime('%Y-%m')}
+    for m in sorted(months):
+        try:
+            _walk_events(_client.get_calendar_month(m), events)
+        except Exception:
+            failed += 1
+    if failed:
+        # A subscribed calendar app treats an empty/partial feed as "delete everything": better a visible 503, which
+        # makes clients keep their last good copy.
+        return Response("Calendar temporarily unavailable.", status=503, mimetype='text/plain',
+                        headers={'Retry-After': '300'})
     return Response(_build_ics(events), mimetype='text/calendar',
                     headers={'Content-Disposition': 'attachment; filename="smartgym.ics"'})
 
@@ -496,12 +527,31 @@ READINESS_KEYS = ("whoop_recovery", "hrv_vs_baseline", "rhr_delta_bpm",
 
 
 def save_readiness(payload, data_dir=None):
-    """Persist a readiness payload (Whoop/Apple Health/subjective) for later use."""
-    keep = {k: payload[k] for k in READINESS_KEYS if k in payload}
-    keep["updated"] = datetime.utcnow().isoformat() + "Z"
-    with open(_readiness_path(data_dir), "w") as f:
-        json.dump(keep, f)
+    """Persist a validated readiness payload (Whoop/Apple Health/subjective). Raises ValueError (field name only)
+    for a bad value, so a typo can never reach the autoregulator."""
+    keep = state_io.validate_readiness(payload)
+    if not keep:
+        raise ValueError("no readiness signal supplied")
+    keep["updated"] = state_io.utc_stamp()
+    state_io.atomic_write_json(_readiness_path(data_dir), keep)
     return keep
+
+
+def readiness_age_hours(stored, now=None):
+    """Hours since the stored reading was written; None when it carries no readable timestamp."""
+    when = state_io.parse_stamp((stored or {}).get("updated"))
+    if when is None:
+        return None
+    return ((now or datetime.now(timezone.utc)) - when).total_seconds() / 3600
+
+
+def _fresh_readiness(data_dir=None):
+    """The stored readiness ONLY if it is recent: yesterday's recovery score must not autoregulate today."""
+    stored = _load_readiness(data_dir)
+    age = readiness_age_hours(stored)
+    if age is None or age > state_io.READINESS_MAX_AGE_H or age < -1:
+        return {}
+    return stored
 
 
 def _coach_workout_to_exercises(detail):
@@ -543,27 +593,42 @@ def coach_readiness():
     """GET returns the stored readiness + today's adjustment. POST stores a readiness payload
     (the integration point for Whoop / Apple Health auto-export shortcuts)."""
     if request.method == 'POST':
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(silent=True)
         try:
             keep = save_readiness(data)
+        except ValueError as e:
+            return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
         except Exception as e:
-            return jsonify({"error": "could_not_store", "message": str(e)}), 500
+            return jsonify({"error": "could_not_store", "message": type(e).__name__}), 500
         return jsonify({"stored": keep, "adjustment": coach.autoregulate(keep)})
     stored = _load_readiness()
-    return jsonify({"stored": stored, "adjustment": coach.autoregulate(stored)})
+    age = readiness_age_hours(stored)
+    stale = bool(stored) and (age is None or age > state_io.READINESS_MAX_AGE_H)
+    usable = {} if stale else stored
+    return jsonify({"stored": stored, "age_hours": None if age is None else round(age, 1), "stale": stale,
+                    "adjustment": coach.autoregulate(usable)})
 
 
 @features_bp.route('/api/coach/autoregulate', methods=['POST'])
 def coach_autoregulate():
-    return jsonify(coach.autoregulate(request.get_json(silent=True) or {}))
+    try:
+        readiness = state_io.validate_readiness(request.get_json(silent=True) or {})
+    except ValueError as e:
+        return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
+    return jsonify(coach.autoregulate(readiness))
 
 
 @features_bp.route('/api/coach/program', methods=['POST'])
 def coach_program():
     body = request.get_json(silent=True) or {}
     readiness = body.get("readiness")
+    if readiness is not None:
+        try:
+            readiness = state_io.validate_readiness(readiness)
+        except ValueError as e:
+            return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
     if readiness is None and body.get("use_stored_readiness", True):
-        stored = _load_readiness()
+        stored = _fresh_readiness()
         if any(k in stored for k in ("whoop_recovery", "hrv_vs_baseline",
                                      "rhr_delta_bpm", "sleep_hours", "subjective")):
             readiness = stored
@@ -592,36 +657,46 @@ def _feedback_path(data_dir=None):
     return os.path.join(_data_dir(data_dir), "coach_feedback.json")
 
 
-def _load_feedback_events(data_dir=None):
+def _load_feedback_events(data_dir=None, *, quarantine_corrupt=False):
+    """Stored events. A missing file is []; an unreadable one is [] for readers, and for the writer it is moved aside
+    first so the next append cannot silently destroy the history."""
+    path = _feedback_path(data_dir)
     try:
-        with open(_feedback_path(data_dir)) as f:
+        with open(path) as f:
             data = json.load(f)
-        return data if isinstance(data, list) else []
-    except Exception:
+        if isinstance(data, list):
+            return [e for e in data if isinstance(e, dict)]
+        raise ValueError("not a list")
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        if quarantine_corrupt and os.path.exists(path):
+            state_io.quarantine(path)
         return []
 
 
 def log_feedback(payload, data_dir=None):
-    """Append one feedback event (any subset of FEEDBACK_KEYS) and return the event."""
-    event = {k: payload[k] for k in FEEDBACK_KEYS if k in payload}
+    """Validate and append one feedback event (any subset of FEEDBACK_KEYS); return it, or None when `payload` carries
+    nothing. Raises ValueError for a bad value and OSError/TimeoutError if the write fails: a lost event must not
+    look like a logged one."""
+    event = state_io.validate_feedback(payload)
     if not event:
         return None
-    event["ts"] = datetime.utcnow().isoformat() + "Z"
-    events = _load_feedback_events(data_dir)
-    events.append(event)
-    try:
-        with open(_feedback_path(data_dir), "w") as f:
-            json.dump(events[-100:], f)
-    except Exception:
-        pass
+    event["ts"] = state_io.utc_stamp()
+    path = _feedback_path(data_dir)
+    with state_io.file_lock(path + ".lock"):  # web app and MCP server both append
+        events = _load_feedback_events(data_dir, quarantine_corrupt=True)
+        events.append(event)
+        state_io.atomic_write_json(path, events[-100:])
     return event
 
 
 def _feedback_profile(data_dir=None, days=14):
     """Derive a coaching profile from recent feedback events."""
     events = _load_feedback_events(data_dir)
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"
-    recent = [e for e in events if e.get("ts", "") >= cutoff] or events[-10:]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    recent = [e for e in events if (state_io.parse_stamp(e.get("ts")) or cutoff - timedelta(days=1)) >= cutoff] \
+        or events[-10:]
     rpes = [e["rpe"] for e in recent if isinstance(e.get("rpe"), (int, float))]
     avg_rpe = round(sum(rpes) / len(rpes), 1) if rpes else None
     votes = [e.get("difficulty") for e in recent if e.get("difficulty") in ("too_easy", "ok", "too_hard")]
@@ -645,7 +720,12 @@ def coach_feedback():
     too_easy|ok|too_hard, completion, soreness 1-5, pain, avoid <exercise>, note).
     GET returns the derived profile + how it will adjust the next program."""
     if request.method == 'POST':
-        event = log_feedback(request.get_json(silent=True) or {})
+        try:
+            event = log_feedback(request.get_json(silent=True))
+        except ValueError as e:
+            return jsonify({"error": "invalid_feedback", "message": str(e)}), 400
+        except (OSError, TimeoutError) as e:
+            return jsonify({"error": "feedback_not_saved", "message": type(e).__name__}), 503
         if not event:
             return jsonify({"error": "empty",
                             "message": "Provide at least one of: rpe, difficulty, completion, "
@@ -758,18 +838,29 @@ def program_day_to_payload(library, day):
     return exercises, resolved, unresolved
 
 
+MAX_WORKOUT_NAME = 80
+
+
 def apply_program(client, program, day_index=None, name=None, dry_run=True):
     """Resolve + (optionally) save a generated program's day(s) as Speediance templates."""
-    library = client.get_library() or []
-    days = program.get("days", [])
-    if isinstance(day_index, int) and 0 <= day_index < len(days):
-        targets = [(day_index, days[day_index])]
-    else:
+    days = program.get("days")
+    if not isinstance(days, list) or not days or not all(isinstance(d, dict) for d in days):
+        raise ValueError("program.days must be a non-empty list of days")
+    if day_index is None:
         targets = list(enumerate(days))
+    elif isinstance(day_index, int) and not isinstance(day_index, bool) and 0 <= day_index < len(days):
+        targets = [(day_index, days[day_index])]
+    else:  # never fall back to "all days": that would create every workout because of one typo
+        raise ValueError(f"day_index must be an integer from 0 to {len(days) - 1}")
+    if name is not None and (not isinstance(name, str) or not name.strip() or len(name) > MAX_WORKOUT_NAME):
+        raise ValueError(f"name must be 1-{MAX_WORKOUT_NAME} characters")
+    library = client.get_library() or []
     results = []
     for idx, day in targets:
         exercises, resolved, unresolved = program_day_to_payload(library, day)
-        nm = name or f"{program.get('goal_label', 'Workout')} — {day.get('name', 'Day ' + str(idx + 1))}"
+        day_label = day.get('name', 'Day ' + str(idx + 1))
+        nm = ((f"{name.strip()} — {day_label}" if len(targets) > 1 else name.strip()) if name
+              else f"{program.get('goal_label', 'Workout')} — {day_label}")
         entry = {"day_index": idx, "name": nm, "exercise_count": len(exercises),
                  "resolved": resolved, "unresolved": unresolved, "created": False}
         if not dry_run and exercises:
@@ -783,9 +874,12 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True):
                 elif data:
                     entry["template_id"] = data
             except Exception as e:
-                entry["error"] = str(e)
+                entry["error"] = type(e).__name__
         results.append(entry)
-    return {"dry_run": dry_run, "results": results}
+    created = sum(1 for r in results if r["created"])
+    failed = sum(1 for r in results if r.get("error"))
+    return {"dry_run": dry_run, "results": results, "created": created, "failed": failed,
+            "partial": created > 0 and failed > 0}
 
 
 @features_bp.route('/api/coach/apply', methods=['POST'])
@@ -805,8 +899,10 @@ def coach_apply():
         return jsonify({"error": "writes_disabled", "message": "Set GYM_ALLOW_WRITES=1 to save to Speediance."}), 403
     try:
         return jsonify(apply_program(_client, program, body.get("day_index"), body.get("name"), dry_run))
+    except ValueError as e:
+        return jsonify({"error": "bad_request", "message": str(e)}), 400
     except Exception as e:
-        return jsonify({"error": "apply_failed", "message": str(e)}), 502
+        return jsonify({"error": "apply_failed", "message": type(e).__name__}), 502
 
 
 _COACH_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
