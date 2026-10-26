@@ -2,11 +2,13 @@
 import base64
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 TOKEN = "t" * 32
 os.environ["GYM_API_TOKEN"] = TOKEN
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="gym-test-data-")  # the app writes config/readiness/feedback here
 os.environ.pop("GYM_AUTH_DISABLED", None)
 os.environ.pop("GYM_ALLOW_WRITES", None)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -48,9 +50,52 @@ class RealFlaskApp(unittest.TestCase):
 
     def test_writes_are_refused_by_default_even_when_authenticated(self):
         for method, path in (("POST", "/api/schedule"), ("POST", "/api/schedule_course"), ("POST", "/delete/1"),
-                             ("POST", "/logout"), ("POST", "/create")):
+                             ("POST", "/logout"), ("POST", "/create"), ("POST", "/settings/unit")):
             resp = self.c.open(path, method=method, headers=BASIC, json={})
             self.assertEqual((path, resp.status_code, resp.get_json()["error"]), (path, 403, "writes_disabled"))
+
+    def test_gate_is_default_deny_over_every_unsafe_route(self):
+        """Any unsafe-method endpoint is refused without GYM_ALLOW_WRITES unless explicitly listed as local-only."""
+        from auth import LOCAL_ONLY_ENDPOINTS
+        endpoints = set()
+        for rule in gym_app.app.url_map.iter_rules():
+            if rule.methods - {"GET", "HEAD", "OPTIONS"}:
+                endpoints.add(rule.endpoint)
+                url = rule.rule.replace("<int:id>", "1")
+                resp = self.c.post(url, headers=BASIC, json={})
+                refused = resp.status_code == 403 and (resp.get_json() or {}).get("error") == "writes_disabled"
+                self.assertEqual(refused, rule.endpoint not in LOCAL_ONLY_ENDPOINTS, f"{rule.endpoint} {url}")
+        self.assertFalse(LOCAL_ONLY_ENDPOINTS - endpoints, "allowlist names an endpoint that no longer exists")
+        self.assertIn("update_unit", endpoints)  # the route the first review caught: PUTs to the vendor account
+
+    def test_a_route_added_later_is_gated_by_default(self):
+        from flask import Flask
+        from auth import install_flask_write_gate
+        fresh = Flask("fresh")
+        install_flask_write_gate(fresh)
+
+        @fresh.route("/brand-new", methods=["POST"])
+        def brand_new():
+            return "changed vendor state"
+
+        resp = fresh.test_client().post("/brand-new")
+        self.assertEqual((resp.status_code, resp.get_json()["error"]), (403, "writes_disabled"))
+
+    def test_unit_change_is_refused_without_writes(self):
+        with mock.patch.object(gym_app.client, "update_unit") as upd:
+            resp = self.c.post("/settings/unit", headers=BASIC, data={"unit": "1"})
+        self.assertEqual(resp.status_code, 403)
+        upd.assert_not_called()
+
+    def test_proxy_that_rewrites_host_works_with_forwarded_host_or_allowlist(self):
+        browser = {**BASIC, "Origin": "https://gym.example.com", "Sec-Fetch-Site": "same-origin"}
+        with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), mock.patch.object(gym_app.client, "delete_workout"):
+            self.assertEqual(self.c.post("/delete/1", headers=browser).status_code, 403)  # Host seen is localhost
+            self.assertEqual(self.c.post("/delete/1", headers={**browser, "X-Forwarded-Host": "gym.example.com"}).status_code, 302)
+            with mock.patch.dict(os.environ, {"GYM_ALLOWED_ORIGINS": "other.example, gym.example.com"}):
+                self.assertEqual(self.c.post("/delete/1", headers=browser).status_code, 302)
+            self.assertEqual(self.c.post("/delete/1", headers={**browser, "Origin": "https://evil.example",
+                                                               "X-Forwarded-Host": "gym.example.com"}).status_code, 403)
 
     def test_delete_and_logout_are_no_longer_get_requests(self):
         self.assertEqual(self.c.get("/delete/1", headers=BASIC).status_code, 405)

@@ -14,7 +14,6 @@ Design rules enforced here:
 import re
 from collections import Counter
 from datetime import date, datetime, timedelta
-from difflib import SequenceMatcher
 from statistics import median
 
 import coach
@@ -24,31 +23,30 @@ from .localday import DEFAULT_TZ, today as local_today
 from .model import READINESS_KINDS, Plan, ProposedExercise, Reading, SessionResult, SetResult, Unavailable
 
 PROGRESSION_PCT = 2.5
-NAME_MATCH_RATIO = 0.86
 ROUND_TO = 0.5
 TEMPLATE_WINDOW_DAYS = 90
 TEMPLATE_MIN_COUNT = 2
 ANCHOR_MAX_AGE_DAYS = 90  # a load logged longer ago than this is not trusted as an anchor
 LAYOFF_DAYS = 14          # after this long without logging a lift, hold its load: no increases
-# Words that make two exercises different movements even when the rest of the name matches (Incline vs Decline).
-DISCRIMINATORS = frozenset("""incline decline flat seated standing kneeling lying prone supine single dual left right
-overhead close wide narrow reverse front rear lateral high low hammer neutral underhand overhand supinated pronated
-unilateral bilateral alternating""".split())
+
 
 
 def _norm(name: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", name.lower()).split())
 
 
+def _tokens(name: str) -> frozenset[str]:
+    """Normalised word set: lowercase, punctuation and parenthetical equipment notes dropped, plurals folded."""
+    name = re.sub(r"\([^)]*\)", " ", name.lower())
+    return frozenset(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w
+                     for w in re.sub(r"[^a-z0-9 ]", " ", name).split())
+
+
 def _same_exercise(a: str, b: str) -> bool:
-    na, nb = _norm(a), _norm(b)
-    if not na:
-        return False
-    if na == nb:
-        return True
-    if DISCRIMINATORS & set(na.split()) != DISCRIMINATORS & set(nb.split()):
-        return False
-    return SequenceMatcher(None, na, nb).ratio() >= NAME_MATCH_RATIO
+    """Same movement iff the word sets are equal. Deliberately NOT fuzzy: one differing word (incline/decline,
+    biceps/triceps, abduction/adduction, left/right) is a different exercise, and a wrong anchor is worse than none."""
+    ta, tb = _tokens(a), _tokens(b)
+    return bool(ta) and ta == tb
 
 
 def _round(x: float) -> float:
@@ -134,6 +132,8 @@ def _progress(last: float, hit_all: bool, band: str, intensity_pct: float, max_j
     limit = interlocks.clamp_to_jump(float("inf"), last, max_jump_pct)
     if proposed <= last:
         limit = min(limit, last)
+    if proposed < ROUND_TO:  # finer than the plate grid: rounding would give 0, so keep the logged value
+        return min(proposed, limit), basis
     load = _round(min(proposed, limit))
     while load > limit + 1e-9:  # rounding must never break the cap
         load -= ROUND_TO

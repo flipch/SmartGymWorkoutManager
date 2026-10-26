@@ -195,7 +195,7 @@ class Tokens(unittest.TestCase):
             self.store.refresh_if_still_stale("r1", boom)
         self.assertNotIn("secret", str(ctx.exception))
         self.assertIsNone(ctx.exception.__cause__, "chaining would print the original message in tracebacks")
-        self.assertTrue(ctx.exception.__suppress_context__)
+        self.assertIsNone(ctx.exception.__context__, "the original exception (and its text) must not be reachable")
         self.assertEqual(self.store.load()["refresh_token"], "r1")
 
     def test_a_hung_refresher_cannot_block_everyone_forever(self):

@@ -67,12 +67,31 @@ def install_flask_auth(app, token: str | None):
                         {"WWW-Authenticate": 'Basic realm="Smart Gym", charset="UTF-8"'})
 
 
-# Flask endpoints that change Speediance state (workouts, schedule, or the vendor login session).
-WRITE_ENDPOINTS = frozenset({"api_schedule", "api_schedule_course", "delete", "logout"})
+# Default-deny: every unsafe-method Flask endpoint needs GYM_ALLOW_WRITES=1 UNLESS it is listed here. A new route is
+# therefore gated until someone consciously decides it only touches local state. Only list endpoints that never change
+# the Speediance account's workouts/schedule/preferences:
+#   * pure compute / local files: the coach endpoints, accessories, owned devices, custom instruction
+#   * coach.apply: gates its own real saves (dry_run defaults to true and a real save needs writes enabled)
+#   * login / settings: (re)establish this app's own session on request of the signed-in user (CSRF-checked)
+LOCAL_ONLY_ENDPOINTS = frozenset({
+    "features.coach_apply", "features.coach_autoregulate", "features.coach_critique", "features.coach_feedback",
+    "features.coach_program", "features.coach_readiness",
+    "update_custom_instruction", "update_accessories", "update_owned_devices", "login", "settings",
+})
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
-def cross_site(headers, host: str) -> bool:
+def allowed_origins(host: str, forwarded_host: str | None = None, extra: str | None = None) -> set[str]:
+    """Hosts a same-origin browser request may name: what the app saw, what a trusted proxy forwarded, and any
+    GYM_ALLOWED_ORIGINS entries (comma separated hosts, e.g. gym.lan.doghous.cloud)."""
+    hosts = {host}
+    if forwarded_host:  # a cross-site page cannot set this header on the victim's browser, so it cannot forge it
+        hosts.add(forwarded_host.split(",")[0].strip())
+    hosts.update(h.strip() for h in (extra or "").split(",") if h.strip())
+    return hosts
+
+
+def cross_site(headers, hosts) -> bool:
     """True if a browser says this request was initiated by another site.
 
     Browsers attach cached Basic credentials to cross-site requests, so auth alone is not CSRF protection.
@@ -83,19 +102,24 @@ def cross_site(headers, host: str) -> bool:
     if site and site not in ("same-origin", "none"):
         return True
     origin = headers.get("Origin")
-    return bool(origin and origin != "null" and urlparse(origin).netloc != host) or origin == "null"
+    if not origin:
+        return False
+    return urlparse(origin).netloc not in hosts  # Origin "null" (sandboxed iframe, redirect) parses to "" and is refused
 
 
 def install_flask_write_gate(app):
-    """Refuse cross-site unsafe requests, and Speediance-changing endpoints unless GYM_ALLOW_WRITES=1."""
+    """Refuse cross-site unsafe requests, and (default-deny) account-changing endpoints unless GYM_ALLOW_WRITES=1."""
     from flask import jsonify, request
 
     @app.before_request
     def _write_gate():
-        if request.method not in SAFE_METHODS and cross_site(request.headers, request.host):
+        if request.method in SAFE_METHODS:
+            return None
+        hosts = allowed_origins(request.host, request.headers.get("X-Forwarded-Host"),
+                                os.environ.get("GYM_ALLOWED_ORIGINS"))
+        if cross_site(request.headers, hosts):
             return jsonify({"error": "cross_site_request_refused"}), 403
-        is_write = request.endpoint in WRITE_ENDPOINTS or (request.endpoint == "create" and request.method == "POST")
-        if is_write and not writes_enabled():
+        if request.endpoint not in LOCAL_ONLY_ENDPOINTS and not writes_enabled():
             return jsonify({"error": "writes_disabled",
                             "message": "Set GYM_ALLOW_WRITES=1 to let this app change your Speediance account."}), 403
         return None

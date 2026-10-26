@@ -198,10 +198,72 @@ class HistoryTrust(unittest.TestCase):
         self.assertTrue(planner._same_exercise("Bench Press", "bench  press"))
         self.assertTrue(planner._same_exercise("Cable Row", "Cable Rows"))
 
+    def test_one_word_muscle_or_movement_differences_are_different_exercises(self):
+        for a, b in (("Biceps Curl", "Triceps Curl"), ("Triceps Extension", "Biceps Extension"),
+                     ("Hip Abduction", "Hip Adduction"), ("Leg Press", "Leg Curl"), ("Shoulder Press", "Chest Press")):
+            self.assertFalse(planner._same_exercise(a, b), f"{a} / {b}")
+
+    def test_the_users_real_naming_style_still_matches_itself(self):
+        for name in ("Dual-Handle Bench Press", "Standing Tricep Rope Overhead Triceps Extension (Main Frame)",
+                     "Kneeling Dual-Handle Triceps Dips", "Standing Dual-Handle Chest Fly"):
+            self.assertTrue(planner._same_exercise(name, name.upper().replace("-", " ")), name)
+        self.assertTrue(planner._same_exercise("Tricep Rope Pushdown (Main Frame)", "tricep rope pushdown"))
+        self.assertFalse(planner._same_exercise("", ""))
+
+    def test_a_load_finer_than_the_plate_grid_is_never_rounded_to_zero(self):
+        for band in ("low", "moderate", "high"):
+            load, _ = planner._progress(0.3, True, band, -15 if band == "low" else 0, 10)
+            self.assertGreater(load, 0, band)
+            self.assertLessEqual(load, 0.3 * 1.10 + 1e-9, band)
+
     def test_catalog_does_not_anchor_on_a_lookalike_exercise(self):
         d = date(2026, 10, 26)
         decline = [synth.exercise("Decline Bench Press", [(8, 100, 8)] * 3)]
         self.assertIsNone(planner.last_logged("Incline Bench Press", [session(d - timedelta(days=2), "X", decline)]))
+
+
+class CatalogPathTrust(unittest.TestCase):
+    """The generic-program fallback must obey the same anchor-age, layoff and jump-cap rules as the template path."""
+
+    @classmethod
+    def setUpClass(cls):
+        import coach
+        cls.days = coach.generate_program(goal="muscle", days_per_week=4, experience="intermediate")["days"]
+
+    def history(self, days_ago, index):
+        """One logged session containing day `index`'s first exercise, every set beating the target."""
+        ex = self.days[index]["exercises"][0]
+        d = date(2026, 10, 26) - timedelta(days=days_ago)
+        logged = [synth.exercise(ex["name"], [(ex["reps"] + 2, 40, ex["reps"])] * 3)]
+        return ex["name"], [session(d, "One-off", logged)]
+
+    def first(self, result, name):
+        return next(e for e in result.exercises if e.name == name)
+
+    GREEN = (("whoop_recovery", 90), ("subjective", 5))
+
+    def test_recent_anchor_progresses_on_a_green_day(self):
+        name, sessions = self.history(days_ago=3, index=1)  # one session in the last 14 days -> plans day index 1
+        r = plan(sessions, readings(*self.GREEN))
+        self.assertEqual(r.source, "coach_catalog")
+        self.assertEqual(self.first(r, name).load, 41.0)
+
+    def test_layoff_holds_the_load_on_the_catalog_path(self):
+        name, sessions = self.history(days_ago=20, index=0)  # outside the 14-day window -> plans day index 0
+        r = plan(sessions, readings(*self.GREEN))
+        self.assertEqual(r.band, "high")
+        self.assertEqual(self.first(r, name).load, 40.0)
+
+    def test_anchor_older_than_ninety_days_gives_no_load_on_the_catalog_path(self):
+        name, sessions = self.history(days_ago=100, index=0)
+        r = plan(sessions, readings(*self.GREEN))
+        self.assertIsNone(self.first(r, name).load)
+
+    def test_a_tight_jump_cap_binds_even_on_a_progression(self):
+        name, sessions = self.history(days_ago=3, index=1)
+        r = plan(sessions, readings(*self.GREEN), max_jump_pct=1.0)
+        self.assertLessEqual(self.first(r, name).load, 40.0 * 1.01 + 1e-9)
+        self.assertEqual(interlocks.validate_exercises(r.exercises, max_jump_pct=1.0), [])
 
 
 class Warnings(unittest.TestCase):

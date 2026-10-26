@@ -106,7 +106,7 @@ def parse_sleep(payload) -> tuple[list[Reading], list[str]]:
 
 
 class TokenStore:
-    """Mode-0600 token file + OS file lock so only one process refreshes at a time."""
+    """Mode-0600 token file + OS file lock (POSIX flock) so only one process refreshes at a time."""
 
     def __init__(self, path):
         self.path = pathlib.Path(path)
@@ -149,14 +149,15 @@ class TokenStore:
             current = self.load()
             if current and current.get("refresh_token") != seen_refresh_token:
                 return current
+            failure = None
             try:
                 fresh = refresh_fn(seen_refresh_token)
-            except SourceDown:
+            except SourceDown:  # refresh_fn contract: SourceDown messages must never contain response bodies/tokens
                 raise
             except Exception as err:  # noqa: BLE001
-                # `from None`: the original exception's text/body may contain token material, so it must not
-                # reach a traceback or log through exception chaining.
-                raise SourceAuthError(SOURCE, f"token refresh failed: {type(err).__name__}") from None
+                failure = type(err).__name__  # keep only the class name; raising outside this block drops __context__
+            if failure:
+                raise SourceAuthError(SOURCE, f"token refresh failed: {failure}")
             self.save(fresh)
             return fresh
         finally:
