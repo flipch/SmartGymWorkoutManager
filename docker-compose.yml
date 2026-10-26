@@ -14,7 +14,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATA_DIR=/data
-      - TZ=${TZ:-America/Edmonton}
+      - TZ=${TZ:-America/Los_Angeles}
       # shared secret for the web UI (HTTP Basic, any username) — set in .env (gitignored)
       - GYM_API_TOKEN=${GYM_API_TOKEN:?set GYM_API_TOKEN in .env}
     volumes:
@@ -33,7 +33,7 @@ services:
       - DATA_DIR=/data
       - MCP_HOST=0.0.0.0
       - MCP_PORT=5002
-      - TZ=${TZ:-America/Edmonton}
+      - TZ=${TZ:-America/Los_Angeles}
       # bearer token required on every MCP request; write tools stay off unless GYM_ALLOW_WRITES=1
       - GYM_API_TOKEN=${GYM_API_TOKEN:?set GYM_API_TOKEN in .env}
       - GYM_ALLOW_WRITES=${GYM_ALLOW_WRITES:-0}
