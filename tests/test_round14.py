@@ -174,12 +174,42 @@ class SavingNeverDropsOrFakesAnything(unittest.TestCase):
             client.save_workout("x", [ex(10)], template_id=77)
         self.assertEqual([c for c in calls if c[0] == "POST"], [])
 
-    def test_a_failed_unilateral_lookup_is_an_error_not_bilateral(self):
+    @staticmethod
+    def vendor(fail, calls):
+        """A vendor where exactly one endpoint (matched by `fail`) is down and everything else works."""
+        def request(method, url, **kw):
+            calls.append((method, url))
+            if fail in url:
+                return Resp(503, {"message": "down"})
+            if "/list?" in url:
+                return Resp(200, {"code": 0, "data": [{"id": 7, "actionLibraryList": [{"id": 1007}]}]})
+            if "actionLibraryGroup/7" in url:
+                return Resp(200, {"code": 0, "data": {"id": 7, "isLeftRight": 1}})
+            return Resp(200, {"code": 0, "data": {"id": 1}})
+        return request
+
+    def test_only_the_unilateral_lookup_down_is_an_error_not_bilateral(self):
+        calls = []
         client = make_client(0)
-        client.get_batch_details = lambda ids, **kw: [{"id": 7, "actionLibraryList": [{"id": 1007}]}]
-        client._request = mock.Mock(return_value=Resp(500, {"message": "down"}))
-        with self.assertRaises(api_client.UpstreamError):
+        client._request = self.vendor("actionLibraryGroup/7", calls)
+        with self.assertRaises(api_client.UpstreamError):  # not a silent "bilateral" that skips the 50 kg cap
             client.save_workout("x", [ex(80)])
+        self.assertEqual([c for c in calls if c[0] == "POST"], [])
+
+    def test_only_the_library_list_down_is_an_upstream_error_not_a_missing_exercise(self):
+        calls = []
+        client = make_client(0)
+        client._request = self.vendor("/list?", calls)
+        with self.assertRaises(api_client.UpstreamError):  # not the ValueError of "exercise not found"
+            client.save_workout("x", [ex(10)], template_id=77)
+        self.assertEqual([c for c in calls if c[0] == "POST"], [])
+
+    def test_with_everything_up_the_same_vendor_saves(self):
+        calls = []
+        client = make_client(0)
+        client._request = self.vendor("never-matches", calls)
+        client.save_workout("x", [ex(40)])
+        self.assertEqual(len([c for c in calls if c[0] == "POST"]), 1)
 
     def test_string_group_ids_are_the_same_exercise_and_get_the_same_caps(self):
         for gid in ("5", 5, " 5 "):

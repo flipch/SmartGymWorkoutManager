@@ -74,6 +74,7 @@ MAX_EXERCISES, MAX_SETS, MAX_REPS, MAX_SECONDS, MAX_REST_S = 30, 20, 99, 3600, 3
 MAX_WEIGHT_KG, MAX_WEIGHT_KG_UNILATERAL, MAX_PRESET_RM, MAX_LEVEL = 100.0, 50.0, 20, 10
 MAX_WEIGHT_LB, MAX_WEIGHT_LB_UNILATERAL = 220.0, 110.0  # the editor's imperial limits; the API stores the ACCOUNT's unit
 REQUEST_TIMEOUT_S = 25
+MAX_MODE = 5  # Standard, Chains, Eccentric, and the two the coach names (constant, spotter)
 MAX_TEMPLATE_NAME = 100
 
 
@@ -120,6 +121,10 @@ def validate_workout(name, exercises, imperial=False):
             seconds = str(st.get('unit', 'reps')).lower() == 'sec'
             _bounded(st.get('reps') or 0, f"{where}: reps", MAX_SECONDS if seconds else MAX_REPS)
             _bounded(st.get('rest') or 0, f"{where}: rest", MAX_REST_S)
+            if st.get('mode') not in (None, ""):
+                mode = _bounded(st['mode'], f"{where}: mode", MAX_MODE)
+                if mode < 1 or mode != int(mode):
+                    raise ValueError(f"{where}: mode must be a whole number from 1 to {MAX_MODE}")
             if stat == 6:
                 hi = MAX_LEVEL
             elif preset in (None, -1, "-1"):
@@ -530,15 +535,8 @@ class SpeedianceClient:
         
     def get_workout_detail(self, code):
         url = f"{self.base_url}/api/app/v3/customTrainingTemplate/detailByCode?code={_q(code)}"
-        try:
-            resp = self._request('GET', url, headers=self._get_headers())
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            return resp.json().get('data', None)
-        except Exception as e:
-            if str(e) == "Unauthorized": raise e
-            print(f"Error fetching template detail: {e}")
-            return None
+        resp = self._request('GET', url, headers=self._get_headers())
+        return _json_data(resp, "template detail", dict)  # {} = no such template; an outage raises
 
     def get_user_workouts(self):
         url = f"{self.base_url}/api/app/v4/customTrainingTemplate/appPage?pageNo=1&pageSize=-1&deviceTypes={self.device_type}"
@@ -887,13 +885,9 @@ class SpeedianceClient:
     def get_user_action_stats(self, group_id, page=1, size=12):
         """Fetches historical statistics for a specific exercise group."""
         url = f"{self.base_url}/api/app/actionLibraryGroup/userActionStatPage?id={group_id}&pageNo={page}&pageSize={size}"
-        try:
-            resp = self._request('GET', url, headers=self._get_headers())
-            return resp.json()
-        except Exception as e:
-            if str(e) == "Unauthorized": raise e
-            print(f"Error fetching stats: {e}")
-            return None
+        resp = self._request('GET', url, headers=self._get_headers())
+        _require_ok(resp, "exercise stats")
+        return resp.json()
 
     # ── Browse: Courses & Programs ──────────────────────────────
 
@@ -902,59 +896,29 @@ class SpeedianceClient:
         GET /api/app/v2/course/page?pageNo={page}&pageSize={page_size}
         """
         url = f"{self.base_url}/api/app/v2/course/page?pageNo={page}&pageSize={page_size}"
-        try:
-            resp = self._request('GET', url, headers=self._get_headers())
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            data = resp.json().get('data', [])
-            return data if isinstance(data, list) else []
-        except Exception as e:
-            if str(e) == "Unauthorized": raise e
-            print(f"Error fetching courses page: {e}")
-            return []
+        resp = self._request('GET', url, headers=self._get_headers())
+        return _json_data(resp, "courses page", list)
 
     def get_course_detail(self, course_id):
         """Fetches full course detail including exercise list.
         GET /api/app/v2/course/info/{id}?weightConfig=1
         """
         url = f"{self.base_url}/api/app/v2/course/info/{_q(course_id)}?weightConfig=1"
-        try:
-            resp = self._request('GET', url, headers=self._get_headers())
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            return resp.json().get('data', {})
-        except Exception as e:
-            if str(e) == "Unauthorized": raise e
-            print(f"Error fetching course detail: {e}")
-            return {}
+        resp = self._request('GET', url, headers=self._get_headers())
+        return _json_data(resp, "course detail", dict)
 
     def get_programs_page(self, page=1, page_size=200):
         """Fetches a page of programs.
         GET /api/mobile/exclusivePlan/page?pageNo={page}&pageSize={page_size}
         """
         url = f"{self.base_url}/api/mobile/exclusivePlan/page?pageNo={page}&pageSize={page_size}"
-        try:
-            resp = self._request('GET', url, headers=self._get_headers())
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            data = resp.json().get('data', [])
-            return data if isinstance(data, list) else []
-        except Exception as e:
-            if str(e) == "Unauthorized": raise e
-            print(f"Error fetching programs page: {e}")
-            return []
+        resp = self._request('GET', url, headers=self._get_headers())
+        return _json_data(resp, "programs page", list)
 
     def get_program_detail(self, plan_id):
         """Fetches full program detail including week/day structure.
         GET /api/app/exclusivePlan/{id}
         """
         url = f"{self.base_url}/api/app/exclusivePlan/{_q(plan_id)}"
-        try:
-            resp = self._request('GET', url, headers=self._get_headers())
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            return resp.json().get('data', {})
-        except Exception as e:
-            if str(e) == "Unauthorized": raise e
-            print(f"Error fetching program detail: {e}")
-            return {}
+        resp = self._request('GET', url, headers=self._get_headers())
+        return _json_data(resp, "program detail", dict)

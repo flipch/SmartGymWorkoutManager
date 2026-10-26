@@ -150,17 +150,13 @@ def _deep_insights(days=90, max_sessions=24):
     """Compute the rich analytics: per-muscle weekly volume vs landmarks, e1RM progression,
     balance, frequency, weekly trends, PRs, distribution — from real per-set history."""
     recs = []
-    detailed = []
-    try:
-        detailed = _detailed_records(_client, days)
-    except Exception:
-        detailed = []
-    sessions = []
+    detailed = _detailed_records(_client, days)  # an outage raises (the caller reports deep_error), never "no detail yet"
+    sessions, failed = [], 0
     for r in detailed[:max_sessions]:
         try:
             sessions.append(fetch_session_detail(_client, r))
         except Exception:
-            pass
+            failed += 1
 
     weeks = set()
     wk_muscle = defaultdict(lambda: defaultdict(float))
@@ -257,9 +253,12 @@ def _deep_insights(days=90, max_sessions=24):
 
     return {
         "detail_sessions": len(sessions), "detail_weeks": len(weeks),
-        "data_note": (f"Per-muscle & strength metrics from {len(sessions)} detailed "
-                      f"sessions over {len(weeks)} week(s)." if sessions else
-                      "No per-set workout detail yet — log a Speediance workout to populate."),
+        "sessions_failed": failed, "partial": failed > 0,
+        "data_note": ((f"Per-muscle & strength metrics from {len(sessions)} detailed "
+                       f"sessions over {len(weeks)} week(s)." if sessions else
+                       "No per-set workout detail yet — log a Speediance workout to populate.")
+                      + (f" PARTIAL: {failed} session(s) could not be loaded, so these figures understate your training."
+                         if failed else "")),
         "muscle_volume": muscle_volume, "untrained_muscles": untrained,
         "lifts": lifts[:10], "balance": balance,
         "frequency": {"muscles_below_2x": below_2x},
@@ -284,7 +283,7 @@ def api_insights():
         try:
             out.update(_deep_insights(90))
         except Exception as e:
-            out["deep_error"] = str(e)
+            out["deep_error"] = type(e).__name__
     return jsonify(out)
 
 
@@ -699,8 +698,7 @@ def _feedback_profile(data_dir=None, days=14):
     """Derive a coaching profile from recent feedback events."""
     events = _load_feedback_events(data_dir)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    recent = [e for e in events if (state_io.parse_stamp(e.get("ts")) or cutoff - timedelta(days=1)) >= cutoff] \
-        or events[-10:]
+    recent = [e for e in events if (state_io.parse_stamp(e.get("ts")) or cutoff - timedelta(days=1)) >= cutoff]
     rpes = [e["rpe"] for e in recent if isinstance(e.get("rpe"), (int, float))]
     avg_rpe = round(sum(rpes) / len(rpes), 1) if rpes else None
     votes = [e.get("difficulty") for e in recent if e.get("difficulty") in ("too_easy", "ok", "too_hard")]
