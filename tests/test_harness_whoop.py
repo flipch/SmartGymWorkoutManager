@@ -216,6 +216,29 @@ class Tokens(unittest.TestCase):
         self.assertNotIn("During handling of the above exception", text)
         self.assertNotIn("direct cause", text)
 
+    def test_separate_processes_spend_the_refresh_token_once(self):
+        """Real OS-level contention: 5 interpreters race to refresh the same stale token."""
+        import subprocess
+        calls = Path(self.dir.name) / "refresh_calls.log"
+        script = (
+            "import sys, time\n"
+            f"sys.path.insert(0, {str(Path(__file__).parent.parent)!r})\n"
+            "from harness import whoop\n"
+            f"store = whoop.TokenStore({str(self.store.path)!r})\n"
+            "def refresh(old):\n"
+            f"    open({str(calls)!r}, 'a').write(old + '\\n')\n"
+            "    time.sleep(0.3)\n"
+            "    return {'access_token': 'a2', 'refresh_token': 'r2'}\n"
+            "print(store.refresh_if_still_stale('r1', refresh)['refresh_token'])\n"
+        )
+        procs = [subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                 for _ in range(5)]
+        results = [p.communicate(timeout=60) + (p.returncode,) for p in procs]
+        for out, err, code in results:
+            self.assertEqual((code, out.strip()), (0, "r2"), err)
+        self.assertEqual(calls.read_text().split(), ["r1"], "the stale refresh token must be spent exactly once")
+        self.assertEqual(self.store.load()["refresh_token"], "r2")
+
     def test_source_down_paths_also_hide_the_callers_exception(self):
         import traceback
         from harness.errors import SourceDown as Down
