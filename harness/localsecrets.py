@@ -48,8 +48,15 @@ def write_json_private(path: pathlib.Path, data: dict) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(data, fh)
+            fh.flush()
+            os.fsync(fh.fileno())  # data on disk BEFORE the rename, or a power cut can leave an empty token file
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)  # make the rename itself durable
+        finally:
+            os.close(dir_fd)
     except BaseException:
         if os.path.exists(tmp):
             os.unlink(tmp)

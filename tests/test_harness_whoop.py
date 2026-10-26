@@ -306,6 +306,45 @@ class Tokens(unittest.TestCase):
             self.assertNotIn("secret", text, repr(bad))
             self.assertEqual(self.store.load()["refresh_token"], "r1")
 
+    def test_save_called_inside_an_except_block_does_not_print_the_callers_exception(self):
+        import traceback
+        for bad in ({"access_token": "a", "refresh_token": ""}, ["x"]):
+            try:
+                try:
+                    raise RuntimeError("401 refresh_token=OLDSECRET")
+                except RuntimeError:
+                    self.store.save(bad)
+            except SourceDown as err:
+                text = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+            self.assertNotIn("OLDSECRET", text)
+
+    def test_a_corrupt_or_foreign_token_file_is_a_source_down_and_refresh_recovers(self):
+        for content in ("", "[]", "not json", '"str"'):
+            self.store.path.write_text(content)
+            os.chmod(self.store.path, 0o600)
+            with self.assertRaises(SourceDown, msg=content):
+                self.store.load()
+            got = self.store.refresh_if_still_stale("r1", lambda old: {"access_token": "a2", "refresh_token": "r2"})
+            self.assertEqual((content, got["refresh_token"]), (content, "r2"))
+            self.assertEqual(self.store.load()["refresh_token"], "r2")
+
+    def test_a_world_readable_token_file_is_refused_not_a_raw_permission_error(self):
+        os.chmod(self.store.path, 0o644)
+        with self.assertRaises(SourceDown):
+            self.store.load()
+
+    def test_a_stored_dict_without_a_refresh_token_is_not_treated_as_already_rotated(self):
+        self.store.path.write_text(json.dumps({"access_token": "x"}))
+        os.chmod(self.store.path, 0o600)
+        got = self.store.refresh_if_still_stale("r1", lambda old: {"access_token": "a2", "refresh_token": "r2"})
+        self.assertEqual(got["refresh_token"], "r2")
+
+    def test_token_files_are_fsynced_before_the_rename(self):
+        from unittest import mock
+        with mock.patch.object(os, "fsync", wraps=os.fsync) as fsync:
+            self.store.save({"access_token": "a2", "refresh_token": "r2"})
+        self.assertGreaterEqual(fsync.call_count, 2, "file data and the directory entry must both be flushed")
+
     def test_there_is_exactly_one_token_file(self):
         """No side files except the lock: nothing to order, nothing to shadow."""
         self.store.save({"access_token": "a2", "refresh_token": "r2"})

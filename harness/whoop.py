@@ -114,8 +114,15 @@ class TokenStore:
         self.lock_path = self.path.with_name(self.path.name + ".lock")
 
     def load(self) -> dict | None:
-        """The stored tokens. One file, replaced atomically, so a reader always sees a complete pair."""
-        return localsecrets.read_json_private(self.path)
+        """The stored tokens (None if there are none). One file, replaced atomically, so a reader always sees a
+        complete pair. An unreadable, corrupt or non-object file is a SourceDown, never a raw JSON/OS error."""
+        try:
+            data = localsecrets.read_json_private(self.path)
+        except (OSError, ValueError):
+            raise SourceDown(SOURCE, "token file is unreadable or corrupt (or not mode 600): re-authorise WHOOP") from None
+        if data is not None and not isinstance(data, dict):
+            raise SourceDown(SOURCE, "token file is not a JSON object: re-authorise WHOOP")
+        return data
 
     def save(self, tokens: dict) -> None:
         """Persist a rotated pair under the same cross-process lock the refresher uses."""
@@ -133,11 +140,11 @@ class TokenStore:
         re-authorisation: retry once, then say so plainly. (A second 'pending' file was tried and removed: two files
         need an ordering rule, and every ordering rule had an interleaving that returned a dead token.)"""
         if not isinstance(tokens, dict):
-            raise SourceDown(SOURCE, "refresh response was not a JSON object")
+            raise SourceDown(SOURCE, "refresh response was not a JSON object") from None
         for key in ("access_token", "refresh_token"):
             value = tokens.get(key)
             if not isinstance(value, str) or not value or len(value) > MAX_TOKEN_LEN:
-                raise SourceDown(SOURCE, f"refresh response had a missing or malformed {key}")
+                raise SourceDown(SOURCE, f"refresh response had a missing or malformed {key}") from None
         for attempt in range(2):
             try:
                 localsecrets.write_json_private(self.path, tokens)
@@ -168,14 +175,19 @@ class TokenStore:
         lock we reload: if the stored refresh token has changed, another refresher already rotated, so reuse its
         tokens; otherwise call refresh_fn(seen_refresh_token) and persist the NEW pair atomically. If refresh_fn
         raises, nothing is written (the old pair stays on disk for diagnosis).
+        refresh_fn runs while the lock is held and MUST NOT call back into this store (the lock is not reentrant).
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             self._lock(fd)
-            current = self.load()
-            if current and current.get("refresh_token") != seen_refresh_token:
-                return current
+            try:
+                current = self.load()
+            except SourceDown:  # unreadable file: nothing to reuse, so refresh with the token the caller holds
+                current = None
+            stored = (current or {}).get("refresh_token")
+            if isinstance(stored, str) and stored and stored != seen_refresh_token:
+                return current  # another process already rotated; use its tokens
             failure, down = None, None
             try:
                 fresh = refresh_fn(seen_refresh_token)
