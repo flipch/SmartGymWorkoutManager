@@ -84,13 +84,16 @@ def valid_record_id(value) -> bool:
     return isinstance(value, str) and _RECORD_ID.fullmatch(value) is not None
 
 
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def json_object(value):
     """A request body is only usable as a dict; a JSON list, string or number is "no body" (never an AttributeError)."""
     return value if isinstance(value, dict) else {}
 
 
 def valid_iso_date(value) -> bool:
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not _ISO_DATE.fullmatch(value):  # not ISO week dates ("2026-W43-1") or "20261027"
         return False
     try:
         date.fromisoformat(value)

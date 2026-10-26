@@ -121,7 +121,6 @@
                     <p class="text-xs text-gray-500 mt-2">You can find this in the header of a logged request (e.g. via PCAPdroid or Charles Proxy).</p>
                 </div>
                 <!-- Preserve existing values on save -->
-                <input type="hidden" name="unit" value="{{ creds.unit }}">
                 <input type="hidden" name="device_type" value="{{ creds.device_type }}">
                 {% if creds.allow_monster_moves %}<input type="hidden" name="allow_monster_moves" value="on">{% endif %}
                 <input type="hidden" name="custom_instruction" value="{{ creds.custom_instruction }}">

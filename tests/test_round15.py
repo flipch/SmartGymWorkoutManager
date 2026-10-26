@@ -307,7 +307,7 @@ class AnIncompleteLibraryIsNeverCachedOrPassedOff(unittest.TestCase):
             client = api_client.SpeedianceClient()
         client.save_config("1", "tok", "Global", 0, "", 1, False, [], [])
         client.library_cache = None
-        client.get_categories = lambda: [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}]
+        client.get_categories = lambda strict=False: [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}]
         return client
 
     @staticmethod

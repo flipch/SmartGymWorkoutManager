@@ -104,6 +104,10 @@ def _text(payload, key, limit, *, pattern=None):
     return value
 
 
+# every field a stored readiness can carry; a reading with ANY of them must reach the program/autoregulation
+READINESS_SIGNALS = ("whoop_recovery", "hrv_vs_baseline", "rhr_delta_bpm", "sleep_hours", "subjective", "acwr")
+
+
 def validate_readiness(payload) -> dict:
     """Known keys only, each range-checked. {} means 'nothing usable was supplied'."""
     if not isinstance(payload, dict):

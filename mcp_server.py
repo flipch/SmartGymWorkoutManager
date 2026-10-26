@@ -21,7 +21,7 @@ import coach
 import state_io
 from auth import BearerAuthASGI, load_token, writes_enabled
 from api_client import SpeedianceClient
-from insights_core import clamp_days, clamp_n, recovery_advice, summarize
+from insights_core import clamp_days, clamp_n, recovery_advice, summarize, valid_iso_date, valid_record_id
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
     _detailed_records, fetch_session_detail, _summarize_session, _unit_label,
@@ -122,7 +122,7 @@ def delete_workout(template_id: str) -> dict:
 
 
 @mcp.tool()
-def save_workout(name: str, exercises: list, template_id: int = None) -> dict:
+def save_workout(name: str, exercises: list, template_id: int | str | None = None) -> dict:
     """Create (template_id omitted) or update (template_id given) a workout.
 
     `exercises` is a list of dicts, each:
@@ -153,6 +153,8 @@ def schedule_workout(day: str, template_code: str, add: bool = True) -> dict:
     `day` is 'YYYY-MM-DD'; `template_code` comes from list_workouts."""
     def run():
         _require_writes()
+        if not (valid_iso_date(day) and valid_record_id(str(template_code))):
+            raise ValueError("day must be YYYY-MM-DD and template_code a single id")
         c = _client(); _require_auth(c)
         ok = c.schedule_workout(day, template_code, 1 if add else 0)
         return {"day": day, "template_code": template_code,
@@ -316,8 +318,7 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
         r = state_io.validate_readiness(readiness) if readiness is not None else None
         if r is None:
             stored = _fresh_readiness(c.data_dir)
-            if any(k in stored for k in ("whoop_recovery", "hrv_vs_baseline",
-                                         "rhr_delta_bpm", "sleep_hours", "subjective")):
+            if any(k in stored for k in state_io.READINESS_SIGNALS):
                 r = stored
         prof = _feedback_profile(c.data_dir)
         fb = prof if prof.get("events") else None
@@ -387,7 +388,7 @@ def autoregulate(whoop_recovery: float = None, hrv_vs_baseline: str = None,
         "rhr_delta_bpm": rhr_delta_bpm, "sleep_hours": sleep_hours,
         "subjective": subjective, "acwr": acwr,
     }.items() if v is not None}
-    return _safe(lambda: coach.autoregulate(r))
+    return _safe(lambda: coach.autoregulate(state_io.validate_readiness(r)))  # out-of-range numbers are refused
 
 
 @mcp.tool()

@@ -349,6 +349,8 @@
             const reps = (apiEx.setsAndReps || "").toString().split(',');
             const weights = (apiEx.weights || "").toString().split(',');
             const counters = (apiEx.counterweight2 || "").toString().split(',');
+            const levels = (apiEx.level || "").toString().split(',');
+            const isVita = Number(meta.dataStatType) === 6 || Number(apiEx.dataStatType) === 6;
             const modes = (apiEx.sportMode || "").toString().split(',');
             const breaks = (apiEx.breakTime2 || "").toString().split(',');
             const leftRights = (apiEx.leftRight || "").toString().split(',');
@@ -365,7 +367,11 @@
                     : -1;
                 const isRM = presetId !== -1;
                 
-                if (isRM) {
+                if (isVita) {
+                    // Vita: the difficulty lives in `level` (the cable weight is 0)
+                    const lv = parseInt(levels[i] || 0);
+                    w = (!isNaN(lv) && lv >= 1) ? Math.min(10, lv) : 1;
+                } else if (isRM) {
                     // Preset workouts: use counterweight2 (RM).
                     w = parseInt(counters[i] || 0);
                 } else {
@@ -1392,7 +1398,7 @@ You must output a JSON object with the following structure:
                 const newSet = {...s};
                 // save the unit the editor SHOWS (a timed exercise displays seconds whatever set.unit holds)
                 const shown = WorkoutLogic.effectiveSetUnit(ex, s);
-                if (shown === 'sec' || shown === 'reps') newSet.unit = shown;
+                if (shown === 'sec' || shown === 'reps' || shown === 'kcal') newSet.unit = shown;  // kcal is refused by the server, never saved as reps
                 return newSet;
             })
         }));

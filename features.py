@@ -14,6 +14,7 @@ since field names vary by region/firmware.
 """
 from flask import Blueprint, jsonify, Response, render_template_string, request
 from datetime import datetime, date, timedelta, timezone
+import glob
 import hashlib
 from collections import defaultdict
 import json
@@ -21,7 +22,7 @@ import os
 import re
 
 import coach
-from api_client import MAX_EXERCISES, MAX_REPS, MAX_REST_S, MAX_SETS, validate_workout
+from api_client import MAX_EXERCISES, MAX_REPS, MAX_REST_S, MAX_SETS, unit_is_confirmed, validate_workout
 from auth import writes_enabled
 import state_io
 from insights_core import clamp_days, clamp_n, json_object, recovery_advice, summarize
@@ -313,6 +314,8 @@ def _named_date(node):
     """A date the node carries under a key actually named like a date (date, thatDay, scheduleDate...), not createTime."""
     for k, v in node.items():
         kl = str(k).lower()
+        if any(t in kl for t in ("create", "update", "modif", "delet")):  # bookkeeping, not when it is scheduled
+            continue
         if "date" in kl or kl in ("thatday", "day"):
             d = _parse_date(v)
             if d:
@@ -329,7 +332,8 @@ def _walk_events(node, out, inherited=None):
         name = None
         for k, v in node.items():
             kl = str(k).lower()
-            if isinstance(v, str) and v.strip() and any(t in kl for t in ('name', 'title')):
+            if (isinstance(v, str) and v.strip() and any(t in kl for t in ('name', 'title'))
+                    and not any(t in kl for t in ('week', 'month', 'day'))):  # "weekName" labels the day, not a plan
                 name = v.strip()
                 break
         if d and name:
@@ -651,8 +655,7 @@ def coach_program():
             return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
     if readiness is None and body.get("use_stored_readiness", True):
         stored = _fresh_readiness()
-        if any(k in stored for k in ("whoop_recovery", "hrv_vs_baseline",
-                                     "rhr_delta_bpm", "sleep_hours", "subjective")):
+        if any(k in stored for k in state_io.READINESS_SIGNALS):
             readiness = stored
     feedback = body.get("feedback")
     if feedback is None and body.get("use_stored_feedback", True):
@@ -661,15 +664,18 @@ def coach_program():
         feedback_error = prof.get("unreadable")
     else:
         feedback_error = None
-    prog = coach.generate_program(
-        goal=body.get("goal", "general"),
-        days_per_week=body.get("days_per_week", 4),
-        experience=body.get("experience", "intermediate"),
-        one_rm=body.get("one_rm"),
-        readiness=readiness,
-        available_accessories=body.get("available_accessories"),
-        feedback=feedback,
-    )
+    try:
+        prog = coach.generate_program(
+            goal=body.get("goal", "general"),
+            days_per_week=body.get("days_per_week", 4),
+            experience=body.get("experience", "intermediate"),
+            one_rm=body.get("one_rm"),
+            readiness=readiness,
+            available_accessories=body.get("available_accessories"),
+            feedback=feedback,
+        )
+    except (TypeError, ValueError, AttributeError, KeyError):
+        return jsonify({"error": "bad_request", "message": "Invalid program parameters."}), 400
     if feedback_error:  # the stored pain/avoid list could not be read: say so instead of silently dropping it
         prog["feedback_error"] = feedback_error
     return jsonify(prog)
@@ -721,16 +727,23 @@ def log_feedback(payload, data_dir=None):
     return event
 
 
+QUARANTINED = "QuarantinedCorruptFile"
+
+
 def _feedback_read_error(data_dir=None):
-    """None when the feedback file is absent or readable; else the error class name (never silently "no feedback")."""
+    """None when the feedback file is absent or readable; else the error class name (never silently "no feedback").
+    A file that was moved aside as corrupt means earlier pain/avoid reports no longer apply: QUARANTINED says so."""
+    path = _feedback_path(data_dir)
     try:
-        with open(_feedback_path(data_dir)) as f:
+        with open(path) as f:
             data = json.load(f)
-        return None if isinstance(data, list) else "ValueError"
+        if not isinstance(data, list):
+            return "ValueError"
     except FileNotFoundError:
-        return None
+        pass
     except (OSError, ValueError) as e:
         return type(e).__name__
+    return QUARANTINED if glob.glob(glob.escape(path) + ".corrupt-*") else None
 
 
 def _feedback_profile(data_dir=None, days=14):
@@ -796,7 +809,10 @@ def coach_critique():
         return jsonify({"error": "no_exercises",
                         "message": "Provide 'exercises' (list of {name,sets,reps}) or an authenticated 'code'."}), 400
     mode = body.get("mode", "session")
-    return jsonify(coach.critique_workout(exercises, goal, mode))
+    try:
+        return jsonify(coach.critique_workout(exercises, goal, mode))
+    except (TypeError, ValueError, AttributeError, KeyError):
+        return jsonify({"error": "bad_request", "message": "Invalid exercises."}), 400
 
 
 # ── import a generated program into real Speediance workout templates ──
@@ -850,17 +866,20 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
             score -= 0.10
         key = (score, -len(lib_tokens))
         if best is None or key > best[0]:
-            best = (key, gid, title, mg, score)
+            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1)
     if best is None:
         cands = sorted((len(_norm_tokens(ex.get("title") or "")), ex.get("id"), ex.get("title"))
                        for ex in library if isinstance(ex, dict) and ex.get("id")
                        and (ex.get("mainMuscleGroupName") or "").lower() in anchor)
         if cands:
-            return {"groupId": cands[0][1], "matched_name": cands[0][2], "confidence": "low"}
+            return {"groupId": cands[0][1], "matched_name": cands[0][2], "confidence": "low",
+                    "unilateral": any(isinstance(x, dict) and x.get("id") == cands[0][1] and x.get("isLeftRight") == 1
+                                      for x in library)}
         return None
     score = best[4]
     conf = "high" if score >= 1.0 else "med" if score >= 0.55 else "low"
-    return {"groupId": best[1], "matched_name": best[2], "muscle": best[3], "confidence": conf}
+    return {"groupId": best[1], "matched_name": best[2], "muscle": best[3], "confidence": conf,
+            "unilateral": best[5]}
 
 
 MAX_PROGRAM_DAYS = 14
@@ -880,8 +899,7 @@ def _avoid_entries(client, program):
 
 def _unit_confirmed(client):
     """Has a human chosen the account's unit (kg/lb)? The vendor does not report it, so a default 0 proves nothing."""
-    creds = getattr(client, "credentials", None)
-    return isinstance(creds, dict) and bool(creds.get("unit_confirmed") or creds.get("unit") == 1)
+    return unit_is_confirmed(getattr(client, "credentials", None))
 
 
 def _imperial(client):
@@ -934,7 +952,7 @@ def program_day_to_payload(library, day, load_unit=None, imperial=False, avoid=f
             # the library match may be an exercise the user reported pain on, even if the coach's own name is not
             unresolved.append({"name": e.get("name"), "muscle": e.get("primary"), "reason": "on your avoid list"})
             continue
-        one_sided = bool(e.get("unilateral"))
+        one_sided = bool(r["unilateral"]) if "unilateral" in r else bool(e.get("unilateral"))  # the MATCHED exercise decides
         n_sets = _whole(e.get("sets"), "sets", MAX_SETS // 2 if one_sided else MAX_SETS)  # bounded BEFORE allocating
         reps = _whole(e.get("reps"), "reps", MAX_REPS)
         rest = 90 if e.get("rest_sec") is None else _whole(e.get("rest_sec"), "rest_sec", MAX_REST_S)  # 0 s is a real rest
@@ -980,6 +998,11 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
     library = client.get_library(strict=True) or []
     imperial = _imperial(client)
     avoid = _avoid_entries(client, program)
+    data_dir = getattr(client, "data_dir", None)
+    fb_error = _feedback_read_error(data_dir) if isinstance(data_dir, str) else None
+    if fb_error and fb_error != QUARANTINED and not dry_run:
+        raise ValueError("the stored pain/avoid list could not be read, so nothing was saved: fix or remove "
+                         "coach_feedback.json first")  # saving now could include a move you reported pain on
     results = []
     prepared = []
     for idx, day in targets:  # build and validate every day before anything is written: all-or-nothing on bad numbers
@@ -1020,7 +1043,8 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
         results.append(entry)
     created = sum(1 for r in results if r["created"])
     failed = sum(1 for r in results if r.get("error"))
-    return {"dry_run": dry_run, "results": results, "created": created, "failed": failed,
+    return {**({"feedback_error": fb_error} if fb_error else {}),
+            "dry_run": dry_run, "results": results, "created": created, "failed": failed,
             "partial": created > 0 and failed > 0}
 
 

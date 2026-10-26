@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, Response
+from flask import Flask, abort, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, Response
 from api_client import SpeedianceClient
 from auth import load_token, install_flask_auth, install_flask_write_gate
 from features import init_features
@@ -118,13 +118,21 @@ def index():
 def settings():
     if request.method == 'POST':
         # Manual config save
-        device_type = int(request.form.get('device_type', client.credentials.get('device_type', 1)))
+        try:
+            device_type = int(request.form.get('device_type', client.credentials.get('device_type', 1)))
+            unit = int(request.form.get('unit', client.credentials.get('unit', 0)))
+        except (TypeError, ValueError):
+            flash("Invalid settings value.", "error")
+            return redirect(url_for('settings'))
+        if unit not in (0, 1) or device_type not in (1, 2):
+            flash("Invalid settings value.", "error")
+            return redirect(url_for('settings'))
         allow_monster_moves = bool(request.form.get('allow_monster_moves'))
         client.save_config(
             request.form.get('user_id') or client.credentials.get('user_id'),
             request.form.get('token') or client.credentials.get('token'),
             request.form.get('region', 'Global'),
-            int(request.form.get('unit', 0)),
+            unit,  # an omitted field keeps the unit
             request.form.get('custom_instruction', ''),
             device_type,
             allow_monster_moves,
@@ -152,8 +160,10 @@ def settings():
 
 @app.route('/settings/custom_instruction', methods=['POST'])
 def update_custom_instruction():
-    data = request.json
+    data = json_object(request.get_json(silent=True))
     instruction = data.get('instruction', '')
+    if not isinstance(instruction, str) or len(instruction) > 4000:
+        return jsonify({"status": "error", "message": "instruction must be text of at most 4000 characters"}), 400
     
     # Update only the instruction, keep other settings
     creds = client.credentials
@@ -173,6 +183,9 @@ def update_custom_instruction():
 @app.route('/settings/unit', methods=['POST'])
 def update_unit():
     unit = request.form.get('unit')
+    if unit not in ('0', '1'):
+        flash("Choose metric or imperial.", "error")
+        return redirect(url_for('settings'))
     success, msg = client.update_unit(unit)
     if success:
         flash("Unit preference updated!", "success")
@@ -708,7 +721,7 @@ def create():
     if not client.credentials.get("token"): return redirect(url_for('settings'))
     
     if request.method == 'POST':
-        data = request.json 
+        data = json_object(request.get_json(silent=True))
         name = data.get('name')
         exercises = data.get('exercises')
         template_id = data.get('id') 
@@ -751,8 +764,10 @@ def create():
         allow_monster_moves=client.allow_monster_moves,
     )
 
-@app.route('/delete/<int:id>', methods=['POST'])
+@app.route('/delete/<id>', methods=['POST'])
 def delete(id):
+    if not valid_record_id(id):  # template ids can be opaque, but never a path or a list
+        abort(404)
     try:
         client.delete_workout(id)
     except Exception as e:

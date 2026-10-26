@@ -91,6 +91,12 @@ def _bounded(value, what, hi):
     return x
 
 
+def unit_is_confirmed(credentials):
+    """Has a human chosen the account's unit? The vendor does not report it, so a default 0 proves nothing (imperial does:
+    nobody defaults to it)."""
+    return isinstance(credentials, dict) and bool(credentials.get("unit_confirmed") or credentials.get("unit") == 1)
+
+
 def _group_id(value, where):
     """A library group id as an int ('5' and 5 are the same exercise; anything else is refused, never interpolated)."""
     if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().isdigit():
@@ -99,6 +105,16 @@ def _group_id(value, where):
     if not 0 < n < 10**12:
         raise ValueError(f"{where}: groupId must be a positive whole number")
     return n
+
+
+def _has_cable_load(exercises):
+    """Is any set a kg/lb cable load (not a preset RM, not a Vita level)? Those are the numbers a wrong unit corrupts."""
+    for ex in exercises:
+        if ex.get('preset_id') not in (None, -1, "-1") or int(ex.get('data_stat_type') or 0) == 6:
+            continue
+        if any(float(st.get('weight') or 0) > 0 for st in ex['sets']):
+            return True
+    return False
 
 
 def validate_workout(name, exercises, imperial=False):
@@ -119,7 +135,12 @@ def validate_workout(name, exercises, imperial=False):
             if not isinstance(st, dict):
                 raise ValueError(f"exercise {n} set {m}: must be an object")
             where = f"exercise {n} set {m}"
-            seconds = str(st.get('unit', 'reps')).lower() == 'sec'
+            set_unit = str(st.get('unit') or 'reps').lower()
+            if set_unit == 'kcal':  # the vendor's calorie-target format is not known here: refuse, never save it as reps
+                raise ValueError(f"{where}: calorie targets cannot be saved by this app yet")
+            if set_unit not in ('reps', 'sec'):
+                raise ValueError(f"{where}: unit must be 'reps' or 'sec'")
+            seconds = set_unit == 'sec'
             _bounded(st.get('reps') or 0, f"{where}: reps", MAX_SECONDS if seconds else MAX_REPS)
             _bounded(st.get('rest') or 0, f"{where}: rest", MAX_REST_S)
             if st.get('mode') not in (None, ""):
@@ -256,6 +277,9 @@ class SpeedianceClient:
     def save_config(self, user_id, token, region="Global", unit=0, custom_instruction="", device_type=1, allow_monster_moves=False, owned_accessories=None, owned_devices=None, unit_confirmed=None):
         previous = getattr(self, "credentials", None) or {}
         confirmed = bool(previous.get("unit_confirmed")) if unit_confirmed is None else bool(unit_confirmed)
+        old_user = str(previous.get("user_id") or "")
+        if old_user and old_user != str(user_id) and unit_confirmed is not True:
+            unit, confirmed = 0, False  # another account: its unit is unknown until someone chooses it
         self.credentials = {
             "user_id": user_id,
             "token": token,
@@ -406,11 +430,13 @@ class SpeedianceClient:
             "User-Agent": "Dart/3.9 (dart:io)"
         }
 
-    def get_categories(self):
-        """Fetches the list of exercise categories (tabs)."""
+    def get_categories(self, strict=False):
+        """Fetches the list of exercise categories (tabs). strict=True raises on an outage instead of returning []."""
         def fetch_categories(device_type):
             url = f"{self.base_url}/api/app/actionLibraryTab/list?deviceType={device_type}"
             resp = self._request('GET', url, headers=self._get_headers())
+            if strict:
+                return _json_data(resp, "exercise categories", list, empty=list)
             return resp.json().get('data', [])
 
         try:
@@ -442,7 +468,9 @@ class SpeedianceClient:
                 cat["filter_ids"] = str(cat.get("id"))
             return categories
         except Exception as e:
-            print(f"Error fetching categories: {e}")
+            if strict:
+                raise
+            print(f"Error fetching categories: {type(e).__name__}")
             return []
 
     def get_library(self, strict=False):
@@ -454,7 +482,7 @@ class SpeedianceClient:
         def fetch_categories(device_type):
             url = f"{self.base_url}/api/app/actionLibraryTab/list?deviceType={device_type}"
             resp = self._request('GET', url, headers=self._get_headers())
-            return resp.json().get('data', [])
+            return _json_data(resp, "exercise categories", list, empty=list)
 
         try:
             # 1. Fetch all categories
@@ -464,7 +492,9 @@ class SpeedianceClient:
                     1: fetch_categories(1),
                 }
             else:
-                categories_by_device = {self.device_type: self.get_categories()}
+                categories_by_device = {self.device_type: self.get_categories(strict=True)}
+            if not any(categories_by_device.values()):
+                incomplete = True  # a library of zero categories is an outage, not an empty gym
 
             all_basic_exercises = []
 
@@ -475,8 +505,9 @@ class SpeedianceClient:
                     url = f"{self.base_url}/api/app/actionLibraryGroup/trainingPartGroup?tabId={tab_id}&deviceTypeList={device_type}"
                     try:
                         resp = self._request('GET', url, headers=self._get_headers())
-                        if resp.status_code == 200:
-                            data = resp.json().get('data', [])
+                        body = resp.json() if resp.status_code == 200 else None
+                        if isinstance(body, dict) and body.get('code') in (None, 0):
+                            data = body.get('data') or []
                             for muscle_group in data:
                                 for action in muscle_group.get('actionLibraryGroupList', []):
                                     # Tag with category info and device source
@@ -686,6 +717,11 @@ class SpeedianceClient:
         Splits weights from counterweight2 cleanly (the fix for the vendor's 'Parameter Error')."""
         imperial = bool(self.credentials.get("unit"))
         validate_workout(name, exercises, imperial)
+        if template_id not in (None, "") and not valid_record_id(str(template_id)):
+            raise ValueError("template id must be a single id of letters, digits, - or _")
+        if _has_cable_load(exercises) and not unit_is_confirmed(self.credentials):
+            raise ValueError("the account's unit (kg or lb) has not been confirmed: choose it on /settings once, "
+                             "then loads can be saved")  # the vendor does not expose it, and a wrong guess is 2.2x
         exercises = [{**ex, "groupId": _group_id(ex.get("groupId"), "groupId")} for ex in exercises]
         group_ids = sorted({ex['groupId'] for ex in exercises})
         details = self.get_batch_details(group_ids, strict=True)
@@ -829,8 +865,8 @@ class SpeedianceClient:
             "bgColor": 0
         }
 
-        if template_id:
-            payload['id'] = int(template_id)
+        if template_id not in (None, ""):
+            payload['id'] = int(template_id) if str(template_id).isdigit() else str(template_id)  # ids may be opaque
         return payload
 
     def save_workout(self, name, exercises, template_id=None):

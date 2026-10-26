@@ -52,7 +52,7 @@ class Resp:
 def make_client(unit=0):
     with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-client-")}):
         client = api_client.SpeedianceClient()
-    client.save_config("42", "vendor-token", "Global", unit, "", 1, False, [], [])
+    client.save_config("42", "vendor-token", "Global", unit, "", 1, False, [], [], unit_confirmed=True)
     return client
 
 
