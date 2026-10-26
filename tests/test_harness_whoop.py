@@ -239,12 +239,18 @@ class Tokens(unittest.TestCase):
         )
         procs = [subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                  for _ in range(5)]
-        deadline = time.monotonic() + 30
-        while len(list(Path(self.dir.name).glob("ready.*"))) < len(procs):  # barrier: start the race together
-            self.assertLess(time.monotonic(), deadline, "child processes never became ready")
-            time.sleep(0.01)
-        (Path(self.dir.name) / "go").touch()
-        results = [p.communicate(timeout=60) + (p.returncode,) for p in procs]
+        try:
+            deadline = time.monotonic() + 30
+            while len(list(Path(self.dir.name).glob("ready.*"))) < len(procs):  # barrier: start the race together
+                self.assertLess(time.monotonic(), deadline, "child processes never became ready")
+                time.sleep(0.01)
+            (Path(self.dir.name) / "go").touch()
+            results = [p.communicate(timeout=60) + (p.returncode,) for p in procs]
+        finally:
+            for child in procs:  # never leave barrier-waiting children behind if a sibling died before 'ready'
+                if child.poll() is None:
+                    child.kill()
+                child.communicate()
         for out, err, code in results:
             self.assertEqual((code, out.strip()), (0, "r2"), err)
         self.assertEqual(calls.read_text().split(), ["r1"], "the stale refresh token must be spent exactly once")
@@ -292,6 +298,74 @@ class Tokens(unittest.TestCase):
         self.assertEqual(attempts, ["whoop.token.json", "whoop.token.json"])
         self.assertFalse(self.store.pending_path.exists())
         self.assertEqual(self.store.load()["refresh_token"], "r2")
+
+    def test_a_stale_pending_file_never_shadows_newer_tokens(self):
+        from unittest import mock
+        real = whoop.localsecrets.write_json_private
+
+        def main_fails(path, data):
+            if Path(path) == self.store.path:
+                raise OSError("disk full")
+            return real(path, data)
+
+        with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=main_fails):
+            self.store.save({"access_token": "a2", "refresh_token": "r2"})  # lands in .pending
+        self.assertTrue(self.store.pending_path.exists())
+        # manual re-authorisation writes newer tokens to the MAIN file without going through our unlink
+        real(self.store.path, {"access_token": "a3", "refresh_token": "r3", "saved_at_ns": time.time_ns() + 1})
+        self.assertEqual(self.store.load()["refresh_token"], "r3")
+        calls = []
+        got = self.store.refresh_if_still_stale("r3", lambda old: calls.append(old) or {"access_token": "a4", "refresh_token": "r4"})
+        self.assertEqual((calls, got["refresh_token"]), (["r3"], "r4"), "r3 is current: it must be refreshed, not skipped")
+        self.assertEqual(self.store.load()["refresh_token"], "r4")
+
+    def test_a_newer_main_file_saved_elsewhere_beats_a_stale_pending_file(self):
+        """Another process saved successfully (real timestamp) but did not remove OUR .pending: newest must still win."""
+        import shutil
+        from unittest import mock
+        real = whoop.localsecrets.write_json_private
+
+        def main_fails(path, data):
+            if Path(path) == self.store.path:
+                raise OSError("disk full")
+            return real(path, data)
+
+        with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=main_fails):
+            self.store.save({"access_token": "a2", "refresh_token": "r2"})   # -> .pending, stamped now
+        elsewhere = whoop.TokenStore(Path(self.dir.name) / "other" / "whoop.token.json")
+        elsewhere.save({"access_token": "a3", "refresh_token": "r3"})        # stamped LATER by the real code path
+        shutil.copy(elsewhere.path, self.store.path)
+        self.assertEqual(self.store.load()["refresh_token"], "r3")
+
+    def test_public_save_takes_the_lock(self):
+        import fcntl
+        from unittest import mock
+        holder = os.open(self.store.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        try:
+            with mock.patch.object(whoop, "LOCK_TIMEOUT_S", 0.2), self.assertRaises(SourceDown) as ctx:
+                self.store.save({"access_token": "a2", "refresh_token": "r2"})
+            self.assertIn("lock busy", str(ctx.exception))
+        finally:
+            os.close(holder)
+        self.assertEqual(self.store.load()["refresh_token"], "r1", "nothing may be written without the lock")
+
+    def test_malformed_refresh_responses_become_sanitised_errors(self):
+        import traceback
+        for bad in (None, ["not", "a", "dict"], {"access_token": "a", "refresh_token": "r", "x": object()}):
+            try:
+                try:
+                    raise ValueError("outer-401-secret-token")
+                except ValueError:
+                    self.store.refresh_if_still_stale("r1", lambda old, bad=bad: bad)
+            except (SourceDown, SourceAuthError) as err:
+                text = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+                if not isinstance(bad, dict):
+                    self.assertIn("not a JSON object", str(err), repr(bad))
+            else:
+                self.fail(f"no error for {bad!r}")
+            self.assertNotIn("secret", text, repr(bad))
+            self.assertEqual(self.store.load()["refresh_token"], "r1")
 
     def test_unsavable_tokens_raise_source_down_not_an_auth_error(self):
         from unittest import mock

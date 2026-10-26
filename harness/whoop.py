@@ -114,31 +114,49 @@ class TokenStore:
         self.pending_path = self.path.with_name(self.path.name + ".pending")
 
     def load(self) -> dict | None:
-        """The newest tokens: a `.pending` file (written when the main file could not be) wins over the main file."""
-        return localsecrets.read_json_private(self.pending_path) or localsecrets.read_json_private(self.path)
+        """The newest tokens. `.pending` exists only when the main file could not be written; whichever of the two was
+        saved LATER (by `saved_at_ns`) wins, so a stale pending file can never shadow a newer main file."""
+        candidates = [t for t in (localsecrets.read_json_private(self.pending_path),
+                                  localsecrets.read_json_private(self.path)) if t]
+        return max(candidates, key=lambda t: t.get("saved_at_ns", 0), default=None)
 
     def save(self, tokens: dict) -> None:
-        """Persist a rotated pair. WHOOP has already invalidated the old refresh token, so losing this write would
+        """Persist a rotated pair under the same cross-process lock the refresher uses."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            self._lock(fd)
+            self._save_locked(tokens)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def _save_locked(self, tokens: dict) -> None:
+        """Caller holds the lock. WHOOP has already invalidated the old refresh token, so losing this write would
         force a full re-authorisation: retry once, then fall back to a `.pending` file, and only then give up."""
+        if not isinstance(tokens, dict):
+            raise SourceDown(SOURCE, "refresh response was not a JSON object")
         for key in ("access_token", "refresh_token"):
             if not tokens.get(key):
                 raise SourceDown(SOURCE, f"refresh response lacked {key}")
+        stamped = {**tokens, "saved_at_ns": time.time_ns()}
         for attempt in range(2):
             try:
-                localsecrets.write_json_private(self.path, tokens)
+                localsecrets.write_json_private(self.path, stamped)
                 self.pending_path.unlink(missing_ok=True)
                 return
             except OSError:
                 time.sleep(0.1 * attempt)
         try:
-            localsecrets.write_json_private(self.pending_path, tokens)
+            localsecrets.write_json_private(self.pending_path, stamped)
         except OSError:
             raise SourceDown(SOURCE, "token refresh succeeded but the new tokens could not be saved anywhere "
                                      "(disk full or permissions): WHOOP must be re-authorised") from None
 
     @staticmethod
-    def _lock(fd: int, timeout_s: float = LOCK_TIMEOUT_S) -> None:
+    def _lock(fd: int, timeout_s: float | None = None) -> None:
         """Take the exclusive lock, giving up after `timeout_s` so a hung refresher cannot hang every caller."""
+        timeout_s = LOCK_TIMEOUT_S if timeout_s is None else timeout_s  # read at call time so tests can shorten it
         deadline = time.monotonic() + timeout_s
         while True:
             try:
@@ -173,9 +191,11 @@ class TokenStore:
                 failure = type(err).__name__  # keep only the class name
             if failure is None and down is None:
                 try:
-                    self.save(fresh)  # a local persistence failure is NOT an auth failure: it keeps its own class
+                    self._save_locked(fresh)  # a local persistence failure is NOT an auth failure: own class
                 except SourceDown as err:
                     down = err
+                except Exception as err:  # noqa: BLE001 - e.g. an unserialisable value in the refresh response
+                    failure = type(err).__name__
             # Raise OUTSIDE the except blocks, always `from None`: refresh_fn's exception stays out of the chain, and
             # an exception the CALLER is handling (e.g. the 401 that triggered the refresh) is not printed either.
             if down is not None:
