@@ -258,32 +258,6 @@ class Tokens(unittest.TestCase):
         self.assertEqual(calls.read_text().split(), ["r1"], "the stale refresh token must be spent exactly once")
         self.assertEqual(self.store.load()["refresh_token"], "r2")
 
-    def test_a_failed_save_after_a_successful_refresh_does_not_lose_the_new_tokens(self):
-        from unittest import mock
-        real = whoop.localsecrets.write_json_private
-
-        def flaky(path, data):
-            if Path(path) == self.store.path:
-                raise OSError("disk full")
-            return real(path, data)
-
-        calls = []
-
-        def refresh(old):
-            calls.append(old)
-            return {"access_token": "a2", "refresh_token": "r2"}
-
-        with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=flaky):
-            got = self.store.refresh_if_still_stale("r1", refresh)
-        self.assertEqual(got["refresh_token"], "r2")
-        self.assertEqual(self.store.load()["refresh_token"], "r2", "the pending file must be picked up")
-        self.assertEqual(oct(self.store.pending_path.stat().st_mode & 0o777), "0o600")
-        again = self.store.refresh_if_still_stale("r1", refresh)  # a second caller still holding r1
-        self.assertEqual((calls, again["refresh_token"]), (["r1"], "r2"))
-        self.store.save({"access_token": "a3", "refresh_token": "r3"})  # disk recovered
-        self.assertFalse(self.store.pending_path.exists())
-        self.assertEqual(self.store.load()["refresh_token"], "r3")
-
     def test_a_transient_write_failure_is_retried_into_the_main_file(self):
         from unittest import mock
         real = whoop.localsecrets.write_json_private
@@ -298,55 +272,7 @@ class Tokens(unittest.TestCase):
         with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=once_flaky):
             self.store.save({"access_token": "a2", "refresh_token": "r2"})
         self.assertEqual(attempts, ["whoop.token.json", "whoop.token.json"])
-        self.assertFalse(self.store.pending_path.exists())
         self.assertEqual(self.store.load()["refresh_token"], "r2")
-
-    def test_a_stale_pending_file_never_shadows_newer_tokens(self):
-        from unittest import mock
-        real = whoop.localsecrets.write_json_private
-
-        def main_fails(path, data):
-            if Path(path) == self.store.path:
-                raise OSError("disk full")
-            return real(path, data)
-
-        with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=main_fails):
-            self.store.save({"access_token": "a2", "refresh_token": "r2"})  # lands in .pending
-        self.assertTrue(self.store.pending_path.exists())
-        # manual re-authorisation (or another process) writes a NEWER revision to the main file, leaving .pending behind
-        real(self.store.path, {"access_token": "a3", "refresh_token": "r3", "rev": 99})
-        self.assertEqual(self.store.load()["refresh_token"], "r3")
-        calls = []
-        got = self.store.refresh_if_still_stale("r3", lambda old: calls.append(old) or {"access_token": "a4", "refresh_token": "r4"})
-        self.assertEqual((calls, got["refresh_token"]), (["r3"], "r4"), "r3 is current: it must be refreshed, not skipped")
-        self.assertEqual(self.store.load()["refresh_token"], "r4")
-        self.assertFalse(self.store.pending_path.exists())
-
-    def test_ordering_survives_the_wall_clock_going_backwards(self):
-        from unittest import mock
-        real = whoop.localsecrets.write_json_private
-
-        def main_fails(path, data):
-            if Path(path) == self.store.path:
-                raise OSError("disk full")
-            return real(path, data)
-
-        with mock.patch.object(whoop.time, "time_ns", side_effect=[10**18, 10**9, 5, 4, 3, 2]):  # NTP step backwards
-            with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=main_fails):
-                self.store.save({"access_token": "a2", "refresh_token": "r2"})
-                self.store.save({"access_token": "a3", "refresh_token": "r3"})
-            self.assertEqual(self.store.load()["refresh_token"], "r3")
-            self.store.save({"access_token": "a4", "refresh_token": "r4"})  # disk recovered
-        self.assertEqual(self.store.load()["refresh_token"], "r4")
-        self.assertFalse(self.store.pending_path.exists())
-
-    def test_every_save_bumps_the_revision(self):
-        revs = []
-        for n in range(2, 5):
-            self.store.save({"access_token": f"a{n}", "refresh_token": f"r{n}"})
-            revs.append(self.store.load()["rev"])
-        self.assertEqual(revs, sorted(set(revs)), "revisions must strictly increase")
-        self.assertGreater(revs[0], 1, "the setUp save was revision 1")
 
     def test_public_save_takes_the_lock(self):
         import fcntl
@@ -379,6 +305,11 @@ class Tokens(unittest.TestCase):
                 self.fail(f"no error for {bad!r}")
             self.assertNotIn("secret", text, repr(bad))
             self.assertEqual(self.store.load()["refresh_token"], "r1")
+
+    def test_there_is_exactly_one_token_file(self):
+        """No side files except the lock: nothing to order, nothing to shadow."""
+        self.store.save({"access_token": "a2", "refresh_token": "r2"})
+        self.assertEqual(sorted(p.name for p in Path(self.dir.name).iterdir()), ["whoop.token.json", "whoop.token.json.lock"])
 
     def test_unsavable_tokens_raise_source_down_not_an_auth_error(self):
         from unittest import mock

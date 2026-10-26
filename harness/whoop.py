@@ -112,15 +112,10 @@ class TokenStore:
     def __init__(self, path):
         self.path = pathlib.Path(path)
         self.lock_path = self.path.with_name(self.path.name + ".lock")
-        self.pending_path = self.path.with_name(self.path.name + ".pending")
 
     def load(self) -> dict | None:
-        """The newest tokens. `.pending` exists only when the main file could not be written. Both carry a `rev`
-        counter that every save bumps under the lock (max(existing revs) + 1), so order never depends on the wall
-        clock; on a tie the main file wins."""
-        candidates = [t for t in (localsecrets.read_json_private(self.path),
-                                  localsecrets.read_json_private(self.pending_path)) if t]
-        return max(candidates, key=lambda t: t.get("rev", 0), default=None)
+        """The stored tokens. One file, replaced atomically, so a reader always sees a complete pair."""
+        return localsecrets.read_json_private(self.path)
 
     def save(self, tokens: dict) -> None:
         """Persist a rotated pair under the same cross-process lock the refresher uses."""
@@ -134,31 +129,23 @@ class TokenStore:
             os.close(fd)
 
     def _save_locked(self, tokens: dict) -> None:
-        """Caller holds the lock. WHOOP has already invalidated the old refresh token, so losing this write would
-        force a full re-authorisation: retry once, then fall back to a `.pending` file, and only then give up."""
+        """Caller holds the lock. WHOOP has already invalidated the old refresh token, so a lost write forces a full
+        re-authorisation: retry once, then say so plainly. (A second 'pending' file was tried and removed: two files
+        need an ordering rule, and every ordering rule had an interleaving that returned a dead token.)"""
         if not isinstance(tokens, dict):
             raise SourceDown(SOURCE, "refresh response was not a JSON object")
         for key in ("access_token", "refresh_token"):
             value = tokens.get(key)
             if not isinstance(value, str) or not value or len(value) > MAX_TOKEN_LEN:
                 raise SourceDown(SOURCE, f"refresh response had a missing or malformed {key}")
-        try:
-            newest = self.load()
-        except (OSError, ValueError):  # an unreadable file must not block saving the new pair
-            newest = None
-        stamped = {**tokens, "rev": (newest or {}).get("rev", 0) + 1}
         for attempt in range(2):
             try:
-                localsecrets.write_json_private(self.path, stamped)
-                self.pending_path.unlink(missing_ok=True)
+                localsecrets.write_json_private(self.path, tokens)
                 return
             except OSError:
                 time.sleep(0.1 * attempt)
-        try:
-            localsecrets.write_json_private(self.pending_path, stamped)
-        except OSError:
-            raise SourceDown(SOURCE, "token refresh succeeded but the new tokens could not be saved anywhere "
-                                     "(disk full or permissions): WHOOP must be re-authorised") from None
+        raise SourceDown(SOURCE, "token refresh succeeded but the new tokens could not be saved "
+                                 "(disk full or permissions): WHOOP must be re-authorised") from None
 
     @staticmethod
     def _lock(fd: int, timeout_s: float | None = None) -> None:
