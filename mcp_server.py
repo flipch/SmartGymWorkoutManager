@@ -328,19 +328,21 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
 
 @mcp.tool()
 def create_workout_from_program(program: dict, day_index: int = None,
-                                name: str = None, dry_run: bool = True) -> dict:
+                                name: str = None, dry_run: bool = True, load_unit: str = None) -> dict:
     """Import a generated program (the `generate_program` result) into REAL Speediance workout
     templates. Resolves each exercise name to a library groupId, builds the sets payload, and
     saves it. dry_run defaults to TRUE (preview only: shows the resolution, saves nothing); pass dry_run=false to save, which also requires the server to have writes enabled. day_index saves a
     single day; omit it to save every day as its own template. Unresolved exercises are
-    reported, never silently dropped. This is the one-call 'generate then save to my gym' path."""
+    reported, never silently dropped. load_unit ('kg' or 'lb') is required when the program carries
+    loads (it is converted to the kg the template API stores); every number is range-checked before
+    anything is written. This is the one-call 'generate then save to my gym' path."""
     def run():
         if not dry_run:
             _require_writes()
         c = _client(); _require_auth(c)
         if not isinstance(program, dict) or not program.get("days"):
             return {"error": "no_program", "message": "Pass a generate_program result as `program`."}
-        return apply_program(c, program, day_index, name, dry_run)
+        return apply_program(c, program, day_index, name, dry_run, load_unit)
     return _safe(run)
 
 

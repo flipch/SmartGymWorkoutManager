@@ -21,6 +21,7 @@ import os
 import re
 
 import coach
+from api_client import validate_workout
 from auth import writes_enabled
 import state_io
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize
@@ -821,7 +822,22 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
     return {"groupId": best[1], "matched_name": best[2], "muscle": best[3], "confidence": conf}
 
 
-def program_day_to_payload(library, day):
+def _to_api_kg(load, load_unit):
+    """A coach load -> the kg the template API stores. Same rounding as the web editor (static/workout-logic.js)."""
+    return round(load / 2.2 * 2) / 2 if load_unit == "lb" else load
+
+
+def _program_loads(day):
+    out = []
+    for e in day.get("exercises", []):
+        try:
+            out.append(float(e.get("load") or 0))
+        except (TypeError, ValueError):
+            raise ValueError("every exercise load must be a number") from None
+    return out
+
+
+def program_day_to_payload(library, day, load_unit=None):
     """Build save_workout's exercises payload for one program day + a resolution report."""
     exercises, resolved, unresolved = [], [], []
     for e in day.get("exercises", []):
@@ -830,7 +846,7 @@ def program_day_to_payload(library, day):
             unresolved.append({"name": e.get("name"), "muscle": e.get("primary")})
             continue
         n_sets = int(e.get("sets") or 0)
-        sets = [{"reps": int(e.get("reps") or 0), "weight": float(e.get("load") or 0),
+        sets = [{"reps": int(e.get("reps") or 0), "weight": _to_api_kg(float(e.get("load") or 0), load_unit),
                  "rest": int(e.get("rest_sec") or 90), "unit": "reps"} for _ in range(n_sets)]
         exercises.append({"groupId": r["groupId"], "sets": sets})
         resolved.append({"coach_name": e.get("name"), "groupId": r["groupId"],
@@ -841,8 +857,11 @@ def program_day_to_payload(library, day):
 MAX_WORKOUT_NAME = 80
 
 
-def apply_program(client, program, day_index=None, name=None, dry_run=True):
-    """Resolve + (optionally) save a generated program's day(s) as Speediance templates."""
+def apply_program(client, program, day_index=None, name=None, dry_run=True, load_unit=None):
+    """Resolve + (optionally) save a generated program's day(s) as Speediance templates.
+
+    load_unit ("kg" or "lb") says what unit the program's loads are in; it is required when any load is above zero,
+    because the template API stores kg and a pound figure saved as kilograms would be 2.2x too heavy."""
     days = program.get("days")
     if not isinstance(days, list) or not days or not all(isinstance(d, dict) for d in days):
         raise ValueError("program.days must be a non-empty list of days")
@@ -854,25 +873,38 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True):
         raise ValueError(f"day_index must be an integer from 0 to {len(days) - 1}")
     if name is not None and (not isinstance(name, str) or not name.strip() or len(name) > MAX_WORKOUT_NAME):
         raise ValueError(f"name must be 1-{MAX_WORKOUT_NAME} characters")
+    if load_unit is not None and load_unit not in ("kg", "lb"):
+        raise ValueError("load_unit must be 'kg' or 'lb'")
+    if load_unit is None and any(x > 0 for _, d in targets for x in _program_loads(d)):
+        raise ValueError("this program has loads: say whether they are in 'kg' or 'lb' (load_unit)")
     library = client.get_library() or []
     results = []
-    for idx, day in targets:
-        exercises, resolved, unresolved = program_day_to_payload(library, day)
+    prepared = []
+    for idx, day in targets:  # build and validate every day before anything is written: all-or-nothing on bad numbers
+        exercises, resolved, unresolved = program_day_to_payload(library, day, load_unit)
         day_label = day.get('name', 'Day ' + str(idx + 1))
         nm = ((f"{name.strip()} — {day_label}" if len(targets) > 1 else name.strip()) if name
               else f"{program.get('goal_label', 'Workout')} — {day_label}")
+        if exercises:
+            validate_workout(nm, exercises)
+        prepared.append((idx, nm, exercises, resolved, unresolved))
+    for idx, nm, exercises, resolved, unresolved in prepared:
         entry = {"day_index": idx, "name": nm, "exercise_count": len(exercises),
                  "resolved": resolved, "unresolved": unresolved, "created": False}
         if not dry_run and exercises:
             try:
                 resp = client.save_workout(nm, exercises)
-                entry["created"] = True
-                data = resp.get("data") if isinstance(resp, dict) else None
-                if isinstance(data, dict):
-                    entry["template_id"] = data.get("id") or data.get("templateId")
-                    entry["code"] = data.get("code")
-                elif data:
-                    entry["template_id"] = data
+                if not isinstance(resp, dict) or resp.get("code") != 0:  # the vendor may answer 200 with an error code
+                    entry["error"] = "UpstreamRejected"
+                    entry["upstream_code"] = resp.get("code") if isinstance(resp, dict) else None
+                else:
+                    entry["created"] = True
+                    data = resp.get("data")
+                    if isinstance(data, dict):
+                        entry["template_id"] = data.get("id") or data.get("templateId")
+                        entry["code"] = data.get("code")
+                    elif data:
+                        entry["template_id"] = data
             except Exception as e:
                 entry["error"] = type(e).__name__
         results.append(entry)
@@ -885,7 +917,8 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True):
 @features_bp.route('/api/coach/apply', methods=['POST'])
 def coach_apply():
     """Import a generated program into the user's Speediance workouts. Body:
-    {program:<generate_program output>, day_index?:int, name?:str, dry_run?:bool (default true)}."""
+    {program:<generate_program output>, day_index?:int, name?:str, dry_run?:bool (default true),
+    load_unit?:"kg"|"lb" (required when the program carries loads)}."""
     if not _authed():
         return jsonify({"error": "not_authenticated",
                         "message": "Log in at /settings to save to your Speediance account."}), 401
@@ -898,7 +931,8 @@ def coach_apply():
     if not dry_run and not writes_enabled():
         return jsonify({"error": "writes_disabled", "message": "Set GYM_ALLOW_WRITES=1 to save to Speediance."}), 403
     try:
-        return jsonify(apply_program(_client, program, body.get("day_index"), body.get("name"), dry_run))
+        return jsonify(apply_program(_client, program, body.get("day_index"), body.get("name"), dry_run,
+                                     body.get("load_unit")))
     except ValueError as e:
         return jsonify({"error": "bad_request", "message": str(e)}), 400
     except Exception as e:

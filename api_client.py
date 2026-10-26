@@ -1,3 +1,4 @@
+import math
 import time
 import json
 import requests
@@ -18,6 +19,71 @@ def _d(value) -> str:
     if not valid_iso_date(text):
         raise ValueError("date must be YYYY-MM-DD")
     return text
+
+
+class UpstreamError(Exception):
+    """Speediance could not be reached, or answered with an error: never to be read as "no data"."""
+
+
+def _require_ok(resp, what):
+    """Raise unless the vendor accepted a write: HTTP < 400 and, when the body carries a `code`, code == 0."""
+    if resp.status_code == 401:
+        raise Exception("Unauthorized")
+    if resp.status_code >= 400:
+        raise UpstreamError(f"{what} failed (HTTP {resp.status_code})")
+    try:
+        body = resp.json()
+    except ValueError:
+        return  # an empty 2xx body is a plain success
+    if isinstance(body, dict) and body.get('code') not in (None, 0):
+        raise UpstreamError(f"{what} was rejected (code {body.get('code')})")
+
+
+# What reaches the machine is bounded here, whatever the caller (web form, MCP agent, coach program). The numbers
+# mirror the web editor's own limits (static/workout-logic.js): custom loads are kg, up to 100 (50 on one cable).
+MAX_EXERCISES, MAX_SETS, MAX_REPS, MAX_SECONDS, MAX_REST_S = 30, 20, 99, 3600, 300
+MAX_WEIGHT_KG, MAX_WEIGHT_KG_UNILATERAL, MAX_PRESET_RM, MAX_LEVEL = 100.0, 50.0, 20, 10
+MAX_TEMPLATE_NAME = 100
+
+
+def _bounded(value, what, hi):
+    if isinstance(value, bool):
+        raise ValueError(f"{what} must be a number")
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{what} must be a number") from None
+    if not math.isfinite(x) or not 0 <= x <= hi:
+        raise ValueError(f"{what} must be between 0 and {hi:g}")
+    return x
+
+
+def validate_workout(name, exercises):
+    """Refuse a workout whose numbers could be wrong by an order of magnitude (NaN, negative, wrong unit, runaway counts).
+    Messages name the field and the position, never the value."""
+    if not isinstance(name, str) or not name.strip() or len(name) > MAX_TEMPLATE_NAME:
+        raise ValueError(f"name must be 1-{MAX_TEMPLATE_NAME} characters")
+    if not isinstance(exercises, list) or not 1 <= len(exercises) <= MAX_EXERCISES:
+        raise ValueError(f"exercises must be a list of 1-{MAX_EXERCISES}")
+    for n, ex in enumerate(exercises, 1):
+        if not isinstance(ex, dict) or not isinstance(ex.get('sets'), list) or not 1 <= len(ex['sets']) <= MAX_SETS:
+            raise ValueError(f"exercise {n}: needs 1-{MAX_SETS} sets")
+        preset = ex.get('preset_id')
+        stat = _bounded(ex.get('data_stat_type') or 0, f"exercise {n}: data_stat_type", 100)
+        for m, st in enumerate(ex['sets'], 1):
+            if not isinstance(st, dict):
+                raise ValueError(f"exercise {n} set {m}: must be an object")
+            where = f"exercise {n} set {m}"
+            seconds = str(st.get('unit', 'reps')).lower() == 'sec'
+            _bounded(st.get('reps') or 0, f"{where}: reps", MAX_SECONDS if seconds else MAX_REPS)
+            _bounded(st.get('rest') or 0, f"{where}: rest", MAX_REST_S)
+            if stat == 6:
+                hi = MAX_LEVEL
+            elif preset in (None, -1, "-1"):
+                hi = MAX_WEIGHT_KG
+            else:
+                hi = MAX_PRESET_RM
+            _bounded(st.get('weight') or 0, f"{where}: weight", hi)
 
 
 class SpeedianceClient:
@@ -434,7 +500,8 @@ class SpeedianceClient:
 
     def delete_workout(self, template_id):
         url = f"{self.base_url}/api/app/customTrainingTemplate?ids={_q(template_id, ',')}"
-        self._request('DELETE', url, headers=self._get_headers())
+        resp = self._request('DELETE', url, headers=self._get_headers())
+        _require_ok(resp, "delete")
 
     def get_exercise_detail(self, exercise_id):
         url = f"{self.base_url}/api/app/actionLibraryGroup/{_q(exercise_id)}?isDisplay=1"
@@ -468,13 +535,24 @@ class SpeedianceClient:
         url = f"{self.base_url}/api/app/v5/trainingCalendar/monthNew?date={_q(date_str)}&selectedDeviceType={self.device_type}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            return resp.json().get('data', [])
         except Exception as e:
-            if str(e) == "Unauthorized": raise e
-            print(f"Error fetching calendar: {e}")
-            return []
+            if str(e) == "Unauthorized":
+                raise
+            raise UpstreamError(f"calendar fetch failed ({type(e).__name__})") from None
+        if resp.status_code == 401:
+            raise Exception("Unauthorized")
+        if resp.status_code != 200:
+            raise UpstreamError(f"calendar fetch failed (HTTP {resp.status_code})")
+        try:
+            body = resp.json()
+        except ValueError:
+            raise UpstreamError("calendar response was not JSON") from None
+        if not isinstance(body, dict) or body.get('code') not in (None, 0):
+            raise UpstreamError("calendar request was rejected")
+        data = body.get('data', [])
+        if not isinstance(data, list):
+            raise UpstreamError("calendar response had an unexpected shape")
+        return data
 
     def schedule_workout(self, date_str, template_code, status):
         """
@@ -546,6 +624,7 @@ class SpeedianceClient:
         Behebt den 'Parameter Error' durch saubere Trennung von weights und counterweight2.
         """
         
+        validate_workout(name, exercises)
         group_ids = list(set([ex['groupId'] for ex in exercises]))
         details = self.get_batch_details(group_ids)
         
@@ -596,6 +675,8 @@ class SpeedianceClient:
                 mode = int(s.get('mode') or 1)
                 rest = int(s.get('rest') or 60)
                 unit = str(s.get('unit', 'reps')).lower()
+                if is_unilateral and preset_id == -1 and data_stat_type != 6 and weight_val > MAX_WEIGHT_KG_UNILATERAL:
+                    raise ValueError(f"exercise {group_id}: a single-cable load must be at most {MAX_WEIGHT_KG_UNILATERAL:g} kg")
 
                 # Unilateral Logic
                 if is_unilateral:

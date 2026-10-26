@@ -740,7 +740,13 @@ def create():
 
 @app.route('/delete/<int:id>', methods=['POST'])
 def delete(id):
-    client.delete_workout(id)
+    try:
+        client.delete_workout(id)
+    except Exception as e:
+        # the vendor refused or was unreachable: the workout still exists, so do not say it was deleted
+        flash("Could not delete the workout." if str(e) != "Unauthorized" else "Session expired. Please login again.",
+              "error")
+        return redirect(url_for('index'))
     flash("Workout deleted.", "info")
     return redirect(url_for('index'))
 

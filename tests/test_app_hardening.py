@@ -150,7 +150,7 @@ class RealFlaskApp(unittest.TestCase):
         body = {"program": {"days": [{"name": "d", "exercises": []}]}}
         seen = []
         with mock.patch.object(features, "_authed", return_value=True), \
-                mock.patch.object(features, "apply_program", side_effect=lambda *a: seen.append(a[-1]) or {"ok": True}):
+                mock.patch.object(features, "apply_program", side_effect=lambda *a: seen.append(a[4]) or {"ok": True}):
             for value in (None, 0, "", "false", True, "no"):
                 self.c.post("/api/coach/apply", headers=BASIC, json={**body, "dry_run": value})
             self.c.post("/api/coach/apply", headers=BASIC, json=body)  # omitted

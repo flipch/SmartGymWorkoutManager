@@ -308,7 +308,8 @@ class StrictApply(unittest.TestCase):
         self.client = mock.Mock()
         self.client.get_library.return_value = []
         patcher = mock.patch.object(features, "program_day_to_payload",
-                                    return_value=([{"groupId": 1, "sets": []}], [], []))
+                                    return_value=([{"groupId": 1, "sets": [{"reps": 10, "weight": 0, "rest": 60}]}], [], []))
+        self.client.save_workout.return_value = {"code": 0, "data": {"id": 1}}
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -348,7 +349,7 @@ class StrictApply(unittest.TestCase):
                 features.apply_program(self.client, self.program, 0, name)
 
     def test_partial_failure_is_reported_and_leaks_no_text(self):
-        self.client.save_workout.side_effect = [{"data": {"id": 1}}, RuntimeError("https://api/secret?token=1"), {"data": 3}]
+        self.client.save_workout.side_effect = [{"code": 0, "data": {"id": 1}}, RuntimeError("https://api/secret?token=1"), {"code": 0, "data": 3}]
         out = features.apply_program(self.client, self.program, None, None, dry_run=False)
         self.assertEqual((out["created"], out["failed"], out["partial"]), (2, 1, True))
         self.assertEqual(out["results"][1]["error"], "RuntimeError")
