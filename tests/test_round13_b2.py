@@ -71,6 +71,36 @@ class AvoidedExercisesStayAvoided(unittest.TestCase):
         self.assertEqual(names(prog), [])
 
 
+class UnilateralSummaryUsesTheMachineTotal(unittest.TestCase):
+    """Real shape from a Barbell Bulgarian Split Squat set: weights 74 (both cables), left/right 37 each, capacity 888/12 reps."""
+
+    def row(self, side, **info):
+        return {"leftRight": side, "finishedCount": 12, "targetCount": 12, "capacity": 888, "trainingInfoDetail": info}
+
+    def test_total_first_so_the_web_matches_the_editor_and_the_harness(self):
+        from harness.normalize import set_load
+        row = self.row(1, weights=[74.0] * 12, leftWeights=[37.0] * 12, rightWeights=[37.0] * 12)
+        self.assertEqual(features._summarize_set(row, True)["weight"], 74.0)
+        self.assertEqual(features._summarize_set(row, True)["weight"], set_load(row))
+        self.assertEqual(features._summarize_set(self.row(2, **row["trainingInfoDetail"]), True)["weight"], 74.0)
+
+    def test_the_trained_sides_array_is_only_a_fallback(self):
+        self.assertEqual(features._summarize_set(self.row(1, leftWeights=[37.0] * 12), True)["weight"], 37.0)
+        self.assertEqual(features._summarize_set(self.row(2, rightWeights=[36.0] * 12), True)["weight"], 36.0)
+        self.assertEqual(features._summarize_set(self.row(1, leftWeights=[], weights=[]), True)["weight"], 74.0)  # capacity/reps
+
+    def test_the_side_label_is_kept(self):
+        self.assertEqual(features._summarize_set(self.row(1, weights=[74.0]), True)["side"], "L")
+        self.assertEqual(features._summarize_set(self.row(2, weights=[74.0]), True)["side"], "R")
+
+    def test_a_bilateral_set_is_unchanged(self):
+        self.assertEqual(features._summarize_set(self.row(0, weights=[40.0] * 12), False)["weight"], 40.0)
+
+    def test_a_mid_set_change_is_still_summarised(self):
+        out = features._summarize_set(self.row(1, weights=[74.0] * 8 + [60.0] * 4), True)
+        self.assertEqual((out["weight"], out["weight_note"]), ([74.0, 60.0], "8x74.0, 4x60.0"))
+
+
 class Resp:
     def __init__(self, status=200, body=None):
         self.status_code, self._body, self.text = status, body, ""
@@ -104,6 +134,13 @@ class HistoryReadsFailLoudly(unittest.TestCase):
             for status in (400, 403, 404, 429, 500, 502, 503):
                 with self.assertRaises(api_client.UpstreamError, msg=status):
                     self.run_call(call, Resp(status, {"message": "down"}))
+
+    def test_a_non_200_is_an_error_even_with_a_success_looking_body(self):
+        """A gateway can answer 502/503 with a cached or templated body: only the status says it failed."""
+        for call in self.CALLS:
+            for status in (201, 204, 301, 404, 500, 502, 503):
+                with self.assertRaises(api_client.UpstreamError, msg=status):
+                    self.run_call(call, Resp(status, {"code": 0, "data": [] if call is not self.CALLS[2] else {}}))
 
     def test_a_401_stays_unauthorized(self):
         for call in self.CALLS:

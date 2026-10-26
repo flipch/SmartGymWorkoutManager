@@ -1043,13 +1043,15 @@ def _unit_label(client):
 def _summarize_set(s, unilateral):
     d = s.get("trainingInfoDetail") or {}
     side = {1: "L", 2: "R"}.get(s.get("leftRight")) if unilateral else None
+    # `weights` is the machine's own load for the set (74 on a barbell split squat whose cables each carry 37), the figure the
+    # editor and harness/normalize.py use; a trained side's array is only a fallback for a set that has no `weights`.
     warr = None
-    if unilateral and s.get("leftRight") == 1 and d.get("leftWeights"):
+    if d.get("weights"):
+        warr = d["weights"]
+    elif unilateral and s.get("leftRight") == 1 and d.get("leftWeights"):
         warr = d["leftWeights"]
     elif unilateral and s.get("leftRight") == 2 and d.get("rightWeights"):
         warr = d["rightWeights"]
-    elif d.get("weights"):
-        warr = d["weights"]
     reps = s.get("finishedCount") or 0
     tgt = s.get("targetCount") or 0
     cap = s.get("capacity") or 0
