@@ -110,7 +110,9 @@ def _group_id(value, where):
 def _has_cable_load(exercises):
     """Is any set a kg/lb cable load (not a preset RM, not a Vita level)? Those are the numbers a wrong unit corrupts."""
     for ex in exercises:
-        if ex.get('preset_id') not in (None, -1, "-1") or int(ex.get('data_stat_type') or 0) == 6:
+        raw_preset = ex.get('preset_id')  # normalised exactly as prepare_workout does ("-01" is -1, a custom load)
+        preset = -1 if raw_preset is None else int(raw_preset)
+        if preset != -1 or int(ex.get('data_stat_type') or 0) == 6:
             continue
         if any(float(st.get('weight') or 0) > 0 for st in ex['sets']):
             return True
@@ -404,7 +406,7 @@ class SpeedianceClient:
         
         # Clear credentials but keep region/unit/instructions
         self.save_config(
-            "",
+            self.credentials.get('user_id', ''),  # keep WHO this was: a re-login as the same account keeps its unit choice
             "",
             self.region,
             self.credentials.get('unit', 0),
@@ -547,6 +549,10 @@ class SpeedianceClient:
                     if str(e) == "Unauthorized": raise
                     incomplete = True
                     continue
+
+                returned = {str(d.get('id')) for d in details if isinstance(d, dict)}
+                if any(str(i) not in returned for i in chunk_ids):  # a 200 that silently dropped exercises is a hole too
+                    incomplete = True
 
                 # Re-attach category info
                 for d in details:
@@ -746,6 +752,8 @@ class SpeedianceClient:
             data_stat_type = int(ex.get('data_stat_type') or 0)
             
             is_unilateral = unilateral_check.get(group_id, False)
+            if is_unilateral and len(sets) % 2:  # the machine alternates left, right: a lone set is one-sided work
+                raise ValueError(f"exercise {group_id}: a one-sided exercise needs left/right pairs (an even number of sets)")
 
             user_variant_id = ex.get('variant_id')
             real_variant_id = int(user_variant_id) if user_variant_id and str(user_variant_id).isdigit() else id_map.get(str(ex['groupId']))

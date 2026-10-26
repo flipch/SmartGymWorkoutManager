@@ -64,6 +64,13 @@ def ex(weight, group=7, **kw):
     return {"groupId": group, "sets": [{"reps": 10, "weight": weight, "rest": 60, "unit": "reps"}], **kw}
 
 
+def pair(weight, group=7):
+    """A one-sided exercise needs left/right pairs: two sets."""
+    out = ex(weight, group)
+    out["sets"] = out["sets"] * 2
+    return out
+
+
 def saving_client(unit, unilateral=False, calls=None):
     """A client whose library lookups succeed and whose POST is captured."""
     client = make_client(unit)
@@ -107,10 +114,10 @@ class TheTemplateApiStoresTheAccountsUnit(unittest.TestCase):
             client.save_workout("n", [ex(150)])  # a pound figure in a kg account
 
     def test_one_cable_caps_follow_the_unit(self):
-        saving_client(1, unilateral=True).save_workout("n", [ex(110)])
+        saving_client(1, unilateral=True).save_workout("n", [pair(110)])
         for unit, over in ((1, 110.5), (0, 50.5)):
             with self.assertRaises(ValueError) as ctx:
-                saving_client(unit, unilateral=True).save_workout("n", [ex(over)])
+                saving_client(unit, unilateral=True).save_workout("n", [pair(over)])
             self.assertIn("single-cable", str(ctx.exception))
             self.assertIn("lb" if unit else "kg", str(ctx.exception))
 
@@ -208,7 +215,7 @@ class SavingNeverDropsOrFakesAnything(unittest.TestCase):
         calls = []
         client = make_client(0)
         client._request = self.vendor("never-matches", calls)
-        client.save_workout("x", [ex(40)])
+        client.save_workout("x", [pair(40)])
         self.assertEqual(len([c for c in calls if c[0] == "POST"]), 1)
 
     def test_string_group_ids_are_the_same_exercise_and_get_the_same_caps(self):

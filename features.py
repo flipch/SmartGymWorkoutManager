@@ -18,6 +18,7 @@ import glob
 import hashlib
 from collections import defaultdict
 import json
+import math
 import os
 import re
 
@@ -39,6 +40,14 @@ def init_features(client):
 
 def _authed():
     return bool(_client and _client.credentials.get("token"))
+
+
+def _epoch_to_local(ts):
+    """A vendor timestamp as local wall time; seconds and milliseconds are both seen, so both are accepted."""
+    n = float(ts)
+    if n > 10_000_000_000:
+        n /= 1000
+    return datetime.fromtimestamp(n)
 
 
 def _parse_date(v):
@@ -70,7 +79,10 @@ def _parse_date(v):
 _PREFERRED_DATE_KEYS = ("startTimestamp", "startTime", "trainingDate", "date", "endTimestamp", "endTime")
 
 
-def _extract_date(rec):
+_BOOKKEEPING = ("create", "update", "modif", "delet")
+
+
+def _extract_date(rec, skip_bookkeeping=False):
     if not isinstance(rec, dict):
         return None
     for k in _PREFERRED_DATE_KEYS:  # when the session happened, not when its record was created (createTime)
@@ -80,6 +92,8 @@ def _extract_date(rec):
                 return d
     for k, v in rec.items():
         kl = str(k).lower()
+        if skip_bookkeeping and any(t in kl for t in _BOOKKEEPING):
+            continue
         if any(t in kl for t in ('date', 'time', 'day')):
             d = _parse_date(v)
             if d:
@@ -250,7 +264,7 @@ def _deep_insights(days=90, max_sessions=24):
         ts = r.get("startTimestamp")
         if not ts:
             continue
-        wk = _iso_week(datetime.fromtimestamp(ts).date())
+        wk = _iso_week(_epoch_to_local(ts).date())
         weekly[wk]["sessions"] += 1
         weekly[wk]["tonnage"] += round(r.get("totalCapacity") or 0)
         weekly[wk]["calories"] += round(r.get("calorie") or 0)
@@ -314,7 +328,7 @@ def _named_date(node):
     """A date the node carries under a key actually named like a date (date, thatDay, scheduleDate...), not createTime."""
     for k, v in node.items():
         kl = str(k).lower()
-        if any(t in kl for t in ("create", "update", "modif", "delet")):  # bookkeeping, not when it is scheduled
+        if any(t in kl for t in _BOOKKEEPING):  # bookkeeping, not when it is scheduled
             continue
         if "date" in kl or kl in ("thatday", "day"):
             d = _parse_date(v)
@@ -328,7 +342,7 @@ def _walk_events(node, out, inherited=None):
     ({date, trainingPlanList: [{title, ...}]}), so a plan without its own date takes its day's. Once an event is found
     its own children (exercises, ...) are not events."""
     if isinstance(node, dict):
-        d = _named_date(node) or inherited or _extract_date(node)  # a plan's createTime must not beat its day's date
+        d = _named_date(node) or inherited or _extract_date(node, skip_bookkeeping=True)  # createTime is never a schedule date
         name = None
         for k, v in node.items():
             kl = str(k).lower()
@@ -558,9 +572,18 @@ def save_readiness(payload, data_dir=None):
     keep = state_io.validate_readiness(payload)
     if not keep:
         raise ValueError("no readiness signal supplied")
-    keep["updated"] = state_io.utc_stamp()
-    state_io.atomic_write_json(_readiness_path(data_dir), keep)
-    return keep
+    now = state_io.utc_stamp()
+    # "any subset" is the documented use (separate WHOOP and Apple Health shortcuts): a later partial post must not erase
+    # an earlier red signal, so recent fields from earlier posts are kept, each with its own age
+    carried = _fresh_fields(_load_readiness(data_dir))
+    merged = {k: v for k, v in carried.items() if not k.endswith("__ts")}
+    stamps = {k: carried[f"{k}__ts"] for k in merged}
+    merged.update(keep)
+    stamps.update({k: now for k in keep})
+    merged["updated"] = now
+    merged["field_updated"] = {k: stamps[k] for k in READINESS_KEYS if k in merged and k in stamps}
+    state_io.atomic_write_json(_readiness_path(data_dir), merged)
+    return merged
 
 
 def readiness_age_hours(stored, now=None):
@@ -571,13 +594,35 @@ def readiness_age_hours(stored, now=None):
     return ((now or datetime.now(timezone.utc)) - when).total_seconds() / 3600
 
 
+def _fresh_fields(stored, now=None):
+    """The signal fields of a stored reading whose OWN age is within the window (older ones are dropped), each returned
+    with a `<key>__ts` stamp so a caller can carry it forward."""
+    out = {}
+    stamps = (stored or {}).get("field_updated") or {}
+    for k in READINESS_KEYS:
+        if k not in (stored or {}):
+            continue
+        stamp = stamps.get(k) or stored.get("updated")
+        when = state_io.parse_stamp(stamp)
+        if when is None:
+            continue
+        age = ((now or datetime.now(timezone.utc)) - when).total_seconds() / 3600
+        if -1 <= age <= state_io.READINESS_MAX_AGE_H:
+            out[k] = stored[k]
+            out[f"{k}__ts"] = stamp
+    return out
+
+
 def _fresh_readiness(data_dir=None):
     """The stored readiness ONLY if it is recent: yesterday's recovery score must not autoregulate today."""
     stored = _load_readiness(data_dir)
     age = readiness_age_hours(stored)
     if age is None or age > state_io.READINESS_MAX_AGE_H or age < -1:
         return {}
-    return stored
+    fresh = {k: v for k, v in _fresh_fields(stored).items() if not k.endswith("__ts")}
+    if not fresh:
+        return {}
+    return {**fresh, "updated": stored.get("updated"), "field_updated": stored.get("field_updated") or {}}
 
 
 def _coach_workout_to_exercises(detail):
@@ -644,6 +689,16 @@ def coach_autoregulate():
     return jsonify(coach.autoregulate(readiness))
 
 
+def _all_finite(value):
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        return all(_all_finite(v) for v in value.values())
+    if isinstance(value, list):
+        return all(_all_finite(v) for v in value)
+    return True
+
+
 @features_bp.route('/api/coach/program', methods=['POST'])
 def coach_program():
     body = json_object(request.get_json(silent=True))
@@ -657,6 +712,8 @@ def coach_program():
         stored = _fresh_readiness()
         if any(k in stored for k in state_io.READINESS_SIGNALS):
             readiness = stored
+    if not _all_finite(body):  # 1e999 parses to Infinity, which no JSON client can read back
+        return jsonify({"error": "bad_request", "message": "Numbers must be finite."}), 400
     feedback = body.get("feedback")
     if feedback is None and body.get("use_stored_feedback", True):
         prof = _feedback_profile()
@@ -674,7 +731,7 @@ def coach_program():
             available_accessories=body.get("available_accessories"),
             feedback=feedback,
         )
-    except (TypeError, ValueError, AttributeError, KeyError):
+    except (TypeError, ValueError, AttributeError, KeyError, OverflowError):
         return jsonify({"error": "bad_request", "message": "Invalid program parameters."}), 400
     if feedback_error:  # the stored pain/avoid list could not be read: say so instead of silently dropping it
         prog["feedback_error"] = feedback_error
@@ -811,7 +868,7 @@ def coach_critique():
     mode = body.get("mode", "session")
     try:
         return jsonify(coach.critique_workout(exercises, goal, mode))
-    except (TypeError, ValueError, AttributeError, KeyError):
+    except (TypeError, ValueError, AttributeError, KeyError, OverflowError):
         return jsonify({"error": "bad_request", "message": "Invalid exercises."}), 400
 
 
@@ -947,6 +1004,10 @@ def program_day_to_payload(library, day, load_unit=None, imperial=False, avoid=f
         r = resolve_exercise(library, e.get("name", ""), e.get("primary"), e.get("unilateral"))
         if not r:
             unresolved.append({"name": e.get("name"), "muscle": e.get("primary")})
+            continue
+        if r.get("confidence") == "low":  # a wrong exercise is worse than a missing one: report it, do not save it
+            unresolved.append({"name": e.get("name"), "muscle": e.get("primary"),
+                               "reason": f"only a low-confidence library match ({r.get('matched_name')})"})
             continue
         if coach._is_avoided(r["matched_name"], avoid) or coach._is_avoided(e.get("name", ""), avoid):
             # the library match may be an exercise the user reported pain on, even if the coach's own name is not
@@ -1171,7 +1232,11 @@ def _fmt_secs(s):
 
 
 def _unit_label(client):
-    return "lbs" if (client and client.credentials.get("unit")) else "kg"
+    """The unit the account's weights are in; "unconfirmed" until someone has chosen (a default 0 proves nothing)."""
+    creds = getattr(client, "credentials", None) if client else None
+    if isinstance(creds, dict) and creds.get("unit"):
+        return "lbs"
+    return "kg" if unit_is_confirmed(creds) else "unconfirmed"
 
 
 def _summarize_set(s, unilateral):
@@ -1234,7 +1299,7 @@ def _summarize_session(record, detail, unit):
     return {
         "training_id": record.get("trainingId"), "name": record.get("title") or "Workout",
         "type": label,
-        "date": datetime.fromtimestamp(ts).isoformat() if ts else None,  # local wall time, no misleading "Z"
+        "date": _epoch_to_local(ts).isoformat() if ts else None,  # local wall time, no misleading "Z"
         "duration": _fmt_secs(record.get("trainingTime")), "duration_sec": record.get("trainingTime"),
         "calories": round(record.get("calorie") or 0),
         "volume": round(record.get("totalCapacity") or 0), "unit": unit,

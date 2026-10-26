@@ -3,6 +3,8 @@ is a hole in the library; the MATCHED exercise decides left/right; opaque templa
 refused; an ACWR-only reading reaches the program."""
 import base64
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -416,6 +418,215 @@ class CalendarHeuristicsIgnoreBookkeepingKeys(unittest.TestCase):
     def test_a_week_label_on_the_day_does_not_hide_its_plans(self):
         node = {"date": "2026-10-27", "weekName": "Tuesday", "trainingPlanList": [{"title": "Push"}]}
         self.assertEqual(self.walk(node), [("2026-10-27", "Push")])
+
+
+class Round17ServerSide(unittest.TestCase):
+    def test_a_denormalised_preset_id_is_still_a_custom_load_for_the_gate(self):
+        client = client_with(0, False)
+        for preset in ("-01", " -1", -1, "-1", None):
+            with self.assertRaises(ValueError, msg=repr(preset)) as ctx:
+                client.prepare_workout("n", [ex(20, **({} if preset is None else {"preset_id": preset}))])
+            self.assertIn("/settings", str(ctx.exception))
+        client.prepare_workout("n", [ex(10, preset_id="1")])  # a real RM preset is not a kg/lb load
+        client.prepare_workout("n", [ex(10, preset_id=1)])
+
+    def test_the_gate_and_the_serializer_agree_on_every_preset_spelling(self):
+        client = client_with(1, True)
+        for preset in ("-01", "-1", -1):
+            self.assertEqual(client.prepare_workout("n", [ex(20, preset_id=preset)])["actionLibraryList"][0]["templatePresetId"], -1)
+
+    def test_a_batch_that_drops_an_exercise_is_a_hole(self):
+        with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-lib-")}):
+            client = api_client.SpeedianceClient()
+        client.save_config("1", "tok", "Global", 0, "", 1, False, [], [])
+        client.library_cache = None
+        client.get_categories = lambda strict=False: [{"id": 1, "name": "A"}]
+        client._request = lambda m, u, **kw: Resp(200, {"code": 0, "data": [{"actionLibraryGroupList": [
+            {"id": 7, "name": "Press"}, {"id": 8, "name": "Row"}]}]})
+        client.get_batch_details = lambda ids, strict=False: [{"id": 7, "name": "Press"}]  # 8 silently missing
+        with self.assertRaises(api_client.UpstreamError):
+            client.get_library(strict=True)
+        self.assertFalse(os.path.exists(client.library_cache_file))
+        client.get_batch_details = lambda ids, strict=False: [{"id": i, "name": "x"} for i in ids]
+        self.assertEqual(sorted(e["id"] for e in client.get_library(strict=True)), [7, 8])
+
+    def test_a_calendar_node_with_only_a_creation_time_is_not_an_event(self):
+        out = []
+        features._walk_events({"title": "Push", "createTime": "2026-01-05"}, out)
+        self.assertEqual(out, [])
+        features._walk_events({"title": "Push", "startTime": "2026-10-27 18:00:00"}, out)
+        self.assertEqual([(str(d), n) for d, n in out], [("2026-10-27", "Push")])
+
+
+class ReadinessPartialUpdatesMerge(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="gym-ready-")
+
+    def test_a_later_partial_post_does_not_erase_an_earlier_red_signal(self):
+        import coach
+        features.save_readiness({"whoop_recovery": 20}, self.dir)
+        merged = features.save_readiness({"sleep_hours": 8}, self.dir)
+        self.assertEqual((merged["whoop_recovery"], merged["sleep_hours"]), (20, 8))
+        self.assertEqual(coach.autoregulate(features._fresh_readiness(self.dir))["band"], "low")
+
+    def test_a_newer_value_for_the_same_field_wins(self):
+        features.save_readiness({"whoop_recovery": 20}, self.dir)
+        self.assertEqual(features.save_readiness({"whoop_recovery": 90}, self.dir)["whoop_recovery"], 90)
+
+    def test_each_field_ages_out_on_its_own(self):
+        from datetime import datetime, timedelta, timezone
+        old = (datetime.now(timezone.utc) - timedelta(hours=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        new = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        import json as _json
+        with open(features._readiness_path(self.dir), "w") as f:
+            _json.dump({"whoop_recovery": 20, "sleep_hours": 8, "updated": new, "field_updated": {"whoop_recovery": old, "sleep_hours": new}}, f)
+        fresh = features._fresh_readiness(self.dir)
+        self.assertNotIn("whoop_recovery", fresh)  # three days old: not today's recovery
+        self.assertEqual(fresh["sleep_hours"], 8)
+        saved = features.save_readiness({"subjective": 3}, self.dir)
+        self.assertNotIn("whoop_recovery", saved)
+        self.assertEqual((saved["sleep_hours"], saved["subjective"]), (8, 3))
+
+    def test_a_carried_field_keeps_its_own_age(self):
+        from datetime import datetime, timedelta, timezone
+        import json as _json
+        old = (datetime.now(timezone.utc) - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(features._readiness_path(self.dir), "w") as f:
+            _json.dump({"whoop_recovery": 20, "updated": old, "field_updated": {"whoop_recovery": old}}, f)
+        saved = features.save_readiness({"sleep_hours": 8}, self.dir)
+        self.assertEqual(saved["field_updated"]["whoop_recovery"], old)  # not refreshed by an unrelated post
+        self.assertNotEqual(saved["field_updated"]["sleep_hours"], old)
+
+    def test_a_reading_from_before_per_field_stamps_uses_its_single_stamp(self):
+        import json as _json
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(features._readiness_path(self.dir), "w") as f:
+            _json.dump({"whoop_recovery": 30, "updated": now}, f)
+        self.assertEqual(features._fresh_readiness(self.dir)["whoop_recovery"], 30)
+        self.assertEqual(features.save_readiness({"sleep_hours": 7}, self.dir)["whoop_recovery"], 30)
+
+
+class TheUnitSurvivesALogoutOfTheSameAccountOnly(unittest.TestCase):
+    def test_logout_then_the_same_account_keeps_the_choice(self):
+        client = client_with(1, True)
+        client._request = lambda *a, **k: Resp(200, {})
+        client.logout()
+        self.assertEqual(client.credentials["token"], "")
+        client.save_config("42", "new-token", "Global", 1, "", 1, False, [], [])
+        self.assertEqual((client.credentials["unit"], client.credentials["unit_confirmed"]), (1, True))
+
+    def test_logout_then_another_account_does_not_inherit_it(self):
+        client = client_with(1, True)
+        client._request = lambda *a, **k: Resp(200, {})
+        client.logout()
+        client.save_config("999", "tok", "Global", 1, "", 1, False, [], [])
+        self.assertEqual((client.credentials["unit"], client.credentials["unit_confirmed"]), (0, False))
+
+    def test_the_label_never_calls_an_unchosen_unit_kilograms(self):
+        self.assertEqual(features._unit_label(client_with(1, False)), "lbs")
+        self.assertEqual(features._unit_label(client_with(0, True)), "kg")
+        self.assertEqual(features._unit_label(client_with(0, False)), "unconfirmed")
+        self.assertEqual(features._unit_label(None), "unconfirmed")
+
+    def test_whoami_says_unknown_for_an_unchosen_unit(self):
+        tool = getattr(mcp_server.whoami, "fn", mcp_server.whoami)
+        for client, expect in ((client_with(0, False), "unknown"), (client_with(0, True), "metric"), (client_with(1, False), "imperial")):
+            with mock.patch.object(mcp_server, "_client", return_value=client):
+                self.assertEqual(tool()["unit"], expect)
+
+    def test_the_settings_page_does_not_preselect_metric_for_an_unchosen_unit(self):
+        client = client_with(0, False)
+        with mock.patch.object(gym_app, "client", client):
+            html = gym_app.app.test_client().get("/settings", headers=BASIC).get_data(as_text=True)
+        self.assertIn("Not set: choose yours", html)
+        client = client_with(0, True)
+        with mock.patch.object(gym_app, "client", client):
+            html = gym_app.app.test_client().get("/settings", headers=BASIC).get_data(as_text=True)
+        self.assertNotIn("Not set: choose yours", html)
+
+
+class NonFiniteNumbersAreFourHundreds(unittest.TestCase):
+    def post(self, path, body):
+        fake = mock.Mock(data_dir=tempfile.mkdtemp(prefix="gym-body-"), credentials={"token": "x"})
+        with mock.patch.object(features, "_client", fake), mock.patch.object(features, "_authed", return_value=False):
+            return gym_app.app.test_client().post(path, headers=BASIC, data=body, content_type="application/json")
+
+    def test_infinity_and_overflowing_numbers(self):
+        huge = "9" * 400  # an integer no float can hold
+        for path, body in (("/api/coach/program", '{"days_per_week": Infinity}'), ("/api/coach/program", '{"one_rm": {"chest": 1e999}}'),
+                           ("/api/coach/program", '{"days_per_week": NaN}'),
+                           ("/api/coach/program", '{"one_rm": {"chest": %s}}' % huge),
+                           ("/api/coach/critique", '{"exercises": [{"name": "A", "sets": Infinity, "reps": 5}]}'),
+                           ("/api/coach/critique", '{"exercises": [{"name": "A", "sets": 3, "reps": Infinity}]}')):
+            resp = self.post(path, body)
+            self.assertEqual(resp.status_code, 400, (path, body[:60]))
+
+    def test_huge_counts_are_clamped_not_crashed(self):
+        huge = "9" * 400
+        for path, body in (("/api/coach/program", '{"days_per_week": %s}' % huge),
+                           ("/api/coach/critique", '{"exercises": [{"name": "A", "sets": %s, "reps": 5}]}' % huge)):
+            self.assertLess(self.post(path, body).status_code, 500, path)
+
+    def test_ordinary_numbers_still_work(self):
+        self.assertEqual(self.post("/api/coach/program", '{"days_per_week": 3, "goal": "muscle"}').status_code, 200)
+
+
+class OneSidedExercisesNeedPairs(unittest.TestCase):
+    def client(self):
+        client = client_with(1, True)
+        client.is_exercise_unilateral = lambda gid, **kw: True
+        return client
+
+    def test_an_odd_number_of_sets_is_refused_and_pairs_pass(self):
+        client = self.client()
+        three = ex(40)
+        three["sets"] = three["sets"] * 3
+        with self.assertRaises(ValueError) as ctx:
+            client.prepare_workout("n", [three])
+        self.assertIn("left/right pairs", str(ctx.exception))
+        four = ex(40)
+        four["sets"] = four["sets"] * 4
+        self.assertEqual(client.prepare_workout("n", [four])["actionLibraryList"][0]["leftRight"], "1,2,1,2")
+
+    def test_bilateral_exercises_may_have_any_count(self):
+        client = client_with(1, True)
+        three = ex(40)
+        three["sets"] = three["sets"] * 3
+        self.assertEqual(client.prepare_workout("n", [three])["actionLibraryList"][0]["leftRight"], "0,0,0")
+
+
+class OnlyConfidentLibraryMatchesAreSaved(unittest.TestCase):
+    def test_a_low_confidence_match_is_reported_not_saved(self):
+        day = {"name": "D", "exercises": [{"name": "Cable chest press", "primary": "chest", "sets": 3, "reps": 8, "load": 0, "rest_sec": 60}]}
+        with mock.patch.object(features, "resolve_exercise",
+                               return_value={"groupId": 9, "matched_name": "Overhead Press", "confidence": "low"}):
+            exercises, resolved, unresolved = features.program_day_to_payload([], day, "kg", False)
+        self.assertEqual((exercises, resolved), ([], []))
+        self.assertIn("low-confidence", unresolved[0]["reason"])
+        self.assertIn("Overhead Press", unresolved[0]["reason"])
+        for conf in ("med", "high"):
+            with mock.patch.object(features, "resolve_exercise", return_value={"groupId": 9, "matched_name": "x", "confidence": conf}):
+                self.assertEqual(len(features.program_day_to_payload([], day, "kg", False)[0]), 1)
+
+
+class VendorTimestampsInSecondsOrMilliseconds(unittest.TestCase):
+    def test_both_units_give_the_same_local_time(self):
+        self.assertEqual(features._epoch_to_local(1790000000), features._epoch_to_local(1790000000000))
+
+    def test_a_session_summary_survives_millisecond_timestamps(self):
+        for ts in (1790000000, 1790000000000):
+            out = features._summarize_session({"startTimestamp": ts, "type": 5, "trainingId": 1}, {}, "kg")
+            self.assertTrue(out["date"].startswith("2026-"), out["date"])
+
+
+@unittest.skipUnless(shutil.which("node"), "node is required")
+class TemplateHandlersRunUnderNode(unittest.TestCase):
+    def test_the_real_editor_browse_and_calendar_handlers_pass(self):
+        root = os.path.join(os.path.dirname(__file__), "..")
+        out = subprocess.run([shutil.which("node"), "--test", os.path.join(root, "tests", "templates-ui.test.mjs")],
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stdout[-2000:] + out.stderr[-500:])
 
 
 if __name__ == "__main__":

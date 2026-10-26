@@ -185,11 +185,11 @@ class LoadsAreBoundedBeforeAnythingIsSent(unittest.TestCase):
         client.get_batch_details = lambda ids, **kw: [{"id": 7, "actionLibraryList": [{"id": 70}]}]
         client.is_exercise_unilateral = lambda gid, **kw: True
         with self.assertRaises(ValueError) as ctx:
-            client.save_workout("n", [good_ex(sets=[good_set(weight=50.5)])])
+            client.save_workout("n", [good_ex(sets=[good_set(weight=50.5)] * 2)])
         self.assertIn("single-cable", str(ctx.exception))
         client._request.assert_not_called()
         client._request.return_value = Resp(200, {"code": 0})
-        self.assertEqual(client.save_workout("n", [good_ex(sets=[good_set(weight=50)])]), {"code": 0})
+        self.assertEqual(client.save_workout("n", [good_ex(sets=[good_set(weight=50)] * 2)]), {"code": 0})
 
     def test_the_web_form_refuses_nan_without_calling_the_vendor(self):
         c = gym_app.app.test_client()

@@ -20,7 +20,7 @@ from mcp.server.mcpserver import MCPServer
 import coach
 import state_io
 from auth import BearerAuthASGI, load_token, writes_enabled
-from api_client import SpeedianceClient
+from api_client import SpeedianceClient, unit_is_confirmed
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize, valid_iso_date, valid_record_id
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
@@ -83,7 +83,7 @@ def whoami() -> dict:
         "authenticated": bool(c.credentials.get("token")),
         "user_id": c.credentials.get("user_id") or None,
         "region": c.credentials.get("region", "Global"),
-        "unit": "imperial" if c.credentials.get("unit") else "metric",
+        "unit": ("imperial" if c.credentials.get("unit") else "metric") if unit_is_confirmed(c.credentials) else "unknown",
         "device_type": c.credentials.get("device_type", 1),
     }
 
@@ -128,6 +128,8 @@ def save_workout(name: str, exercises: list, template_id: int | str | None = Non
     `exercises` is a list of dicts, each:
       {"groupId": <int exercise id from search_exercises>,
        "sets": [{"reps": 10, "weight": 20.0, "rest": 60, "unit": "reps"|"sec"}, ...]}
+    `weight` is in the ACCOUNT's unit (see whoami); the unit must have been confirmed on /settings. A one-sided
+    exercise needs an even number of sets (left, right, left, right...).
     Returns the Speediance API response."""
     def run():
         _require_writes()
@@ -182,7 +184,8 @@ def last_workout(n: int = 1, days: int = 60) -> dict:
     before, …) — the same data as the web History detail view. Each exercise lists its sets
     with reps done/target, the actual weight used (including any mid-set weight changes),
     per-set volume, L/R side for unilateral work, and the rating; plus session totals
-    (duration, calories, volume). Use this to review or critique what the user actually did."""
+    (duration, calories, volume). Only Program and Custom sessions have a per-set breakdown (Free Lift and Quick
+    sessions do not). Use this to review or critique what the user actually did."""
     def run():
         c = _client(); _require_auth(c)
         count, window = clamp_n(n, 1), clamp_days(days, 60)  # new names: assigning n/days here would shadow the arguments
@@ -196,7 +199,8 @@ def last_workout(n: int = 1, days: int = 60) -> dict:
 
 @mcp.tool()
 def recent_workouts(days: int = 30) -> dict:
-    """List recent completed workouts (name, date, duration, calories, volume, training_id)
+    """List recent completed workouts that have a per-set breakdown (Program and Custom sessions; Free Lift and Quick
+    sessions are not listed here, though the insights count them): name, date, duration, calories, volume, training_id,
     newest first — a quick index. Use last_workout or workout_session for full per-set detail."""
     def run():
         c = _client(); _require_auth(c)

@@ -350,6 +350,7 @@
             const weights = (apiEx.weights || "").toString().split(',');
             const counters = (apiEx.counterweight2 || "").toString().split(',');
             const levels = (apiEx.level || "").toString().split(',');
+            const countTypes = (apiEx.countType || apiEx.completionMethod || "").toString().split(',');
             const isVita = Number(meta.dataStatType) === 6 || Number(apiEx.dataStatType) === 6;
             const modes = (apiEx.sportMode || "").toString().split(',');
             const breaks = (apiEx.breakTime2 || "").toString().split(',');
@@ -386,8 +387,8 @@
                     reps: parseInt(rep),
                     weight: w,
                     mode: parseInt(modes[i] || 1),
-                    rest: parseInt(breaks[i] || 60),
-                    unit: 'reps' 
+                    rest: Number.isNaN(parseInt(breaks[i])) ? 60 : parseInt(breaks[i]),
+                    unit: String(countTypes[i] || '').trim() === '2' ? 'sec' : 'reps'  // a saved timed set stays timed
                 };
             });
 
@@ -1250,7 +1251,7 @@ You must output a JSON object with the following structure:
                         reps: parseInt(s.reps),
                         weight: parseFloat(String(s.weight ?? 0).replace(',', '.')),
                         mode: parseInt(s.mode || 1),
-                        rest: parseInt(s.rest || 60),
+                        rest: (s.rest === undefined || s.rest === null || Number.isNaN(parseInt(s.rest))) ? 60 : parseInt(s.rest),  // 0 s is a real rest
                         unit: 'reps'
                     }));
 
@@ -1261,8 +1262,9 @@ You must output a JSON object with the following structure:
                     const finalSets = parseImportedSets(setsParsed, meta.isUnilateral, alreadyExpanded);
 
                     // Determine the preset: use the exported preset field if present, else default to Custom (-1).
-                    const importedPresetId = (ex.preset !== undefined && ex.preset !== null)
-                        ? parseInt(ex.preset)
+                    const presetField = (ex.preset !== undefined && ex.preset !== null) ? ex.preset : ex.presetId;  // the AI prompt asks for presetId
+                    const importedPresetId = (presetField !== undefined && presetField !== null && !Number.isNaN(parseInt(presetField)))
+                        ? parseInt(presetField)
                         : -1;
 
                     workoutData.push({

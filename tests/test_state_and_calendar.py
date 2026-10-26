@@ -223,7 +223,7 @@ class ReadinessStore(unittest.TestCase):
     def test_round_trip_is_validated_and_stamped(self):
         d = fresh_dir()
         keep = features.save_readiness({"whoop_recovery": 55, "junk": 1}, d)
-        self.assertEqual(set(keep), {"whoop_recovery", "updated"})
+        self.assertEqual(set(keep), {"whoop_recovery", "updated", "field_updated"})
         self.assertEqual(features._load_readiness(d), keep)
 
     def test_invalid_does_not_overwrite_the_previous_reading(self):

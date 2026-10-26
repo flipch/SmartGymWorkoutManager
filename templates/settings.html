@@ -33,7 +33,9 @@
         <label class="block text-sm font-bold mb-2 text-gray-300">Unit System</label>
         <div class="flex gap-2">
             <select name="unit" class="flex-grow p-2 bg-gray-700 rounded text-white border border-gray-600">
-                <option value="0" {% if creds.unit == 0 %}selected{% endif %}>Metric (KG)</option>
+                {% set unit_known = creds.unit_confirmed or creds.unit == 1 %}
+                {% if not unit_known %}<option value="" selected disabled>Not set: choose yours</option>{% endif %}
+                <option value="0" {% if unit_known and creds.unit == 0 %}selected{% endif %}>Metric (KG)</option>
                 <option value="1" {% if creds.unit == 1 %}selected{% endif %}>Imperial (LBS)</option>
             </select>
             <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Save</button>

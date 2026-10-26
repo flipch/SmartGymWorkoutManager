@@ -484,8 +484,24 @@
         if (data.type === 'move') {
             if (data.originalDate === targetDate) return; // Dropped on same day
 
-            // 1. Delete from old date
+            // 1. Add to the new date FIRST: whatever fails afterwards, the workout is still booked somewhere
             try {
+                const addResp = await fetch('/api/schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        date: targetDate,
+                        templateCode: data.code,
+                        status: 1 // Add
+                    })
+                });
+                const addResult = await addResp.json();
+                if (!addResult.success) {
+                    alert('Failed to move workout (could not add it to the new date; it is still on the old one): ' + (addResult.error || 'Unknown error'));
+                    return;
+                }
+
+                // 2. Remove from the old date
                 const delResp = await fetch('/api/schedule', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -497,28 +513,9 @@
                 });
                 const delResult = await delResp.json();
                 if (!delResult.success) {
-                    alert('Failed to move workout (could not remove from original date): ' + (delResult.error || 'Unknown error'));
-                    return;
+                    alert('The workout is now on the new date but could not be removed from the old one: ' + (delResult.error || 'Unknown error'));
                 }
-
-                // 2. Add to new date
-                const addResp = await fetch('/api/schedule', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        date: targetDate,
-                        templateCode: data.code,
-                        status: 1 // Add
-                    })
-                });
-                const addResult = await addResp.json();
-                
-                if (addResult.success) {
-                    fetchCalendarData();
-                } else {
-                    alert('Failed to move workout (removed from old date but failed to add to new): ' + (addResult.error || 'Unknown error'));
-                    fetchCalendarData(); // Refresh anyway
-                }
+                fetchCalendarData();
 
             } catch (error) {
                 console.error('Error moving workout:', error);

@@ -278,6 +278,7 @@
         try {
             const resp = await fetch(`/api/browse/course/${courseId}`);
             const data = await resp.json();
+            if (currentCourseId !== courseId) return;  // a slower answer for a course that is no longer shown
             document.getElementById('courseModalLoading').classList.add('hidden');
             renderCourseDetail(data);
         } catch (err) {
@@ -488,9 +489,12 @@
         document.getElementById('courseModalCalories').textContent = '-';
         document.getElementById('courseModalVolume').textContent = '-';
 
+        currentCourseId = courseId;  // scheduling targets the course the modal SHOWS
+        resetScheduleUI();
         fetch(`/api/browse/course/${courseId}`)
             .then(r => r.json())
             .then(data => {
+                if (currentCourseId !== courseId) return;  // a slower answer for a course that is no longer shown
                 document.getElementById('courseModalLoading').classList.add('hidden');
                 renderCourseDetail(data);
             })
@@ -511,7 +515,8 @@
         document.getElementById('scheduleBtn').classList.add('hidden');
         document.getElementById('scheduleDatePicker').classList.remove('hidden');
         const dateInput = document.getElementById('scheduleDate');
-        dateInput.min = new Date().toISOString().split('T')[0];
+        const now = new Date();  // the LOCAL date: toISOString() is UTC and skips a day in the evening west of Greenwich
+        dateInput.min = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         dateInput.value = '';
     }
 
