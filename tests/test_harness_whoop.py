@@ -198,6 +198,24 @@ class Tokens(unittest.TestCase):
         self.assertIsNone(ctx.exception.__context__, "the original exception (and its text) must not be reachable")
         self.assertEqual(self.store.load()["refresh_token"], "r1")
 
+    def test_traceback_never_prints_the_callers_in_flight_exception(self):
+        """The 401 that triggers a refresh may carry token text; it must not be printed via exception chaining."""
+        import traceback
+
+        def boom(old):
+            raise ValueError("refresh-body-secret")
+
+        try:
+            try:
+                raise ValueError("outer-401-secret-token")
+            except ValueError:
+                self.store.refresh_if_still_stale("r1", boom)
+        except SourceAuthError as err:
+            text = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+        self.assertNotIn("secret", text)
+        self.assertNotIn("During handling of the above exception", text)
+        self.assertNotIn("direct cause", text)
+
     def test_a_hung_refresher_cannot_block_everyone_forever(self):
         import fcntl
         self.store.path.parent.mkdir(parents=True, exist_ok=True)

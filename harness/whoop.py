@@ -157,7 +157,9 @@ class TokenStore:
             except Exception as err:  # noqa: BLE001
                 failure = type(err).__name__  # keep only the class name; raising outside this block drops __context__
             if failure:
-                raise SourceAuthError(SOURCE, f"token refresh failed: {failure}")
+                # `from None` hides any exception the CALLER is handling (e.g. the 401 that triggered the refresh) from
+                # tracebacks; raising outside our own except block keeps refresh_fn's exception out of the chain.
+                raise SourceAuthError(SOURCE, f"token refresh failed: {failure}") from None
             self.save(fresh)
             return fresh
         finally:

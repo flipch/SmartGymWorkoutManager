@@ -97,6 +97,13 @@ class RealFlaskApp(unittest.TestCase):
             self.assertEqual(self.c.post("/delete/1", headers={**browser, "Origin": "https://evil.example",
                                                                "X-Forwarded-Host": "gym.example.com"}).status_code, 403)
 
+    def test_malformed_forwarded_host_cannot_whitelist_a_null_origin(self):
+        from auth import allowed_origins, cross_site
+        for xfh in (", x", ",", " ", ""):
+            hosts = allowed_origins("localhost", xfh, " , ,")
+            self.assertNotIn("", hosts, repr(xfh))
+            self.assertTrue(cross_site({"Origin": "null"}, hosts), repr(xfh))
+
     def test_delete_and_logout_are_no_longer_get_requests(self):
         self.assertEqual(self.c.get("/delete/1", headers=BASIC).status_code, 405)
         self.assertEqual(self.c.get("/logout", headers=BASIC).status_code, 405)

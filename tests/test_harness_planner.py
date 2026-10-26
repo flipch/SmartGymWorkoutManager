@@ -207,14 +207,27 @@ class HistoryTrust(unittest.TestCase):
         for name in ("Dual-Handle Bench Press", "Standing Tricep Rope Overhead Triceps Extension (Main Frame)",
                      "Kneeling Dual-Handle Triceps Dips", "Standing Dual-Handle Chest Fly"):
             self.assertTrue(planner._same_exercise(name, name.upper().replace("-", " ")), name)
-        self.assertTrue(planner._same_exercise("Tricep Rope Pushdown (Main Frame)", "tricep rope pushdown"))
         self.assertFalse(planner._same_exercise("", ""))
+        self.assertFalse(planner._same_exercise("(Seated)", "(Standing)"))
 
-    def test_a_load_finer_than_the_plate_grid_is_never_rounded_to_zero(self):
-        for band in ("low", "moderate", "high"):
-            load, _ = planner._progress(0.3, True, band, -15 if band == "low" else 0, 10)
-            self.assertGreater(load, 0, band)
-            self.assertLessEqual(load, 0.3 * 1.10 + 1e-9, band)
+    def test_variants_that_differ_only_inside_parentheses_are_different_exercises(self):
+        for a, b in (("Calf Raise (Seated)", "Calf Raise (Standing)"), ("Row (Single Arm, Left)", "Row (Single Arm, Right)"),
+                     ("Chest Press (Main Frame)", "Chest Press (Seated)"), ("Squat (Barbell)", "Squat (Smith)")):
+            self.assertFalse(planner._same_exercise(a, b), f"{a} / {b}")
+
+    def test_plural_and_hyphen_variants_of_the_same_name_still_match(self):
+        for a, b in (("Leg Press", "Leg Presses"), ("Abs Crunch", "Ab Crunch"), ("Dual-Handle Bench Press", "Bench Press (Dual Handle)"),
+                     ("Kneeling Dips", "Kneeling Dip")):
+            self.assertTrue(planner._same_exercise(a, b), f"{a} / {b}")
+
+    def test_a_load_finer_than_the_plate_grid_is_never_rounded_to_zero_or_flipped(self):
+        for last in (0.3, 0.74, 0.99):
+            for band in ("low", "moderate", "high"):
+                load, _ = planner._progress(last, True, band, -15 if band == "low" else 0, 10)
+                self.assertGreater(load, 0, (last, band))
+                self.assertLessEqual(load, last * 1.10 + 1e-9, (last, band))
+                if band != "low":
+                    self.assertGreaterEqual(load, last, f"a hold/progression must not become a drop ({last}, {band})")
 
     def test_catalog_does_not_anchor_on_a_lookalike_exercise(self):
         d = date(2026, 10, 26)

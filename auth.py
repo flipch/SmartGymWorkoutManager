@@ -87,7 +87,8 @@ def allowed_origins(host: str, forwarded_host: str | None = None, extra: str | N
     hosts = {host}
     if forwarded_host:  # a cross-site page cannot set this header on the victim's browser, so it cannot forge it
         hosts.add(forwarded_host.split(",")[0].strip())
-    hosts.update(h.strip() for h in (extra or "").split(",") if h.strip())
+    hosts.update(h.strip() for h in (extra or "").split(","))
+    hosts.discard("")  # an empty host would let Origin "null" (which parses to netloc "") through
     return hosts
 
 

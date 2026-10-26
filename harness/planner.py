@@ -35,11 +35,19 @@ def _norm(name: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", name.lower()).split())
 
 
+def _fold(word: str) -> str:
+    """Fold simple plurals so 'Presses'/'Press', 'Abs'/'Ab', 'Dips'/'Dip' compare equal (both sides use this)."""
+    if word.endswith("sses") and len(word) > 5:
+        return word[:-2]
+    if len(word) > 2 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
 def _tokens(name: str) -> frozenset[str]:
-    """Normalised word set: lowercase, punctuation and parenthetical equipment notes dropped, plurals folded."""
-    name = re.sub(r"\([^)]*\)", " ", name.lower())
-    return frozenset(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w
-                     for w in re.sub(r"[^a-z0-9 ]", " ", name).split())
+    """Normalised word set: lowercase, punctuation removed (parenthetical words are KEPT: '(Seated)' vs '(Standing)'
+    is a different movement), plurals folded."""
+    return frozenset(_fold(w) for w in re.sub(r"[^a-z0-9 ]", " ", name.lower()).split())
 
 
 def _same_exercise(a: str, b: str) -> bool:
@@ -132,7 +140,7 @@ def _progress(last: float, hit_all: bool, band: str, intensity_pct: float, max_j
     limit = interlocks.clamp_to_jump(float("inf"), last, max_jump_pct)
     if proposed <= last:
         limit = min(limit, last)
-    if proposed < ROUND_TO:  # finer than the plate grid: rounding would give 0, so keep the logged value
+    if last < 2 * ROUND_TO:  # finer than the plate grid: rounding would give 0 or flip a progression into a drop
         return min(proposed, limit), basis
     load = _round(min(proposed, limit))
     while load > limit + 1e-9:  # rounding must never break the cap
