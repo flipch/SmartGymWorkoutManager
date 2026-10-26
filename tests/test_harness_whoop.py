@@ -339,11 +339,52 @@ class Tokens(unittest.TestCase):
         got = self.store.refresh_if_still_stale("r1", lambda old: {"access_token": "a2", "refresh_token": "r2"})
         self.assertEqual(got["refresh_token"], "r2")
 
-    def test_token_files_are_fsynced_before_the_rename(self):
+    def test_token_files_are_fsynced_in_the_right_order(self):
+        """data flushed -> atomic rename -> directory entry flushed. Order matters for crash safety."""
         from unittest import mock
-        with mock.patch.object(os, "fsync", wraps=os.fsync) as fsync:
+        events = []
+        real_fsync, real_replace = os.fsync, os.replace
+
+        def fsync(fd):
+            kind = "dir" if os.path.isdir(f"/dev/fd/{fd}") else "file"
+            events.append(f"fsync-{kind}")
+            return real_fsync(fd)
+
+        def replace(src, dst):
+            events.append("replace")
+            return real_replace(src, dst)
+
+        with mock.patch.object(os, "fsync", side_effect=fsync), mock.patch.object(os, "replace", side_effect=replace):
             self.store.save({"access_token": "a2", "refresh_token": "r2"})
-        self.assertGreaterEqual(fsync.call_count, 2, "file data and the directory entry must both be flushed")
+        self.assertEqual(events, ["fsync-file", "replace", "fsync-dir"])
+
+    def test_every_failure_raised_by_whoop_py_suppresses_exception_chaining(self):
+        """Structural guard for the whole class: a raise of our error types without `from None` can print the
+        caller's in-flight exception (often a 401 that contains a token) in a traceback."""
+        import ast
+        tree = ast.parse((Path(__file__).parent.parent / "harness" / "whoop.py").read_text())
+        offenders = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) \
+                    and getattr(node.exc.func, "id", None) in ("SourceDown", "SourceAuthError", "SchemaDrift"):
+                # SchemaDrift is raised by the pure parsers (no token handling, no caller exception in flight)
+                if node.exc.func.id != "SchemaDrift" and not (isinstance(node.cause, ast.Constant) and node.cause.value is None):
+                    offenders.append(node.lineno)
+        self.assertEqual(offenders, [], f"raise without `from None` at whoop.py lines {offenders}")
+
+    def test_load_inside_an_except_block_does_not_print_the_callers_exception(self):
+        import traceback
+        for content in ("[]", "not json", ""):
+            self.store.path.write_text(content)
+            os.chmod(self.store.path, 0o600)
+            try:
+                try:
+                    raise RuntimeError("401 refresh_token=OLDSECRET")
+                except RuntimeError:
+                    self.store.load()
+            except SourceDown as err:
+                text = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+            self.assertNotIn("OLDSECRET", text, repr(content))
 
     def test_there_is_exactly_one_token_file(self):
         """No side files except the lock: nothing to order, nothing to shadow."""

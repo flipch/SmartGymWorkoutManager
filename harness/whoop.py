@@ -121,7 +121,7 @@ class TokenStore:
         except (OSError, ValueError):
             raise SourceDown(SOURCE, "token file is unreadable or corrupt (or not mode 600): re-authorise WHOOP") from None
         if data is not None and not isinstance(data, dict):
-            raise SourceDown(SOURCE, "token file is not a JSON object: re-authorise WHOOP")
+            raise SourceDown(SOURCE, "token file is not a JSON object: re-authorise WHOOP") from None
         return data
 
     def save(self, tokens: dict) -> None:
