@@ -243,11 +243,22 @@ def _swap_count(ordered):
     return swaps
 
 
+def _norm_name(value):
+    return " ".join(str(value).lower().split())
+
+
+def _is_avoided(name, avoid):
+    """An avoid entry matches an exercise when it is its name, or (4+ characters) part of it: "chest press" rules out
+    "Cable Chest Press" too. Over-excluding is the safe direction for a pain report."""
+    n = _norm_name(name)
+    return any(a == n or (len(a) >= 4 and a in n) for a in avoid)
+
+
 def _pick_for_day(focus, goal, experience, allow_eccentric, exclude=frozenset()):
     """Choose exercises covering the day's focus muscles, preferring compounds that hit
     several focus muscles, capped at a sensible session size."""
     per_muscle = EXPERIENCE[experience]["ex_per_muscle"]
-    pool = [e for e in CATALOG if e["name"].lower() not in exclude]  # exercises the user asked to avoid never get picked
+    pool = [e for e in CATALOG if not _is_avoided(e["name"], exclude)]  # exercises the user asked to avoid never get picked
     chosen, covered = [], {}
     # pass 1: one compound per focus muscle (prefer multi-focus compounds)
     for m in focus:
@@ -326,7 +337,8 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
 
     # Stateful feedback: what the user/agent reported last session adapts THIS program.
     fb = feedback_adjustment(feedback) if feedback else None
-    avoid = {a.lower() for a in (fb["avoid"] if fb else [])}
+    avoid = {_norm_name(a) for a in (fb["avoid"] if fb else []) if _norm_name(a)}
+    avoid_unmatched = sorted(a for a in avoid if not any(_is_avoided(e["name"], {a}) for e in CATALOG))
     sets_delta = fb["sets_delta"] if fb else 0
     base_rir = min(4, max(0, g["rir"][0] + (fb["rir_delta"] if fb else 0)))
 
@@ -352,7 +364,7 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
             focus = focus  # focus unchanged; catalog filter happens in selection
         picks = _pick_for_day(focus, goal, experience, exp["advanced_modes"], avoid)
         if available_accessories:
-            picks = [e for e in picks if e["accessory"] in set(available_accessories) | {"none"}] or picks
+            picks = [e for e in picks if e["accessory"] in set(available_accessories) | {"none"}]  # never fall back to gear the user lacks
         ordered = _order(picks)
         # split each muscle's per-session set target across the exercises that hit it
         counts = Counter(e["muscles"][0] for e in ordered)
@@ -400,6 +412,7 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
                           "rest_sec": list(g["rest"]), "rir": list(g["rir"])},
         "autoregulation": auto,
         "feedback_applied": fb,
+        "avoid_unmatched": avoid_unmatched,  # avoid entries that matched no catalog exercise: say so, never silently ignore
         "days": days_out,
         "weekly_sets_per_muscle": weekly_sets,
         "review": review,

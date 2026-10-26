@@ -140,7 +140,7 @@ def main(argv=None) -> int:
         print(f"error: {type(err).__name__}: {err}", file=sys.stderr)
         return 1
 
-    sessions, errors = None, {}
+    sessions, errors, whoop_notes = None, {}, []
     if a.whoop_live:  # a WHOOP failure is an UNAVAILABLE plan, never a silent fall-back to "no readiness data"
         try:
             from . import whoop_client
@@ -148,6 +148,7 @@ def main(argv=None) -> int:
             readings += live
             for note in notes:
                 print(f"note: whoop: {note}", file=sys.stderr)
+                whoop_notes.append(note)
         except (SourceDown, OSError, ValueError) as err:
             errors["whoop"] = str(err) if isinstance(err, SourceDown) else f"{type(err).__name__} reading WHOOP credentials"
     try:
@@ -162,6 +163,8 @@ def main(argv=None) -> int:
 
     result = planner.todays_plan(sessions=sessions, readings=readings, now=now, feed_errors=errors, tz=a.tz,
                                  goal=a.goal, days_per_week=a.days_per_week, experience=a.experience, template=a.template)
+    if whoop_notes and isinstance(result, Plan):  # a missing/unscored recovery must be visible in the plan, not only on stderr
+        result = dataclasses.replace(result, warnings=result.warnings + tuple(f"whoop: {n}" for n in whoop_notes))
     print(json.dumps(_jsonable(result), indent=2) if a.json else render(result))
     return 2 if isinstance(result, Unavailable) else 0
 

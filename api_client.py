@@ -25,7 +25,7 @@ class UpstreamError(Exception):
     """Speediance could not be reached, or answered with an error: never to be read as "no data"."""
 
 
-def _json_data(resp, what, kind):
+def _json_data(resp, what, kind, empty=None):
     """The `data` of a vendor answer, or an error: a failed read must never look like an empty history ("well rested")."""
     if resp.status_code == 401:
         raise Exception("Unauthorized")
@@ -37,13 +37,14 @@ def _json_data(resp, what, kind):
         raise UpstreamError(f"{what} response was not JSON") from None
     if not isinstance(body, dict) or body.get('code') not in (None, 0):
         raise UpstreamError(f"{what} was rejected")
+    make = empty if empty is not None else (kind if isinstance(kind, type) else dict)
     if 'data' not in body:
         if body.get('code') == 0:  # an explicit success with nothing in it
-            return kind()
+            return make()
         raise UpstreamError(f"{what} response had no data")
     data = body['data']
     if data is None:
-        return kind()
+        return make()
     if not isinstance(data, kind):
         raise UpstreamError(f"{what} response had an unexpected shape")
     return data
@@ -53,11 +54,15 @@ def _require_ok(resp, what):
     """Raise unless the vendor accepted a write: HTTP < 400 and, when the body carries a `code`, code == 0."""
     if resp.status_code == 401:
         raise Exception("Unauthorized")
-    if resp.status_code >= 400:
+    if resp.status_code >= 300:
         raise UpstreamError(f"{what} failed (HTTP {resp.status_code})")
+    if resp.status_code == 204:
+        return
     try:
         body = resp.json()
     except ValueError:
+        if (getattr(resp, "text", "") or "").strip():  # e.g. a proxy's HTML page
+            raise UpstreamError(f"{what} response was not JSON") from None
         return  # an empty 2xx body is a plain success
     if isinstance(body, dict) and body.get('code') not in (None, 0):
         raise UpstreamError(f"{what} was rejected (code {body.get('code')})")
@@ -67,6 +72,8 @@ def _require_ok(resp, what):
 # mirror the web editor's own limits (static/workout-logic.js): custom loads are kg, up to 100 (50 on one cable).
 MAX_EXERCISES, MAX_SETS, MAX_REPS, MAX_SECONDS, MAX_REST_S = 30, 20, 99, 3600, 300
 MAX_WEIGHT_KG, MAX_WEIGHT_KG_UNILATERAL, MAX_PRESET_RM, MAX_LEVEL = 100.0, 50.0, 20, 10
+MAX_WEIGHT_LB, MAX_WEIGHT_LB_UNILATERAL = 220.0, 110.0  # the editor's imperial limits; the API stores the ACCOUNT's unit
+REQUEST_TIMEOUT_S = 25
 MAX_TEMPLATE_NAME = 100
 
 
@@ -82,8 +89,19 @@ def _bounded(value, what, hi):
     return x
 
 
-def validate_workout(name, exercises):
+def _group_id(value, where):
+    """A library group id as an int ('5' and 5 are the same exercise; anything else is refused, never interpolated)."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().isdigit():
+        raise ValueError(f"{where}: groupId must be a positive whole number")
+    n = int(str(value).strip())
+    if not 0 < n < 10**12:
+        raise ValueError(f"{where}: groupId must be a positive whole number")
+    return n
+
+
+def validate_workout(name, exercises, imperial=False):
     """Refuse a workout whose numbers could be wrong by an order of magnitude (NaN, negative, wrong unit, runaway counts).
+    `imperial` is the ACCOUNT's unit: the template API stores weights in it, with no conversion (tests/test_unit.py).
     Messages name the field and the position, never the value."""
     if not isinstance(name, str) or not name.strip() or len(name) > MAX_TEMPLATE_NAME:
         raise ValueError(f"name must be 1-{MAX_TEMPLATE_NAME} characters")
@@ -92,6 +110,7 @@ def validate_workout(name, exercises):
     for n, ex in enumerate(exercises, 1):
         if not isinstance(ex, dict) or not isinstance(ex.get('sets'), list) or not 1 <= len(ex['sets']) <= MAX_SETS:
             raise ValueError(f"exercise {n}: needs 1-{MAX_SETS} sets")
+        _group_id(ex.get('groupId'), f"exercise {n}")
         preset = ex.get('preset_id')
         stat = _bounded(ex.get('data_stat_type') or 0, f"exercise {n}: data_stat_type", 100)
         for m, st in enumerate(ex['sets'], 1):
@@ -104,7 +123,7 @@ def validate_workout(name, exercises):
             if stat == 6:
                 hi = MAX_LEVEL
             elif preset in (None, -1, "-1"):
-                hi = MAX_WEIGHT_KG
+                hi = MAX_WEIGHT_LB if imperial else MAX_WEIGHT_KG
             else:
                 hi = MAX_PRESET_RM
             _bounded(st.get('weight') or 0, f"{where}: weight", hi)
@@ -178,6 +197,8 @@ class SpeedianceClient:
 
     def _request(self, method, url, **kwargs):
         """Wrapper for requests to capture debug info."""
+        kwargs.setdefault("timeout", REQUEST_TIMEOUT_S)  # a stalled vendor must not hold the only worker forever
+        kwargs.setdefault("allow_redirects", False)
         try:
             resp = requests.request(method, url, **kwargs)
             
@@ -255,6 +276,10 @@ class SpeedianceClient:
         try:
             resp = self._request('PUT', url, headers=self._get_headers(), json=payload)
             if resp.status_code == 200:
+                try:
+                    _require_ok(resp, "unit update")
+                except UpstreamError as e:
+                    return False, str(e)
                 # Update local config
                 self.save_config(
                     self.credentials.get("user_id"),
@@ -527,22 +552,28 @@ class SpeedianceClient:
         resp = self._request('DELETE', url, headers=self._get_headers())
         _require_ok(resp, "delete")
 
-    def get_exercise_detail(self, exercise_id):
+    def get_exercise_detail(self, exercise_id, strict=False):
+        """strict=True (the save path) raises on a vendor error instead of returning {} (which reads as "bilateral")."""
         url = f"{self.base_url}/api/app/actionLibraryGroup/{_q(exercise_id)}?isDisplay=1"
         resp = self._request('GET', url, headers=self._get_headers())
+        if strict:
+            return _json_data(resp, "exercise detail", dict)
         return resp.json().get('data', {})
 
-    def is_exercise_unilateral(self, group_id):
-        detail = self.get_exercise_detail(group_id)
+    def is_exercise_unilateral(self, group_id, strict=False):
+        detail = self.get_exercise_detail(group_id, strict=strict)
         return detail.get('isLeftRight') == 1
 
-    def get_batch_details(self, group_ids):
+    def get_batch_details(self, group_ids, strict=False):
         if not group_ids:
             return []
-        query_parts = [f"ids={gid}" for gid in group_ids]
+        query_parts = [f"ids={_q(gid)}" for gid in group_ids]
         query_str = "&".join(query_parts)
         url = f"{self.base_url}/api/app/actionLibraryGroup/list?{query_str}"
-        
+
+        if strict:  # the save path: an outage must not look like "no exercises" and wipe a template
+            resp = self._request('GET', url, headers=self._get_headers())
+            return _json_data(resp, "exercise library", list)
         try:
             resp = self._request('GET', url, headers=self._get_headers())
             return resp.json().get('data', [])
@@ -563,20 +594,7 @@ class SpeedianceClient:
             if str(e) == "Unauthorized":
                 raise
             raise UpstreamError(f"calendar fetch failed ({type(e).__name__})") from None
-        if resp.status_code == 401:
-            raise Exception("Unauthorized")
-        if resp.status_code != 200:
-            raise UpstreamError(f"calendar fetch failed (HTTP {resp.status_code})")
-        try:
-            body = resp.json()
-        except ValueError:
-            raise UpstreamError("calendar response was not JSON") from None
-        if not isinstance(body, dict) or body.get('code') not in (None, 0):
-            raise UpstreamError("calendar request was rejected")
-        data = body.get('data', [])
-        if not isinstance(data, list):
-            raise UpstreamError("calendar response had an unexpected shape")
-        return data
+        return _json_data(resp, "calendar fetch", list)
 
     def schedule_workout(self, date_str, template_code, status):
         """
@@ -648,9 +666,11 @@ class SpeedianceClient:
         Behebt den 'Parameter Error' durch saubere Trennung von weights und counterweight2.
         """
         
-        validate_workout(name, exercises)
-        group_ids = list(set([ex['groupId'] for ex in exercises]))
-        details = self.get_batch_details(group_ids)
+        imperial = bool(self.credentials.get("unit"))
+        validate_workout(name, exercises, imperial)
+        exercises = [{**ex, "groupId": _group_id(ex.get("groupId"), "groupId")} for ex in exercises]
+        group_ids = sorted({ex['groupId'] for ex in exercises})
+        details = self.get_batch_details(group_ids, strict=True)
         
         id_map = {}
         for d in details:
@@ -662,7 +682,7 @@ class SpeedianceClient:
 
         unilateral_check = {}
         for group_id in group_ids:
-            unilateral_check[group_id] = self.is_exercise_unilateral(group_id)
+            unilateral_check[group_id] = self.is_exercise_unilateral(group_id, strict=True)
 
         for ex in exercises:
             group_id = int(ex['groupId'])
@@ -676,8 +696,8 @@ class SpeedianceClient:
             user_variant_id = ex.get('variant_id')
             real_variant_id = int(user_variant_id) if user_variant_id and str(user_variant_id).isdigit() else id_map.get(str(ex['groupId']))
             
-            if not real_variant_id:
-                continue
+            if not real_variant_id:  # dropping it silently would save (or, on an update, overwrite) a smaller workout
+                raise ValueError(f"exercise {group_id}: not found in the exercise library")
 
             # Arrays für CSV (IMPORTANT: must be same length)
             reps_list = []
@@ -697,10 +717,12 @@ class SpeedianceClient:
                 reps = int(s.get('reps') or 0)
                 weight_val = float(s.get('weight') or 0)
                 mode = int(s.get('mode') or 1)
-                rest = int(s.get('rest') or 60)
+                rest = int(s.get('rest') if s.get('rest') is not None else 60)  # 0 s rest is legitimate
                 unit = str(s.get('unit', 'reps')).lower()
-                if is_unilateral and preset_id == -1 and data_stat_type != 6 and weight_val > MAX_WEIGHT_KG_UNILATERAL:
-                    raise ValueError(f"exercise {group_id}: a single-cable load must be at most {MAX_WEIGHT_KG_UNILATERAL:g} kg")
+                one_cable_max = MAX_WEIGHT_LB_UNILATERAL if imperial else MAX_WEIGHT_KG_UNILATERAL
+                if is_unilateral and preset_id == -1 and data_stat_type != 6 and weight_val > one_cable_max:
+                    raise ValueError(f"exercise {group_id}: a single-cable load must be at most {one_cable_max:g} "
+                                     f"{'lb' if imperial else 'kg'}")
 
                 # Unilateral Logic
                 if is_unilateral:
@@ -796,7 +818,12 @@ class SpeedianceClient:
         resp = self._request('POST', url, headers=self._get_headers(), json=payload)
         if resp.status_code == 401:
             raise Exception("Unauthorized")
-        return resp.json()
+        if resp.status_code != 200:  # a gateway error can carry a success-looking body
+            raise UpstreamError(f"save failed (HTTP {resp.status_code})")
+        try:
+            return resp.json()
+        except ValueError:
+            raise UpstreamError("save response was not JSON") from None
 
     def get_training_records(self, start_date, end_date):
         """Fetches training session records for a date range.
@@ -836,7 +863,7 @@ class SpeedianceClient:
             url = f"{self.base_url}/api/app/trainingInfo/cttTrainingInfoDetail/{_q(training_id)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
-            return _json_data(resp, "training detail", (dict, list))
+            return _json_data(resp, "training detail", (dict, list), empty=dict)
         except Exception as e:
             if str(e) == "Unauthorized": raise e
             print(f"Error fetching training detail: {type(e).__name__}")

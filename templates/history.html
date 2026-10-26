@@ -165,6 +165,12 @@
             const resp = await fetch(`/api/history?start=${start}&end=${end}`);
             if (resp.status === 401) { window.location.href = '/login'; return; }
             const data = await resp.json();
+            if (!resp.ok) {  // an outage must not read as "No workouts found"
+                document.getElementById('loadingState').classList.add('hidden');
+                document.getElementById('emptyState').classList.remove('hidden');
+                document.getElementById('emptyState').textContent = 'Could not load history (' + (data && data.error ? data.error : 'HTTP ' + resp.status) + '). Try again.';
+                return;
+            }
             historyData = data;
             renderHistory(data);
         } catch (err) {
@@ -362,12 +368,14 @@
                         let weightDisplay = '-';
                         let weightNote = '';
                         let wArr = null;
-                        if (isUnilateral && s.leftRight === 1 && detail.leftWeights && detail.leftWeights.length > 0) {
+                        // `weights` is the machine's total load for the set (74 on a barbell split squat whose cables each
+                        // carry 37); a trained side's array is only a fallback, as in features._summarize_set.
+                        if (detail.weights && detail.weights.length > 0) {
+                            wArr = detail.weights;
+                        } else if (isUnilateral && s.leftRight === 1 && detail.leftWeights && detail.leftWeights.length > 0) {
                             wArr = detail.leftWeights;
                         } else if (isUnilateral && s.leftRight === 2 && detail.rightWeights && detail.rightWeights.length > 0) {
                             wArr = detail.rightWeights;
-                        } else if (detail.weights && detail.weights.length > 0) {
-                            wArr = detail.weights;
                         }
 
                         if (wArr) {

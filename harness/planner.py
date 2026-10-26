@@ -241,7 +241,8 @@ def todays_plan(*, sessions: list[SessionResult] | None, readings: list[Reading]
 
     warnings: list[str] = []
     for r in stale:  # a dropped reading may be the bad news (e.g. low recovery), so it must be visible
-        warnings.append(f"ignored stale {r.kind} {r.value:g} from {r.as_of.isoformat(timespec='minutes')} "
+        shown = f"{r.value:g}" if isinstance(r.value, (int, float)) and not isinstance(r.value, bool) else str(r.value)
+        warnings.append(f"ignored stale {r.kind} {shown} from {r.as_of.isoformat(timespec='minutes')} "
                         f"(older than {max_reading_age_h:g} h)")
     by_kind: dict[str, list[Reading]] = {}
     for r in fresh:

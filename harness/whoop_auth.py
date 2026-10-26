@@ -28,6 +28,9 @@ def main(argv=None) -> int:
     except (OSError, ValueError) as err:
         print(f"error: {type(err).__name__}: {err}", file=sys.stderr)
         return 1
+    if not 1 <= a.port <= 65535:
+        print("error: --port must be 1-65535", file=sys.stderr)
+        return 1
     store = TokenStore(a.tokens)
     try:
         if a.check:

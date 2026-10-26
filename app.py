@@ -227,12 +227,15 @@ def login():
         flash("Email and password required", "error")
         return redirect(url_for('settings'))
     
-    # Update client region before login attempt
+    # Update client region before login attempt; a failed login must leave the old region (and so the stored token's host)
+    previous = (client.region, client.host, client.base_url)
     client.region = region
     client.host = "euapi.speediance.com" if region == "EU" else "api2.speediance.com"
     client.base_url = "https://" + client.host
-        
+
     success, message, debug_info = client.login(email, password)
+    if not success:
+        client.region, client.host, client.base_url = previous
     if success:
         flash("Login successful!", "success")
         return redirect(url_for('index'))

@@ -144,6 +144,8 @@ class _CallbackServer(http.server.HTTPServer):
 
 
 class _Callback(http.server.BaseHTTPRequestHandler):
+    timeout = 5  # a silent local connection must not stall the single-threaded listener past its deadline
+
     def log_message(self, *args):  # the query string holds the one-time code: no request logging
         pass
 

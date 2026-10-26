@@ -104,7 +104,8 @@ class DeleteIsOnlyDeletedWhenTheVendorSaysSo(unittest.TestCase):
         return client.delete_workout("abc")
 
     def test_rejections_raise(self):
-        for resp in (Resp(500, {}), Resp(404, {}), Resp(200, {"code": 1001, "message": "no"}), Resp(200, {"code": 500})):
+        for resp in (Resp(500, {}), Resp(404, {}), Resp(302, {}), Resp(200, {"code": 1001, "message": "no"}), Resp(200, {"code": 500}),
+                     Resp(200, None, "<html>proxy login</html>"), Resp(200, None, "ok")):
             with self.assertRaises(api_client.UpstreamError):
                 self.delete(resp)
 
@@ -114,7 +115,7 @@ class DeleteIsOnlyDeletedWhenTheVendorSaysSo(unittest.TestCase):
         self.assertEqual(str(ctx.exception), "Unauthorized")
 
     def test_successes_pass(self):
-        for resp in (Resp(200, {"code": 0}), Resp(200, {}), Resp(204, None), Resp(200, None, "ok")):
+        for resp in (Resp(200, {"code": 0}), Resp(200, {}), Resp(204, None), Resp(200, None, ""), Resp(200, None, "  ")):
             self.assertIsNone(self.delete(resp))
 
     def test_the_route_never_says_deleted_after_a_refusal(self):
@@ -181,8 +182,8 @@ class LoadsAreBoundedBeforeAnythingIsSent(unittest.TestCase):
     def test_a_single_cable_load_is_capped_at_50(self):
         client = make_client()
         client._request = mock.Mock()
-        client.get_batch_details = lambda ids: [{"id": 7, "actionLibraryList": [{"id": 70}]}]
-        client.is_exercise_unilateral = lambda gid: True
+        client.get_batch_details = lambda ids, **kw: [{"id": 7, "actionLibraryList": [{"id": 70}]}]
+        client.is_exercise_unilateral = lambda gid, **kw: True
         with self.assertRaises(ValueError) as ctx:
             client.save_workout("n", [good_ex(sets=[good_set(weight=50.5)])])
         self.assertIn("single-cable", str(ctx.exception))

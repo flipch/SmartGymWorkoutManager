@@ -21,7 +21,7 @@ import os
 import re
 
 import coach
-from api_client import validate_workout
+from api_client import MAX_EXERCISES, MAX_REPS, MAX_SETS, validate_workout
 from auth import writes_enabled
 import state_io
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize
@@ -302,10 +302,12 @@ def api_recovery():
 
 
 # --------------------------------------------------- Feature 2: iCal feed
-def _walk_events(node, out):
-    """Recursively find dicts that carry both a date and a name -> calendar events."""
+def _walk_events(node, out, inherited=None):
+    """Recursively find calendar events: a dict with a name/title and a date. Speediance nests the plans of a day
+    ({date, trainingPlanList: [{title, ...}]}), so a plan without its own date takes its day's. Once an event is found
+    its own children (exercises, ...) are not events."""
     if isinstance(node, dict):
-        d = _extract_date(node)
+        d = _extract_date(node) or inherited
         name = None
         for k, v in node.items():
             kl = str(k).lower()
@@ -314,11 +316,12 @@ def _walk_events(node, out):
                 break
         if d and name:
             out.append((d, name))
+            return
         for v in node.values():
-            _walk_events(v, out)
+            _walk_events(v, out, d)
     elif isinstance(node, list):
         for v in node:
-            _walk_events(v, out)
+            _walk_events(v, out, inherited)
 
 
 def _ics_text(value):
@@ -822,9 +825,29 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
     return {"groupId": best[1], "matched_name": best[2], "muscle": best[3], "confidence": conf}
 
 
-def _to_api_kg(load, load_unit):
-    """A coach load -> the kg the template API stores. Same rounding as the web editor (static/workout-logic.js)."""
-    return round(load / 2.2 * 2) / 2 if load_unit == "lb" else load
+def _imperial(client):
+    creds = getattr(client, "credentials", None)
+    return bool(creds.get("unit")) if isinstance(creds, dict) else False
+
+
+def _to_account_unit(load, load_unit, imperial):
+    """A coach load -> the number the template API stores, which is in the ACCOUNT's unit with no conversion when the
+    caller's unit already matches (tests/test_unit.py). Same rounding as the web editor (static/workout-logic.js)."""
+    if load_unit == "lb" and not imperial:
+        return round(load / 2.2 * 2) / 2
+    if load_unit == "kg" and imperial:
+        return round(load * 2.2)
+    return load
+
+
+def _whole(value, what, hi):
+    try:
+        n = int(value or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"{what} must be a whole number") from None
+    if not 0 <= n <= hi:
+        raise ValueError(f"{what} must be between 0 and {hi}")
+    return n
 
 
 def _program_loads(day):
@@ -837,16 +860,20 @@ def _program_loads(day):
     return out
 
 
-def program_day_to_payload(library, day, load_unit=None):
+def program_day_to_payload(library, day, load_unit=None, imperial=False):
     """Build save_workout's exercises payload for one program day + a resolution report."""
     exercises, resolved, unresolved = [], [], []
-    for e in day.get("exercises", []):
+    todo = day.get("exercises", [])
+    if not isinstance(todo, list) or len(todo) > MAX_EXERCISES:
+        raise ValueError(f"a day may hold at most {MAX_EXERCISES} exercises")
+    for e in todo:
         r = resolve_exercise(library, e.get("name", ""), e.get("primary"), e.get("unilateral"))
         if not r:
             unresolved.append({"name": e.get("name"), "muscle": e.get("primary")})
             continue
-        n_sets = int(e.get("sets") or 0)
-        sets = [{"reps": int(e.get("reps") or 0), "weight": _to_api_kg(float(e.get("load") or 0), load_unit),
+        n_sets = _whole(e.get("sets"), "sets", MAX_SETS)  # bounded BEFORE anything is allocated
+        reps = _whole(e.get("reps"), "reps", MAX_REPS)
+        sets = [{"reps": reps, "weight": _to_account_unit(float(e.get("load") or 0), load_unit, imperial),
                  "rest": int(e.get("rest_sec") or 90), "unit": "reps"} for _ in range(n_sets)]
         exercises.append({"groupId": r["groupId"], "sets": sets})
         resolved.append({"coach_name": e.get("name"), "groupId": r["groupId"],
@@ -860,8 +887,8 @@ MAX_WORKOUT_NAME = 80
 def apply_program(client, program, day_index=None, name=None, dry_run=True, load_unit=None):
     """Resolve + (optionally) save a generated program's day(s) as Speediance templates.
 
-    load_unit ("kg" or "lb") says what unit the program's loads are in; it is required when any load is above zero,
-    because the template API stores kg and a pound figure saved as kilograms would be 2.2x too heavy."""
+    load_unit ("kg" or "lb") says what unit the program's loads are in; it is required when any load is above zero.
+    The template API stores the ACCOUNT's unit, so a load is converted only when the two differ."""
     days = program.get("days")
     if not isinstance(days, list) or not days or not all(isinstance(d, dict) for d in days):
         raise ValueError("program.days must be a non-empty list of days")
@@ -878,15 +905,16 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
     if load_unit is None and any(x > 0 for _, d in targets for x in _program_loads(d)):
         raise ValueError("this program has loads: say whether they are in 'kg' or 'lb' (load_unit)")
     library = client.get_library() or []
+    imperial = _imperial(client)
     results = []
     prepared = []
     for idx, day in targets:  # build and validate every day before anything is written: all-or-nothing on bad numbers
-        exercises, resolved, unresolved = program_day_to_payload(library, day, load_unit)
+        exercises, resolved, unresolved = program_day_to_payload(library, day, load_unit, imperial)
         day_label = day.get('name', 'Day ' + str(idx + 1))
         nm = ((f"{name.strip()} — {day_label}" if len(targets) > 1 else name.strip()) if name
               else f"{program.get('goal_label', 'Workout')} — {day_label}")
         if exercises:
-            validate_workout(nm, exercises)
+            validate_workout(nm, exercises, imperial)
         prepared.append((idx, nm, exercises, resolved, unresolved))
     for idx, nm, exercises, resolved, unresolved in prepared:
         entry = {"day_index": idx, "name": nm, "exercise_count": len(exercises),

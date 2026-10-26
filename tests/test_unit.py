@@ -88,7 +88,7 @@ class TestSaveWorkoutWeights(unittest.TestCase):
 
         # Mock is_exercise_unilateral
         client.is_exercise_unilateral = MagicMock(
-            side_effect=lambda gid: unilateral_flags.get(gid, False)
+            side_effect=lambda gid, **kw: unilateral_flags.get(gid, False)
         )
 
         # Capture the POST payload

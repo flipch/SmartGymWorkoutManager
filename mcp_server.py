@@ -183,12 +183,12 @@ def last_workout(n: int = 1, days: int = 60) -> dict:
     (duration, calories, volume). Use this to review or critique what the user actually did."""
     def run():
         c = _client(); _require_auth(c)
-        n, days = clamp_n(n, 1), clamp_days(days, 60)
-        recs = _detailed_records(c, days)
-        if len(recs) < n:
+        count, window = clamp_n(n, 1), clamp_days(days, 60)  # new names: assigning n/days here would shadow the arguments
+        recs = _detailed_records(c, window)
+        if len(recs) < count:
             return {"error": "not_found",
-                    "message": f"Fewer than {n} detailed workouts in the last {days} days."}
-        return fetch_session_detail(c, recs[n - 1])
+                    "message": f"Fewer than {count} detailed workouts in the last {window} days."}
+        return fetch_session_detail(c, recs[count - 1])
     return _safe(run)
 
 
