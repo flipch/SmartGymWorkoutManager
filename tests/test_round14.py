@@ -130,7 +130,7 @@ class CoachLoadsFollowTheAccount(unittest.TestCase):
 
     def run_apply(self, account_unit, load, load_unit):
         client = mock.Mock()
-        client.credentials = {"token": "x", "unit": account_unit}
+        client.credentials = {"token": "x", "unit": account_unit, "unit_confirmed": True}
         client.get_library.return_value = []
         client.save_workout.return_value = {"code": 0, "data": {"id": 1}}
         program = {"goal_label": "G", "days": [{"name": "D", "exercises": [
@@ -413,7 +413,7 @@ class ProgramPayloadsAreBoundedBeforeAllocation(unittest.TestCase):
             with self.assertRaises(ValueError, msg=repr(reps)):
                 features.program_day_to_payload([], self.day(reps=reps))
         with self.assertRaises(ValueError):
-            features.program_day_to_payload([], {"name": "D", "exercises": [{"name": "P", "sets": 1}] * 31})
+            features.program_day_to_payload([], {"name": "D", "exercises": [{"name": "P", "sets": 1}] * 51})
         with self.assertRaises(ValueError):
             features.program_day_to_payload([], {"name": "D", "exercises": "nope"})
 

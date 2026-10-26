@@ -21,7 +21,7 @@ import os
 import re
 
 import coach
-from api_client import MAX_EXERCISES, MAX_REPS, MAX_SETS, validate_workout
+from api_client import MAX_EXERCISES, MAX_REPS, MAX_REST_S, MAX_SETS, validate_workout
 from auth import writes_enabled
 import state_io
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize
@@ -66,9 +66,17 @@ def _parse_date(v):
     return None
 
 
+_PREFERRED_DATE_KEYS = ("startTimestamp", "startTime", "trainingDate", "date", "endTimestamp", "endTime")
+
+
 def _extract_date(rec):
     if not isinstance(rec, dict):
         return None
+    for k in _PREFERRED_DATE_KEYS:  # when the session happened, not when its record was created (createTime)
+        if k in rec:
+            d = _parse_date(rec[k])
+            if d:
+                return d
     for k, v in rec.items():
         kl = str(k).lower()
         if any(t in kl for t in ('date', 'time', 'day')):
@@ -301,12 +309,23 @@ def api_recovery():
 
 
 # --------------------------------------------------- Feature 2: iCal feed
+def _named_date(node):
+    """A date the node carries under a key actually named like a date (date, thatDay, scheduleDate...), not createTime."""
+    for k, v in node.items():
+        kl = str(k).lower()
+        if "date" in kl or kl in ("thatday", "day"):
+            d = _parse_date(v)
+            if d:
+                return d
+    return None
+
+
 def _walk_events(node, out, inherited=None):
     """Recursively find calendar events: a dict with a name/title and a date. Speediance nests the plans of a day
     ({date, trainingPlanList: [{title, ...}]}), so a plan without its own date takes its day's. Once an event is found
     its own children (exercises, ...) are not events."""
     if isinstance(node, dict):
-        d = _extract_date(node) or inherited
+        d = _named_date(node) or inherited or _extract_date(node)  # a plan's createTime must not beat its day's date
         name = None
         for k, v in node.items():
             kl = str(k).lower()
@@ -639,6 +658,9 @@ def coach_program():
     if feedback is None and body.get("use_stored_feedback", True):
         prof = _feedback_profile()
         feedback = prof if prof.get("events") else None
+        feedback_error = prof.get("unreadable")
+    else:
+        feedback_error = None
     prog = coach.generate_program(
         goal=body.get("goal", "general"),
         days_per_week=body.get("days_per_week", 4),
@@ -648,6 +670,8 @@ def coach_program():
         available_accessories=body.get("available_accessories"),
         feedback=feedback,
     )
+    if feedback_error:  # the stored pain/avoid list could not be read: say so instead of silently dropping it
+        prog["feedback_error"] = feedback_error
     return jsonify(prog)
 
 
@@ -690,8 +714,23 @@ def log_feedback(payload, data_dir=None):
     with state_io.file_lock(path + ".lock"):  # web app and MCP server both append
         events = _load_feedback_events(data_dir, quarantine_corrupt=True)
         events.append(event)
-        state_io.atomic_write_json(path, events[-100:])
+        # a pain/avoid entry is a standing safety instruction: ordinary entries age out after 100, those never do
+        standing = [e for e in events if e.get("pain") or e.get("avoid")][-500:]
+        ordinary = [e for e in events if not (e.get("pain") or e.get("avoid"))][-100:]
+        state_io.atomic_write_json(path, sorted(standing + ordinary, key=lambda e: str(e.get("ts") or "")))
     return event
+
+
+def _feedback_read_error(data_dir=None):
+    """None when the feedback file is absent or readable; else the error class name (never silently "no feedback")."""
+    try:
+        with open(_feedback_path(data_dir)) as f:
+            data = json.load(f)
+        return None if isinstance(data, list) else "ValueError"
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        return type(e).__name__
 
 
 def _feedback_profile(data_dir=None, days=14):
@@ -712,6 +751,7 @@ def _feedback_profile(data_dir=None, days=14):
     avoid = sorted({e["avoid"] for e in events if e.get("avoid")} |
                    {e["exercise"] for e in events if e.get("pain") and e.get("exercise")})
     return {"events": len(events), "recent_events": len(recent), "avg_rpe": avg_rpe,
+            "unreadable": _feedback_read_error(data_dir),
             "difficulty_signal": sig, "avoid": avoid,
             "recent_notes": [e["note"] for e in recent if e.get("note")][-5:]}
 
@@ -823,6 +863,27 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
     return {"groupId": best[1], "matched_name": best[2], "muscle": best[3], "confidence": conf}
 
 
+MAX_PROGRAM_DAYS = 14
+
+
+def _avoid_entries(client, program):
+    """Everything the user asked to avoid: the stored feedback list plus what the program itself was built with."""
+    names = []
+    data_dir = getattr(client, "data_dir", None)
+    if isinstance(data_dir, str):
+        names += _feedback_profile(data_dir).get("avoid", [])
+    applied = program.get("feedback_applied") if isinstance(program, dict) else None
+    if isinstance(applied, dict):
+        names += [a for a in applied.get("avoid", []) if isinstance(a, str)]
+    return {coach._norm_name(n) for n in names if isinstance(n, str) and coach._norm_name(n)}
+
+
+def _unit_confirmed(client):
+    """Has a human chosen the account's unit (kg/lb)? The vendor does not report it, so a default 0 proves nothing."""
+    creds = getattr(client, "credentials", None)
+    return isinstance(creds, dict) and bool(creds.get("unit_confirmed") or creds.get("unit") == 1)
+
+
 def _imperial(client):
     creds = getattr(client, "credentials", None)
     return bool(creds.get("unit")) if isinstance(creds, dict) else False
@@ -858,7 +919,7 @@ def _program_loads(day):
     return out
 
 
-def program_day_to_payload(library, day, load_unit=None, imperial=False):
+def program_day_to_payload(library, day, load_unit=None, imperial=False, avoid=frozenset()):
     """Build save_workout's exercises payload for one program day + a resolution report."""
     exercises, resolved, unresolved = [], [], []
     todo = day.get("exercises", [])
@@ -869,13 +930,22 @@ def program_day_to_payload(library, day, load_unit=None, imperial=False):
         if not r:
             unresolved.append({"name": e.get("name"), "muscle": e.get("primary")})
             continue
-        n_sets = _whole(e.get("sets"), "sets", MAX_SETS)  # bounded BEFORE anything is allocated
+        if coach._is_avoided(r["matched_name"], avoid) or coach._is_avoided(e.get("name", ""), avoid):
+            # the library match may be an exercise the user reported pain on, even if the coach's own name is not
+            unresolved.append({"name": e.get("name"), "muscle": e.get("primary"), "reason": "on your avoid list"})
+            continue
+        one_sided = bool(e.get("unilateral"))
+        n_sets = _whole(e.get("sets"), "sets", MAX_SETS // 2 if one_sided else MAX_SETS)  # bounded BEFORE allocating
         reps = _whole(e.get("reps"), "reps", MAX_REPS)
+        rest = 90 if e.get("rest_sec") is None else _whole(e.get("rest_sec"), "rest_sec", MAX_REST_S)  # 0 s is a real rest
         sets = [{"reps": reps, "weight": _to_account_unit(float(e.get("load") or 0), load_unit, imperial),
-                 "rest": int(e.get("rest_sec") or 90), "unit": "reps"} for _ in range(n_sets)]
+                 "rest": rest, "unit": "reps"} for _ in range(n_sets)]
+        if one_sided:  # the machine alternates left, right per set: a coach "set" of a one-sided lift is a pair
+            sets = [dict(s) for s in sets for _ in range(2)]
         exercises.append({"groupId": r["groupId"], "sets": sets})
         resolved.append({"coach_name": e.get("name"), "groupId": r["groupId"],
-                         "matched_name": r["matched_name"], "confidence": r["confidence"]})
+                         "matched_name": r["matched_name"], "confidence": r["confidence"],
+                         "coach_mode": e.get("mode") or "standard"})
     return exercises, resolved, unresolved
 
 
@@ -890,6 +960,8 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
     days = program.get("days")
     if not isinstance(days, list) or not days or not all(isinstance(d, dict) for d in days):
         raise ValueError("program.days must be a non-empty list of days")
+    if len(days) > MAX_PROGRAM_DAYS:
+        raise ValueError(f"a program may have at most {MAX_PROGRAM_DAYS} days")
     if day_index is None:
         targets = list(enumerate(days))
     elif isinstance(day_index, int) and not isinstance(day_index, bool) and 0 <= day_index < len(days):
@@ -902,21 +974,31 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
         raise ValueError("load_unit must be 'kg' or 'lb'")
     if load_unit is None and any(x > 0 for _, d in targets for x in _program_loads(d)):
         raise ValueError("this program has loads: say whether they are in 'kg' or 'lb' (load_unit)")
-    library = client.get_library() or []
+    if any(x > 0 for _, d in targets for x in _program_loads(d)) and not _unit_confirmed(client):
+        raise ValueError("the account's unit (kg or lb) has not been confirmed: choose it on /settings once, "
+                         "then loads can be saved")  # the vendor does not expose it, and a wrong guess is 2.2x
+    library = client.get_library(strict=True) or []
     imperial = _imperial(client)
+    avoid = _avoid_entries(client, program)
     results = []
     prepared = []
     for idx, day in targets:  # build and validate every day before anything is written: all-or-nothing on bad numbers
-        exercises, resolved, unresolved = program_day_to_payload(library, day, load_unit, imperial)
+        exercises, resolved, unresolved = program_day_to_payload(library, day, load_unit, imperial, avoid)
         day_label = day.get('name', 'Day ' + str(idx + 1))
         nm = ((f"{name.strip()} — {day_label}" if len(targets) > 1 else name.strip()) if name
               else f"{program.get('goal_label', 'Workout')} — {day_label}")
         if exercises:
             validate_workout(nm, exercises, imperial)
+            prepare = getattr(client, "prepare_workout", None)
+            if callable(prepare):  # library-aware checks (e.g. the one-cable cap) for EVERY day before the first write
+                prepare(nm, exercises)
         prepared.append((idx, nm, exercises, resolved, unresolved))
     for idx, nm, exercises, resolved, unresolved in prepared:
         entry = {"day_index": idx, "name": nm, "exercise_count": len(exercises),
                  "resolved": resolved, "unresolved": unresolved, "created": False}
+        modes = sorted({r["coach_mode"] for r in resolved if r.get("coach_mode") not in (None, "standard")})
+        if modes:
+            entry["notes"] = [f"coach modes ({', '.join(modes)}) are not applied: every set is saved as Standard"]
         if not dry_run and exercises:
             try:
                 resp = client.save_workout(nm, exercises)
@@ -933,6 +1015,8 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
                         entry["template_id"] = data
             except Exception as e:
                 entry["error"] = type(e).__name__
+                if isinstance(e, ValueError):  # these messages name the field and position, never the value
+                    entry["message"] = str(e)
         results.append(entry)
     created = sum(1 for r in results if r["created"])
     failed = sum(1 for r in results if r.get("error"))

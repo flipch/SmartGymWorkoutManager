@@ -130,6 +130,7 @@ def settings():
             allow_monster_moves,
             client.credentials.get('owned_accessories', []),
             client.credentials.get('owned_devices', []),
+            unit_confirmed=True if 'unit' in request.form else None,
         )
         flash("Settings saved!", "success")
         return redirect(url_for('index'))
@@ -785,17 +786,16 @@ def api_workout_history_detail(record_id):
         target_url = f"{client.base_url}/api/app/trainingInfo/courseTrainingInfoDetail/{record_id}"
 
     try:
-        headers = client._get_headers()
-        response = requests.get(target_url, headers=headers, timeout=10)
+        # through _request: timeout, no redirects (the session Token must not be replayed to another host), code-91 handling
+        response = client._request('GET', target_url, headers=client._get_headers())
 
         if response.status_code == 200:
             return jsonify(response.json())
-        else:
-            return jsonify({
-                "error": f"Speediance API Error: {response.status_code}",
-                "type_requested": training_type
-            }), response.status_code
+        status = 401 if response.status_code == 401 else 502
+        return jsonify({"error": f"Speediance API Error: {response.status_code}", "type_requested": training_type}), status
     except Exception as e:
+        if str(e) == "Unauthorized":
+            return jsonify({"error": "Unauthorized"}), 401
         return jsonify({"error": "upstream_error", "detail": type(e).__name__}), 502
 
 class TextRedirector(object):

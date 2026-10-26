@@ -6,7 +6,8 @@ import os
 from urllib.parse import quote
 
 from harness.localsecrets import write_json_private
-from insights_core import valid_iso_date
+import state_io
+from insights_core import valid_iso_date, valid_record_id
 
 def _q(value, safe: str = "") -> str:
     """Percent-encode an id/code before it goes into an upstream URL (no path or query injection)."""
@@ -70,7 +71,7 @@ def _require_ok(resp, what):
 
 # What reaches the machine is bounded here, whatever the caller (web form, MCP agent, coach program). The numbers
 # mirror the web editor's own limits (static/workout-logic.js): custom loads are kg, up to 100 (50 on one cable).
-MAX_EXERCISES, MAX_SETS, MAX_REPS, MAX_SECONDS, MAX_REST_S = 30, 20, 99, 3600, 300
+MAX_EXERCISES, MAX_SETS, MAX_REPS, MAX_SECONDS, MAX_REST_S = 50, 20, 99, 3600, 300  # the editor allows 50 exercises
 MAX_WEIGHT_KG, MAX_WEIGHT_KG_UNILATERAL, MAX_PRESET_RM, MAX_LEVEL = 100.0, 50.0, 20, 10
 MAX_WEIGHT_LB, MAX_WEIGHT_LB_UNILATERAL = 220.0, 110.0  # the editor's imperial limits; the API stores the ACCOUNT's unit
 REQUEST_TIMEOUT_S = 25
@@ -194,11 +195,10 @@ class SpeedianceClient:
 
     def _save_library_cache(self, data):
         """Saves library to disk."""
-        try:
-            with open(self.library_cache_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False)
+        try:  # atomic: the web app and the MCP container both read this file while either may rebuild it
+            state_io.atomic_write_json(self.library_cache_file, data)
         except Exception as e:
-            print(f"Error saving library cache: {e}")
+            print(f"Error saving library cache: {type(e).__name__}")
 
     def _request(self, method, url, **kwargs):
         """Wrapper for requests to capture debug info."""
@@ -253,12 +253,15 @@ class SpeedianceClient:
             "owned_devices": [],
         }
 
-    def save_config(self, user_id, token, region="Global", unit=0, custom_instruction="", device_type=1, allow_monster_moves=False, owned_accessories=None, owned_devices=None):
+    def save_config(self, user_id, token, region="Global", unit=0, custom_instruction="", device_type=1, allow_monster_moves=False, owned_accessories=None, owned_devices=None, unit_confirmed=None):
+        previous = getattr(self, "credentials", None) or {}
+        confirmed = bool(previous.get("unit_confirmed")) if unit_confirmed is None else bool(unit_confirmed)
         self.credentials = {
             "user_id": user_id,
             "token": token,
             "region": region,
             "unit": int(unit),
+            "unit_confirmed": confirmed,  # set when the unit was chosen on /settings or changed through update_unit
             "custom_instruction": custom_instruction,
             "device_type": int(device_type),
             "allow_monster_moves": bool(allow_monster_moves),
@@ -296,6 +299,7 @@ class SpeedianceClient:
                     self.credentials.get("allow_monster_moves", False),
                     self.credentials.get("owned_accessories", []),
                     self.credentials.get("owned_devices", []),
+                    unit_confirmed=True,
                 )
                 return True, "Unit updated successfully"
             else:
@@ -441,9 +445,11 @@ class SpeedianceClient:
             print(f"Error fetching categories: {e}")
             return []
 
-    def get_library(self):
+    def get_library(self, strict=False):
+        """strict=True (the coach and the MCP search) raises instead of returning a library with holes."""
         if self.library_cache:
             return self.library_cache
+        incomplete = False
             
         def fetch_categories(device_type):
             url = f"{self.base_url}/api/app/actionLibraryTab/list?deviceType={device_type}"
@@ -478,8 +484,12 @@ class SpeedianceClient:
                                     action['category_name'] = category['name']
                                     action['device_type'] = device_type
                                     all_basic_exercises.append(action)
+                        else:
+                            incomplete = True
                     except Exception as e:
-                        print(f"Error fetching category {tab_id}: {e}")
+                        if str(e) == "Unauthorized": raise
+                        incomplete = True
+                        print(f"Error fetching category {tab_id}: {type(e).__name__}")
 
             # 3. Deduplicate by ID (keep first occurrence)
             unique_exercises = {}
@@ -500,8 +510,13 @@ class SpeedianceClient:
             # 4. Fetch details in batches
             for i in range(0, len(all_ids), chunk_size):
                 chunk_ids = all_ids[i:i + chunk_size]
-                details = self.get_batch_details(chunk_ids)
-                
+                try:
+                    details = self.get_batch_details(chunk_ids, strict=True)
+                except Exception as e:
+                    if str(e) == "Unauthorized": raise
+                    incomplete = True
+                    continue
+
                 # Re-attach category info
                 for d in details:
                     if d['id'] in unique_exercises:
@@ -514,13 +529,21 @@ class SpeedianceClient:
                 
                 detailed_library.extend(details)
             
+            if incomplete:  # a transient failure on one category must not become the library until someone refreshes
+                if strict:
+                    raise UpstreamError("the exercise library could not be loaded completely")
+                return detailed_library
             self.library_cache = detailed_library
             self._save_library_cache(detailed_library)
             return detailed_library
 
+        except UpstreamError:
+            raise
         except Exception as e:
             if str(e) == "Unauthorized": raise e
-            print(f"Error fetching library: {e}")
+            print(f"Error fetching library: {type(e).__name__}")
+            if strict:
+                raise UpstreamError("the exercise library could not be loaded") from None
         return []
     
     def get_accessories(self):
@@ -541,12 +564,12 @@ class SpeedianceClient:
     def get_user_workouts(self):
         url = f"{self.base_url}/api/app/v4/customTrainingTemplate/appPage?pageNo=1&pageSize=-1&deviceTypes={self.device_type}"
         resp = self._request('GET', url, headers=self._get_headers())
-        if resp.status_code == 401:
-            raise Exception("Unauthorized")
-        return resp.json().get('data', [])
+        return _json_data(resp, "workout list", list)
 
     def delete_workout(self, template_id):
-        url = f"{self.base_url}/api/app/customTrainingTemplate?ids={_q(template_id, ',')}"
+        if not valid_record_id(str(template_id)):  # not '', not '1,2,3': one template per call
+            raise ValueError("template id must be a single id of letters, digits, - or _")
+        url = f"{self.base_url}/api/app/customTrainingTemplate?ids={_q(template_id)}"
         resp = self._request('DELETE', url, headers=self._get_headers())
         _require_ok(resp, "delete")
 
@@ -555,7 +578,10 @@ class SpeedianceClient:
         url = f"{self.base_url}/api/app/actionLibraryGroup/{_q(exercise_id)}?isDisplay=1"
         resp = self._request('GET', url, headers=self._get_headers())
         if strict:
-            return _json_data(resp, "exercise detail", dict)
+            detail = _json_data(resp, "exercise detail", dict)
+            if "isLeftRight" not in detail:  # real answers always carry it (0 for bilateral)
+                raise UpstreamError("exercise detail was incomplete")
+            return detail
         return resp.json().get('data', {})
 
     def is_exercise_unilateral(self, group_id, strict=False):
@@ -606,15 +632,9 @@ class SpeedianceClient:
             "thatDay": date_str,
             "templateCode": template_code
         }
-        try:
-            resp = self._request('POST', url, headers=self._get_headers(), json=payload)
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
-            return resp.json().get('data', False)
-        except Exception as e:
-            if str(e) == "Unauthorized": raise e
-            print(f"Error scheduling workout: {e}")
-            return False
+        resp = self._request('POST', url, headers=self._get_headers(), json=payload)
+        _require_ok(resp, "schedule")
+        return resp.json().get('data', False) if resp.content or resp.text else False
 
     def get_training_history(self, start_date, end_date):
         """
@@ -650,20 +670,20 @@ class SpeedianceClient:
                 "response_body": resp.json() if resp.content else None,
                 "status": resp.status_code,
             }
-            if resp.status_code == 401:
-                raise Exception("Unauthorized")
+            _require_ok(resp, "course schedule")
             return resp.json().get('data', False)
+        except UpstreamError:
+            raise
         except Exception as e:
             if str(e) == "Unauthorized": raise e
-            print(f"Error scheduling course: {e}")
+            print(f"Error scheduling course: {type(e).__name__}")
             return False
 
-    def save_workout(self, name, exercises, template_id=None):
-        """
-        Speichert (ohne ID) oder Aktualisiert (mit ID).
-        Behebt den 'Parameter Error' durch saubere Trennung von weights und counterweight2.
-        """
-        
+    def prepare_workout(self, name, exercises, template_id=None):
+        """Build the payload for save_workout: all library lookups and every check, but NO write. Raises ValueError for a bad
+        value, UpstreamError for a vendor outage.
+
+        Splits weights from counterweight2 cleanly (the fix for the vendor's 'Parameter Error')."""
         imperial = bool(self.credentials.get("unit"))
         validate_workout(name, exercises, imperial)
         exercises = [{**ex, "groupId": _group_id(ex.get("groupId"), "groupId")} for ex in exercises]
@@ -811,7 +831,11 @@ class SpeedianceClient:
 
         if template_id:
             payload['id'] = int(template_id)
+        return payload
 
+    def save_workout(self, name, exercises, template_id=None):
+        """Create (no id) or update (id) a template; `prepare_workout` documents the checks."""
+        payload = self.prepare_workout(name, exercises, template_id)
         url = f"{self.base_url}/api/app/v2/customTrainingTemplate"
         resp = self._request('POST', url, headers=self._get_headers(), json=payload)
         if resp.status_code == 401:

@@ -174,9 +174,9 @@ class AppInputValidation(unittest.TestCase):
             upstream.assert_not_called()
 
     def test_detail_error_does_not_echo_the_upstream_url(self):
-        with mock.patch.object(gym_app.requests, "get", return_value=mock.Mock(status_code=404)):
-            resp = self.c.get("/api/workout_history/detail/123", headers=BASIC)
-        self.assertEqual(resp.status_code, 404)
+        self.client._request.return_value = mock.Mock(status_code=404)
+        resp = self.c.get("/api/workout_history/detail/123", headers=BASIC)
+        self.assertEqual(resp.status_code, 502)  # a vendor 404 is the vendor failing, not "our" route being absent
         self.assertNotIn("url", resp.get_json())
         self.assertNotIn("speediance", resp.get_data(as_text=True))
 
@@ -284,13 +284,13 @@ class UrlEncodingPerEndpoint(unittest.TestCase):
         self.client.get_training_detail("1?y=1", "custom")
         self.assertIn("cttTrainingInfoDetail/1%3Fy%3D1", self.urls[0])
 
-    def test_delete_keeps_the_comma_separated_id_list(self):
-        self.client.delete_workout("11,22,33")
-        self.assertTrue(self.urls[0].endswith("customTrainingTemplate?ids=11,22,33"), self.urls[0])
-
-    def test_delete_cannot_smuggle_a_second_query_parameter(self):
-        self.client.delete_workout("11&admin=1")
-        self.assertNotIn("&admin=1", self.urls[0])
+    def test_delete_takes_one_id_not_a_list(self):
+        for bad in ("11,22,33", "", "11&admin=1", "1/../x"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.client.delete_workout(bad)
+        self.assertEqual(self.urls, [])  # nothing was sent for any of them
+        self.client.delete_workout("11")
+        self.assertTrue(self.urls[0].endswith("customTrainingTemplate?ids=11"), self.urls[0])
 
 
 class RecoveryEdge(unittest.TestCase):

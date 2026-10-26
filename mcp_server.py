@@ -266,7 +266,7 @@ def search_exercises(query: str = "", limit: int = 25) -> list:
     exercises with their groupId — feed those ids into save_workout."""
     def run():
         c = _client(); _require_auth(c)
-        lib = c.get_library() or []
+        lib = c.get_library(strict=True) or []
         q = (query or "").strip().lower()
         out = []
         for ex in lib:
@@ -321,8 +321,11 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
                 r = stored
         prof = _feedback_profile(c.data_dir)
         fb = prof if prof.get("events") else None
-        return coach.generate_program(goal=goal, days_per_week=days_per_week,
-                                      experience=experience, readiness=r, feedback=fb)
+        program = coach.generate_program(goal=goal, days_per_week=days_per_week,
+                                         experience=experience, readiness=r, feedback=fb)
+        if prof.get("unreadable"):  # the stored pain/avoid list could not be read: say so, never silently drop it
+            program["feedback_error"] = prof["unreadable"]
+        return program
     return _safe(run)
 
 

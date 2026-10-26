@@ -162,7 +162,7 @@ class LoadsAreBoundedBeforeAnythingIsSent(unittest.TestCase):
         self.refused("r", [good_ex(sets=[good_set(rest=301)])], "rest")
         self.refused("s", [good_ex(sets=[good_set()] * 21)], "sets")
         self.refused("s", [good_ex(sets=[])], "sets")
-        self.refused("e", [good_ex()] * 31, "exercises")
+        self.refused("e", [good_ex()] * 51, "exercises")
         self.refused("e", [], "exercises")
 
     def test_shapes_and_names(self):
@@ -204,6 +204,7 @@ class LoadsAreBoundedBeforeAnythingIsSent(unittest.TestCase):
 class ApplyProgram(unittest.TestCase):
     def setUp(self):
         self.client = mock.Mock()
+        self.client.credentials = {"token": "x", "unit": 0, "unit_confirmed": True}
         self.client.get_library.return_value = []
         self.client.save_workout.return_value = {"code": 0, "data": {"id": 1}}
         patcher = mock.patch.object(features, "resolve_exercise",
@@ -277,7 +278,7 @@ class ApplyProgram(unittest.TestCase):
     def test_the_endpoint_maps_unit_errors_to_400_and_passes_the_unit_through(self):
         c = gym_app.app.test_client()
         with mock.patch.object(features, "_client", self.client), mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}):
-            self.client.credentials = {"token": "x"}
+            self.client.credentials = {"token": "x", "unit": 0, "unit_confirmed": True}
             resp = c.post("/api/coach/apply", headers=BASIC, json={"program": self.program(50), "day_index": 0})
             self.assertEqual((resp.status_code, resp.get_json()["error"]), (400, "bad_request"))
             ok = c.post("/api/coach/apply", headers=BASIC,

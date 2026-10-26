@@ -35,12 +35,22 @@ MOBILE_DEVICE = {"brand": "google", "device": "emulator64_x86_64_arm64", "device
 DETAIL_ENDPOINT = {2: "courseTrainingInfoDetail", 5: "cttTrainingInfoDetail"}
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """The session Token travels in a header: never replay it to wherever a redirect points."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def default_transport(method: str, url: str, headers: dict, body: dict | None):
-    """(status, parsed-json) via urllib. Network errors raise OSError, which the caller wraps."""
+    """(status, parsed-json) via urllib, never following redirects. Network errors raise OSError, which the caller wraps."""
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with _OPENER.open(req, timeout=20) as resp:
             status, raw = resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as err:
         status, raw = err.code, err.read().decode("utf-8", "replace")
