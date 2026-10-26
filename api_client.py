@@ -495,7 +495,7 @@ class SpeedianceClient:
                 }
             else:
                 categories_by_device = {self.device_type: self.get_categories(strict=True)}
-            if not any(categories_by_device.values()):
+            if not all(categories_by_device.values()):  # EVERY device source must answer
                 incomplete = True  # a library of zero categories is an outage, not an empty gym
 
             all_basic_exercises = []

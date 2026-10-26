@@ -572,6 +572,12 @@ def save_readiness(payload, data_dir=None):
     keep = state_io.validate_readiness(payload)
     if not keep:
         raise ValueError("no readiness signal supplied")
+    path = _readiness_path(data_dir)
+    with state_io.file_lock(path + ".lock"):  # the web app and the MCP server both write: read-merge-write is one step
+        return _merge_readiness(keep, path, data_dir)
+
+
+def _merge_readiness(keep, path, data_dir):
     now = state_io.utc_stamp()
     # "any subset" is the documented use (separate WHOOP and Apple Health shortcuts): a later partial post must not erase
     # an earlier red signal, so recent fields from earlier posts are kept, each with its own age
@@ -582,7 +588,7 @@ def save_readiness(payload, data_dir=None):
     stamps.update({k: now for k in keep})
     merged["updated"] = now
     merged["field_updated"] = {k: stamps[k] for k in READINESS_KEYS if k in merged and k in stamps}
-    state_io.atomic_write_json(_readiness_path(data_dir), merged)
+    state_io.atomic_write_json(path, merged)
     return merged
 
 
@@ -674,8 +680,8 @@ def coach_readiness():
         return jsonify({"stored": keep, "adjustment": coach.autoregulate(keep)})
     stored = _load_readiness()
     age = readiness_age_hours(stored)
-    stale = bool(stored) and (age is None or age > state_io.READINESS_MAX_AGE_H)
-    usable = {} if stale else stored
+    usable = _fresh_readiness()  # per-field freshness, the same rule program generation uses
+    stale = bool(stored) and not usable
     return jsonify({"stored": stored, "age_hours": None if age is None else round(age, 1), "stale": stale,
                     "adjustment": coach.autoregulate(usable)})
 
@@ -1309,6 +1315,15 @@ def _summarize_session(record, detail, unit):
     }
 
 
+def _start_key(record):
+    """Sort key in epoch seconds, whatever unit the vendor used for this record (seconds and milliseconds can mix)."""
+    try:
+        n = float(record.get("startTimestamp") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return n / 1000 if n > 10_000_000_000 else n
+
+
 def _detailed_records(client, days=60):
     """Recent completed sessions that have a per-set breakdown, newest first."""
     days = clamp_days(days, 60)
@@ -1316,7 +1331,7 @@ def _detailed_records(client, days=60):
     recs = client.get_training_records(start.isoformat(), end.isoformat())
     recs = [r for r in (recs if isinstance(recs, list) else []) if isinstance(r, dict)
             and TRAINING_TYPE_MAP.get(r.get("type"), (None, None))[1]]
-    recs.sort(key=lambda r: r.get("startTimestamp") or 0, reverse=True)
+    recs.sort(key=_start_key, reverse=True)
     return recs
 
 

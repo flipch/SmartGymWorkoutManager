@@ -172,8 +172,10 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                                         "choose a load that leaves the target RIR"))
             continue
         if not loads:
-            out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
-                                        "no recorded sets last time (skipped or unrecorded): use your template's targets"))
+            note = ("timed exercise (planned by duration, not reps): use your template's targets"
+                    if any(getattr(r, "seconds", None) for r in rows)
+                    else "no recorded sets last time (skipped or unrecorded): use your template's targets")
+            out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None, note))
             continue
         last = float(median(loads))
         hit_all = bool(targets) and all((r.reps or 0) >= r.target for r in rows if r.target)

@@ -1134,11 +1134,11 @@ MODES:
 Use these modes appropriately based on the goal (e.g., Eccentric for hypertrophy/control).
 
 PRESET IDS:
-- -1: Custom (KG)
+- -1: Custom (${userUnit === 1 ? 'LBS' : 'KG'})
 - 1: Gain Muscle (RM)
 - 3: Stamina (RM)
 - 5: Strength (RM)
-Depending on the preset, the training weight can be prescribed either as an absolute weight (kg) or as a relative RM value based on the users maximum strength for a specific number of repetitions.
+Depending on the preset, the training weight can be prescribed either as an absolute weight (${userUnit === 1 ? 'lb' : 'kg'}) or as a relative RM value based on the users maximum strength for a specific number of repetitions.
 When providing a RM value try to keep one repetition in reserve to avoid overtraining.
 Use the preset ID appropriately based on the goal (e.g., Gain Muscle for hypertrophy, Stamina for endurance, Strength for strength/explosiveness).
 For custom workouts, use the -1 preset.
@@ -1252,7 +1252,7 @@ You must output a JSON object with the following structure:
                         weight: parseFloat(String(s.weight ?? 0).replace(',', '.')),
                         mode: parseInt(s.mode || 1),
                         rest: (s.rest === undefined || s.rest === null || Number.isNaN(parseInt(s.rest))) ? 60 : parseInt(s.rest),  // 0 s is a real rest
-                        unit: 'reps'
+                        unit: String(s.unit || '').toLowerCase() === 'sec' ? 'sec' : 'reps'  // an exported timed set stays timed
                     }));
 
                     // Handle Unilateral: expand L/R pairs if not already expanded.

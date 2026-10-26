@@ -151,7 +151,8 @@ function buildExportJSON(workoutData, planName) {
                 reps: s.reps,
                 weight: s.weight,
                 mode: s.mode,
-                rest: s.rest
+                rest: s.rest,
+                unit: s.unit === 'sec' ? 'sec' : 'reps'
             }))
         }))
     };

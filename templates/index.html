@@ -235,6 +235,8 @@
                         const counters = (ex.counterweight2 || '').split(',');
                         const modes = (ex.sportMode || '').split(',');
                         const breaks = (ex.breakTime2 || '').split(',');
+                        const levels = (ex.level || '').split(',');
+                        const counts = (ex.countType || ex.completionMethod || '').toString().split(',');
                         const leftRights = (ex.leftRight || '').split(',');
                         const isUnilateral = leftRights.some(lr => lr === '1' || lr === '2');
                         return {
@@ -244,9 +246,12 @@
                             isUnilateralExpanded: isUnilateral,
                             sets: reps.map((rep, i) => ({
                                 reps: parseInt(rep) || 0,
-                                weight: isRM ? (parseInt(counters[i]) || 0) : (parseFloat(weights[i]) || 0),
+                                // Vita keeps its difficulty in `level` (the cable weight is 0)
+                                weight: (parseInt(levels[i]) > 0) ? parseInt(levels[i])
+                                      : isRM ? (parseInt(counters[i]) || 0) : (parseFloat(weights[i]) || 0),
                                 mode: parseInt(modes[i]) || 1,
-                                rest: parseInt(breaks[i]) || 60
+                                rest: Number.isNaN(parseInt(breaks[i])) ? 60 : parseInt(breaks[i]),  // 0 s is a real rest
+                                unit: String(counts[i] || '').trim() === '2' ? 'sec' : 'reps'
                             }))
                         };
                     })
@@ -577,11 +582,13 @@
     // --- Navigation ---
 
     document.getElementById('prevMonth').addEventListener('click', () => {
+        currentDate.setDate(1);  // from the 31st, setMonth would overflow into the month after next
         currentDate.setMonth(currentDate.getMonth() - 1);
         initCalendar();
     });
 
     document.getElementById('nextMonth').addEventListener('click', () => {
+        currentDate.setDate(1);
         currentDate.setMonth(currentDate.getMonth() + 1);
         initCalendar();
     });

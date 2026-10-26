@@ -213,3 +213,64 @@ test('a failed removal after a good add says so and still refreshes', async () =
     same(calls, ['add:2099-01-02', 'remove:2099-01-01', 'refresh']);
     assert.match(alerts[0], /now on the new date/);
 });
+
+// ----------------------------------------------------------------------------------------------- round 18
+test('the AI prompt asks for loads in the ACCOUNT unit', async () => {
+    for (const [unit, word, other] of [[1, 'LBS', 'KG'], [0, 'KG', 'LBS']]) {
+        const src = read('create.html');
+        const prompt = between(src, 'let prompt = `', '`;\n');
+        const ctx = { userUnit: unit, userRequest: 'x', out: null };
+        vm.createContext(ctx);
+        vm.runInContext('out = `' + prompt.slice('let prompt = `'.length) + '`;', ctx);
+        assert.ok(ctx.out.includes(`Custom (${word})`), ctx.out.slice(0, 600));
+        assert.ok(!ctx.out.includes(`Custom (${other})`));
+    }
+});
+
+test('an exported timed set stays timed after an import round trip', async () => {
+    const { ctx, doc } = editor(() => metaOf());
+    const exported = WorkoutLogic.buildExportJSON([{ groupId: 5, title: 'T', selectedPresetId: -1, isUnilateral: false,
+        sets: [{ reps: 60, weight: 0, mode: 1, rest: 30, unit: 'sec' }, { reps: 10, weight: 20, mode: 1, rest: 60, unit: 'reps' }] }], 'p');
+    await importJson(ctx, doc, exported);
+    same(ctx.workoutData[0].sets.map((s) => s.unit), ['sec', 'reps']);
+});
+
+function bulkExport(detail) {
+    const src = read('index.html');
+    let blobText = null;
+    const ctx = {
+        console, alert() {}, Date, JSON,
+        document: { createElement: () => ({ click() {} }), body: { appendChild() {}, removeChild() {} },
+                    querySelectorAll: () => [], getElementById: () => ({ classList: { add() {}, remove() {} } }) },
+        Blob: class { constructor(parts) { blobText = parts[0]; } },
+        URL: { createObjectURL: () => 'blob:x', revokeObjectURL() {} },
+    };
+    vm.createContext(ctx);
+    const body = between(src, 'const exportArr = results.map', 'const jsonStr = JSON.stringify(exportArr');
+    vm.runInContext('globalThis.convert = (results) => { ' + body + ' return exportArr; };', ctx);
+    return plain(ctx.convert([detail]));
+}
+
+test('a bulk export keeps Vita levels, zero rests and timed sets', () => {
+    const out = bulkExport({ name: 'n', actionLibraryList: [{ groupId: 5, title: 'T', templatePresetId: -1, setsAndReps: '10,10', weights: '0,0',
+        level: '8,3', sportMode: '1,1', breakTime2: '0,45', leftRight: '0,0', counterweight2: '', countType: '2,1' }] });
+    same(out[0].exercises[0].sets.map((s) => s.weight), [8, 3]);
+    same(out[0].exercises[0].sets.map((s) => s.rest), [0, 45]);
+    same(out[0].exercises[0].sets.map((s) => s.unit), ['sec', 'reps']);
+});
+
+test('month navigation from the 31st lands in the adjacent month', () => {
+    const src = read('index.html');
+    const handlers = {};
+    const ctx = {
+        currentDate: new Date(2026, 9, 31), initCalendar() {},
+        document: { getElementById: (id) => ({ addEventListener: (_e, fn) => { handlers[id] = fn; } }) },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, "document.getElementById('prevMonth')", '    // Initialize'), ctx);
+    handlers.nextMonth();
+    assert.equal(ctx.currentDate.getMonth(), 10);  // November, not December
+    ctx.currentDate = new Date(2026, 9, 31);
+    handlers.prevMonth();
+    assert.equal(ctx.currentDate.getMonth(), 8);   // September, not October
+});

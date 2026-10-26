@@ -83,7 +83,11 @@ def quarantine(path) -> str:
 # ------------------------------------------------------------------------------------------------ validation
 def _number(payload, key, low, high):
     value = payload[key]
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    try:
+        finite = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:  # an integer too large for a float is not a usable number either
+        finite = False
+    if not finite:
         raise ValueError(f"invalid {key}: must be a number")
     if not low <= value <= high:
         raise ValueError(f"invalid {key}: must be between {low} and {high}")

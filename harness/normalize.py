@@ -69,7 +69,7 @@ def session_with_sets(record: dict, detail, tz: str = DEFAULT_TZ, unit: str | No
             reps = None if timed else (row.get("finishedCount") or None)
             sets.append(SetResult(exercise=name, reps=reps, load=set_load(row),
                                   seconds=row.get("time") if timed else None, unit=unit,
-                                  target=row.get("targetCount") or None))
+                                  target=None if timed else (row.get("targetCount") or None)))  # a duration is not a rep target
     header = session_header(record, tz)
     return SessionResult(header.source_id, header.local_day, header.started_at_ms, header.title,
                          header.duration_s, header.total_volume, tuple(sets))

@@ -620,6 +620,124 @@ class VendorTimestampsInSecondsOrMilliseconds(unittest.TestCase):
             self.assertTrue(out["date"].startswith("2026-"), out["date"])
 
 
+class Round18ServerSide(unittest.TestCase):
+    def test_concurrent_partial_readiness_posts_all_survive(self):
+        import threading
+        import time as _time
+        d = tempfile.mkdtemp(prefix="gym-ready-")
+        real = features._load_readiness
+
+        def slow(data_dir=None):
+            out = real(data_dir)
+            _time.sleep(0.05)  # widen the read-merge-write window so an unlocked implementation loses updates
+            return out
+
+        payloads = [{"whoop_recovery": 20}, {"sleep_hours": 8}, {"subjective": 3}, {"rhr_delta_bpm": 2}, {"acwr": 1.1}]
+        gate = threading.Barrier(len(payloads))
+        errors = []
+
+        def post(payload):
+            gate.wait()
+            try:
+                features.save_readiness(payload, d)
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
+
+        with mock.patch.object(features, "_load_readiness", slow):
+            threads = [threading.Thread(target=post, args=(pl,)) for pl in payloads]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(errors, [])
+        stored = real(d)
+        for key in ("whoop_recovery", "sleep_hours", "subjective", "rhr_delta_bpm", "acwr"):
+            self.assertIn(key, stored)
+
+    def test_the_readiness_get_uses_per_field_freshness(self):
+        import json as _json
+        from datetime import datetime, timedelta, timezone
+        d = tempfile.mkdtemp(prefix="gym-ready-")
+        old = (datetime.now(timezone.utc) - timedelta(hours=40)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        new = (datetime.now(timezone.utc) - timedelta(hours=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(features._readiness_path(d), "w") as f:
+            _json.dump({"whoop_recovery": 20, "subjective": 4, "updated": new,
+                        "field_updated": {"whoop_recovery": old, "subjective": new}}, f)
+        fake = mock.Mock(data_dir=d, credentials={"token": "x"})
+        with mock.patch.object(features, "_client", fake), mock.patch.dict(os.environ, {"DATA_DIR": d}):
+            body = gym_app.app.test_client().get("/api/coach/readiness", headers=BASIC).get_json()
+        self.assertEqual(body["adjustment"]["band"], "high")  # the 40 h old red recovery no longer counts
+        self.assertFalse(body["stale"])
+
+    def test_strict_library_needs_every_device_source(self):
+        with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-lib-")}):
+            client = api_client.SpeedianceClient()
+        client.save_config("1", "tok", "Global", 0, "", 2, True, [], [])  # Gym Pal + Monster moves
+        client.library_cache = None
+
+        def request(m, u, **kw):
+            if "actionLibraryTab/list?deviceType=2" in u:
+                return Resp(200, {"code": 0, "data": []})  # the whole Pal source answered with nothing
+            if "actionLibraryTab/list?deviceType=1" in u:
+                return Resp(200, {"code": 0, "data": [{"id": 9, "name": "M"}]})
+            return Resp(200, {"code": 0, "data": [{"actionLibraryGroupList": [{"id": 5, "name": "Press"}]}]})
+
+        client._request = request
+        client.get_batch_details = lambda ids, strict=False: [{"id": i, "name": "x"} for i in ids]
+        with self.assertRaises(api_client.UpstreamError):
+            client.get_library(strict=True)
+        self.assertFalse(os.path.exists(client.library_cache_file))
+
+    def test_mixed_second_and_millisecond_timestamps_sort_by_real_time(self):
+        older_ms, newer_s = 1790000000000, 1791000000
+        recs = [{"type": 5, "trainingId": 1, "startTimestamp": older_ms}, {"type": 5, "trainingId": 2, "startTimestamp": newer_s}]
+        client = mock.Mock()
+        client.get_training_records.return_value = recs
+        out = features._detailed_records(client, 30)
+        self.assertEqual([r["trainingId"] for r in out], [2, 1])
+
+    def test_integers_too_large_for_a_float_are_a_clean_400(self):
+        import state_io
+        for key in ("whoop_recovery", "sleep_hours", "acwr", "subjective", "rhr_delta_bpm"):
+            with self.assertRaises(ValueError, msg=key):
+                state_io.validate_readiness({key: 10 ** 400})
+        fake = mock.Mock(data_dir=tempfile.mkdtemp(prefix="gym-body-"), credentials={"token": "x"})
+        with mock.patch.object(features, "_client", fake), mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}):
+            c = gym_app.app.test_client()
+            for path, body in (("/api/coach/readiness", '{"whoop_recovery": %s}' % ("9" * 400)),
+                               ("/api/coach/autoregulate", '{"whoop_recovery": %s}' % ("9" * 400)),
+                               ("/api/coach/feedback", '{"rpe": %s}' % ("9" * 400)),
+                               ("/api/coach/program", '{"readiness": {"whoop_recovery": %s}}' % ("9" * 400))):
+                self.assertEqual(c.post(path, headers=BASIC, data=body, content_type="application/json").status_code, 400, path)
+
+
+class Round18Harness(unittest.TestCase):
+    def test_a_timed_exercise_is_not_planned_as_a_rep_count(self):
+        sys.path.insert(0, os.path.dirname(__file__))
+        import synth
+        from datetime import date, datetime, timedelta
+        from harness import planner
+        from harness.model import Plan, Reading
+        from harness.normalize import session_header, session_with_sets
+
+        d = date(2026, 10, 26)
+        newer = synth.history_record(11, synth.ts_ms(d.year, d.month, d.day - 3), title="Core")
+        older = synth.history_record(12, synth.ts_ms(d.year, d.month, d.day - 10), title="Core")
+        plank = synth.exercise("Synthetic Plank", [(0, 0, 60)], timed=True)
+        plank["finishedReps"][0].update({"time": 60, "targetCount": 60, "finishedCount": 0})
+        normalized = session_with_sets(newer, [plank])
+        self.assertIsNone(normalized.sets[0].target)
+        self.assertEqual(normalized.sets[0].seconds, 60)
+        now = datetime(2026, 10, 26, 7, 0, tzinfo=synth.PT)
+        result = planner.todays_plan(sessions=[normalized, session_header(older)],
+                                     readings=[Reading("subjective", 4, "manual", now)], now=now)
+        self.assertIsInstance(result, Plan)
+        self.assertEqual(result.source, "user_template")
+        plank_plan = next(e for e in result.exercises if e.name == "Synthetic Plank")
+        self.assertIsNone(plank_plan.reps)  # 60 seconds is not 60 repetitions
+        self.assertIn("timed exercise", plank_plan.load_basis)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):
