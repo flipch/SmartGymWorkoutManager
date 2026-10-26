@@ -1,14 +1,11 @@
-"""WHOOP API v2: parsing + safe token rotation. Deliberately NO HTTP layer yet.
+"""WHOOP API v2: parsing + safe token rotation. The HTTP layer and the one-time consent live in `whoop_client`.
 
-Why no HTTP client: it cannot be verified until Felipe registers a WHOOP developer app (Sandbox tier, redirect
-URL), and an untested client would only prove the code agrees with itself. What IS verifiable now is below:
-  * parsers validated against WHOOP's own published OpenAPI spec (tests/fixtures/whoop_openapi.json, from
-    https://api.prod.whoop.com/developer/doc/openapi.json, fetched 2026-10-26);
-  * the rotating-token refresh protocol: WHOOP rotates BOTH tokens on refresh, so two concurrent refreshers
-    invalidate each other. TokenStore serializes refreshes behind an OS file lock and lets the loser reuse the
-    winner's tokens.
+Parsers are validated against WHOOP's own published OpenAPI spec (tests/fixtures/whoop_openapi.json, from
+https://api.prod.whoop.com/developer/doc/openapi.json, fetched 2026-10-26). The refresh protocol matters because WHOOP
+rotates BOTH tokens on refresh, so two concurrent refreshers invalidate each other: TokenStore serialises refreshes
+behind an OS file lock and lets the loser reuse the winner's tokens.
 Endpoints (spec): GET /v2/recovery, /v2/activity/sleep, /v2/cycle (collections: {records, next_token}); OAuth token
-endpoint per WHOOP docs: https://api.prod.whoop.com/oauth/oauth2/token (unverified live).
+endpoint per WHOOP docs: https://api.prod.whoop.com/oauth/oauth2/token.
 
 Semantics enforced here (from the spec + research):
   * only score_state == SCORED counts; PENDING_SCORE / UNSCORABLE yield NO reading (never "0") so the planner's

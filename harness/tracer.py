@@ -99,6 +99,8 @@ def _jsonable(obj):
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--whoop-live", action="store_true",
+                   help="read today's recovery + sleep from WHOOP (run `python -m harness.whoop_auth` once first)")
     p.add_argument("--whoop-recovery", type=float)
     p.add_argument("--sleep-hours", type=float)
     p.add_argument("--rhr-delta", type=float, help="resting HR vs baseline, bpm")
@@ -139,6 +141,15 @@ def main(argv=None) -> int:
         return 1
 
     sessions, errors = None, {}
+    if a.whoop_live:  # a WHOOP failure is an UNAVAILABLE plan, never a silent fall-back to "no readiness data"
+        try:
+            from . import whoop_client
+            live, notes = whoop_client.default_client().fetch_readings()
+            readings += live
+            for note in notes:
+                print(f"note: whoop: {note}", file=sys.stderr)
+        except (SourceDown, OSError, ValueError) as err:
+            errors["whoop"] = str(err) if isinstance(err, SourceDown) else f"{type(err).__name__} reading WHOOP credentials"
     try:
         if a.recordings:
             sessions = load_recordings(Path(a.recordings), a.tz, a.unit)
