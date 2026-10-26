@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, Response
 from api_client import SpeedianceClient
-from debug_routes import init_debug
+from auth import load_token, install_flask_auth
 from features import init_features
 import json
 import os
@@ -29,7 +29,7 @@ else:
 
 app.secret_key = "speediance_secret_key" # For Flash Messages
 client = SpeedianceClient()
-app.register_blueprint(init_debug(client))
+install_flask_auth(app, load_token())
 app.register_blueprint(init_features(client))
 
 # --- Media Caching Logic ---
@@ -616,11 +616,6 @@ def api_history_detail(training_id):
         if str(e) == "Unauthorized":
             return jsonify({"error": "Unauthorized"}), 401
         return jsonify({"error": str(e)}), 500
-
-@app.route('/debug/last_response')
-def debug_last_response():
-    """Returns the last API request/response info for debugging."""
-    return jsonify(client.last_debug_info)
 
 @app.route('/browse')
 def browse_page():

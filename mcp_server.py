@@ -18,6 +18,7 @@ from datetime import date, timedelta
 from mcp.server.mcpserver import MCPServer
 
 import coach
+from auth import BearerAuthASGI, load_token, writes_enabled
 from api_client import SpeedianceClient
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
@@ -34,6 +35,18 @@ def _client():
     return SpeedianceClient()
 
 
+class WritesDisabled(Exception):
+    """Raised by tools that modify the user's Speediance account while GYM_ALLOW_WRITES!=1."""
+
+
+def _require_writes():
+    if not writes_enabled():
+        raise WritesDisabled(
+            "Write tools are disabled on this server (GYM_ALLOW_WRITES is not 1). "
+            "Preview with dry_run=true, or ask the owner to enable writes."
+        )
+
+
 def _require_auth(c):
     if not c.credentials.get("token"):
         raise PermissionError(
@@ -46,6 +59,8 @@ def _safe(fn):
     """Run a client call, normalising errors into a JSON-friendly dict."""
     try:
         return fn()
+    except WritesDisabled as e:
+        return {"error": "writes_disabled", "message": str(e)}
     except PermissionError as e:
         return {"error": "not_authenticated", "message": str(e)}
     except Exception as e:  # noqa: BLE001 — surface anything as a clean payload
@@ -97,6 +112,7 @@ def delete_workout(template_id: str) -> dict:
     """Permanently delete a custom workout template by its id (Speediance ids can be long
     hex strings, so this is a string). Destructive — confirm the id with list_workouts first."""
     def run():
+        _require_writes()
         c = _client(); _require_auth(c)
         c.delete_workout(template_id)
         return {"deleted": template_id}
@@ -112,6 +128,7 @@ def save_workout(name: str, exercises: list, template_id: int = None) -> dict:
        "sets": [{"reps": 10, "weight": 20.0, "rest": 60, "unit": "reps"|"sec"}, ...]}
     Returns the Speediance API response."""
     def run():
+        _require_writes()
         c = _client(); _require_auth(c)
         return c.save_workout(name, exercises, template_id)
     return _safe(run)
@@ -133,6 +150,7 @@ def schedule_workout(day: str, template_code: str, add: bool = True) -> dict:
     """Add (add=True) or remove (add=False) a workout from the calendar.
     `day` is 'YYYY-MM-DD'; `template_code` comes from list_workouts."""
     def run():
+        _require_writes()
         c = _client(); _require_auth(c)
         ok = c.schedule_workout(day, template_code, 1 if add else 0)
         return {"day": day, "template_code": template_code,
@@ -337,13 +355,15 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
 
 @mcp.tool()
 def create_workout_from_program(program: dict, day_index: int = None,
-                                name: str = None, dry_run: bool = False) -> dict:
+                                name: str = None, dry_run: bool = True) -> dict:
     """Import a generated program (the `generate_program` result) into REAL Speediance workout
     templates. Resolves each exercise name to a library groupId, builds the sets payload, and
-    saves it (set dry_run=true to preview the resolution without saving). day_index saves a
+    saves it. dry_run defaults to TRUE (preview only: shows the resolution, saves nothing); pass dry_run=false to save, which also requires the server to have writes enabled. day_index saves a
     single day; omit it to save every day as its own template. Unresolved exercises are
     reported, never silently dropped. This is the one-call 'generate then save to my gym' path."""
     def run():
+        if not dry_run:
+            _require_writes()
         c = _client(); _require_auth(c)
         if not isinstance(program, dict) or not program.get("days"):
             return {"error": "no_program", "message": "Pass a generate_program result as `program`."}
@@ -447,9 +467,16 @@ def set_readiness(whoop_recovery: float = None, hrv_vs_baseline: str = None,
     return _safe(run)
 
 
+def build_app(host: str = "127.0.0.1"):
+    """The streamable-HTTP ASGI app, behind the shared-secret check (fails closed without a token)."""
+    app = mcp.streamable_http_app(host=host)
+    token = load_token()
+    return app if token is None else BearerAuthASGI(app, token)
+
+
 if __name__ == "__main__":
-    mcp.run(
-        transport="streamable-http",
-        host=os.environ.get("MCP_HOST", "0.0.0.0"),
-        port=int(os.environ.get("MCP_PORT", "5002")),
-    )
+    import uvicorn
+
+    _host = os.environ.get("MCP_HOST", "0.0.0.0")
+    uvicorn.run(build_app(_host), host=_host, port=int(os.environ.get("MCP_PORT", "5002")),
+                log_level="info")

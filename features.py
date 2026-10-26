@@ -762,7 +762,7 @@ def program_day_to_payload(library, day):
     return exercises, resolved, unresolved
 
 
-def apply_program(client, program, day_index=None, name=None, dry_run=False):
+def apply_program(client, program, day_index=None, name=None, dry_run=True):
     """Resolve + (optionally) save a generated program's day(s) as Speediance templates."""
     library = client.get_library() or []
     days = program.get("days", [])
@@ -795,7 +795,7 @@ def apply_program(client, program, day_index=None, name=None, dry_run=False):
 @features_bp.route('/api/coach/apply', methods=['POST'])
 def coach_apply():
     """Import a generated program into the user's Speediance workouts. Body:
-    {program:<generate_program output>, day_index?:int, name?:str, dry_run?:bool}."""
+    {program:<generate_program output>, day_index?:int, name?:str, dry_run?:bool (default true)}."""
     if not _authed():
         return jsonify({"error": "not_authenticated",
                         "message": "Log in at /settings to save to your Speediance account."}), 401
@@ -806,7 +806,7 @@ def coach_apply():
                         "message": "POST {program:<generate_program output>, day_index?, name?, dry_run?}"}), 400
     try:
         return jsonify(apply_program(_client, program, body.get("day_index"),
-                                     body.get("name"), bool(body.get("dry_run"))))
+                                     body.get("name"), bool(body.get("dry_run", True))))
     except Exception as e:
         return jsonify({"error": "apply_failed", "message": str(e)}), 502
 
