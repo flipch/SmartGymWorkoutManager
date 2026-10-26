@@ -33,7 +33,7 @@
                 <p>{{ w.totalCapacity }} {{ 'lbs' if unit == 1 else 'kg' }} &bull; ~{{ w.durationMinute }} min &bull; {{ w.actionNum }} exercises</p>
             </div>
             <div class="mt-4 flex space-x-2">
-                <a href="/delete/{{ w.id }}" onclick="return confirm('Really delete?')" class="text-red-400 hover:text-red-300 text-sm">Delete</a>
+                <form method="post" action="/delete/{{ w.id }}" class="inline" onsubmit="return confirm('Really delete?')"><button type="submit" class="text-red-400 hover:text-red-300 text-sm">Delete</button></form>
                 <a href="/edit/{{ w.code }}" class="text-blue-400 hover:text-blue-300 text-sm">Edit</a>
             </div>
         </div>

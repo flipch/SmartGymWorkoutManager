@@ -20,6 +20,7 @@ import os
 import re
 
 import coach
+from auth import writes_enabled
 
 features_bp = Blueprint('features', __name__)
 _client = None
@@ -102,8 +103,7 @@ def _session_dates(recs):
 # ---------------------------------------------------------------- health
 @features_bp.route('/healthz')
 def healthz():
-    return jsonify({"status": "ok", "app": "smart-gym-workout-manager",
-                    "authenticated": _authed()}), 200
+    return jsonify({"status": "ok", "app": "smart-gym-workout-manager"}), 200  # unauthenticated: reveal nothing else
 
 
 # ----------------------------------------------------- Feature 1: insights (deep)
@@ -804,9 +804,11 @@ def coach_apply():
     if not isinstance(program, dict) or not program.get("days"):
         return jsonify({"error": "no_program",
                         "message": "POST {program:<generate_program output>, day_index?, name?, dry_run?}"}), 400
+    dry_run = body.get("dry_run") is not False  # only a literal false saves; null/0/"" stay a dry run
+    if not dry_run and not writes_enabled():
+        return jsonify({"error": "writes_disabled", "message": "Set GYM_ALLOW_WRITES=1 to save to Speediance."}), 403
     try:
-        return jsonify(apply_program(_client, program, body.get("day_index"),
-                                     body.get("name"), bool(body.get("dry_run", True))))
+        return jsonify(apply_program(_client, program, body.get("day_index"), body.get("name"), dry_run))
     except Exception as e:
         return jsonify({"error": "apply_failed", "message": str(e)}), 502
 

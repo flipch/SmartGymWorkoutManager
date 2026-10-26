@@ -1,0 +1,103 @@
+"""The REAL Flask app and MCP ASGI app (not toy apps): auth on every route, write gate, CSRF, strict dry_run."""
+import base64
+import os
+import sys
+import unittest
+from unittest import mock
+
+TOKEN = "t" * 32
+os.environ["GYM_API_TOKEN"] = TOKEN
+os.environ.pop("GYM_AUTH_DISABLED", None)
+os.environ.pop("GYM_ALLOW_WRITES", None)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import app as gym_app  # noqa: E402  (needs the env above)
+import features  # noqa: E402
+
+BASIC = {"Authorization": "Basic " + base64.b64encode(f"gym:{TOKEN}".encode()).decode()}
+BEARER = {"Authorization": f"Bearer {TOKEN}"}
+
+
+class RealFlaskApp(unittest.TestCase):
+    def setUp(self):
+        self.c = gym_app.app.test_client()
+
+    def test_every_route_but_healthz_requires_auth(self):
+        checked = 0
+        for rule in gym_app.app.url_map.iter_rules():
+            if rule.rule == "/healthz":
+                continue
+            url = rule.rule
+            for arg in rule.arguments:
+                url = url.replace(f"<int:{arg}>", "1").replace(f"<string:{arg}>", "x").replace(f"<path:{arg}>", "x") \
+                         .replace(f"<{arg}>", "x")
+            for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
+                resp = self.c.open(url, method=method)
+                self.assertEqual(resp.status_code, 401, f"{method} {url}")
+                checked += 1
+        self.assertGreater(checked, 25)
+
+    def test_healthz_is_open_and_reveals_nothing_about_the_vendor_session(self):
+        resp = self.c.get("/healthz")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(set(resp.get_json()), {"status", "app"})
+
+    def test_debug_endpoints_are_gone(self):
+        for path in ("/debug", "/debug/last_response", "/debug/proxy", "/debug/console"):
+            self.assertEqual(self.c.get(path, headers=BASIC).status_code, 404, path)
+
+    def test_writes_are_refused_by_default_even_when_authenticated(self):
+        for method, path in (("POST", "/api/schedule"), ("POST", "/api/schedule_course"), ("POST", "/delete/1"),
+                             ("POST", "/logout"), ("POST", "/create")):
+            resp = self.c.open(path, method=method, headers=BASIC, json={})
+            self.assertEqual((path, resp.status_code, resp.get_json()["error"]), (path, 403, "writes_disabled"))
+
+    def test_delete_and_logout_are_no_longer_get_requests(self):
+        self.assertEqual(self.c.get("/delete/1", headers=BASIC).status_code, 405)
+        self.assertEqual(self.c.get("/logout", headers=BASIC).status_code, 405)
+
+    def test_cross_site_unsafe_requests_are_refused_even_with_credentials(self):
+        with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}):
+            for extra in ({"Origin": "https://evil.example"}, {"Origin": "null"}, {"Sec-Fetch-Site": "cross-site"}):
+                resp = self.c.post("/delete/1", headers={**BASIC, **extra})
+                self.assertEqual((extra, resp.status_code), (extra, 403))
+                self.assertEqual(resp.get_json()["error"], "cross_site_request_refused")
+
+    def test_same_origin_and_non_browser_requests_pass_the_gate(self):
+        with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), mock.patch.object(gym_app.client, "delete_workout"):
+            ok = self.c.post("/delete/1", headers={**BASIC, "Origin": "http://localhost", "Sec-Fetch-Site": "same-origin"})
+            self.assertEqual(ok.status_code, 302)
+            self.assertEqual(self.c.post("/delete/1", headers=BASIC).status_code, 302)  # curl: no Origin header
+
+    def test_coach_apply_only_a_literal_false_is_a_real_save(self):
+        body = {"program": {"days": [{"name": "d", "exercises": []}]}}
+        seen = []
+        with mock.patch.object(features, "_authed", return_value=True), \
+                mock.patch.object(features, "apply_program", side_effect=lambda *a: seen.append(a[-1]) or {"ok": True}):
+            for value in (None, 0, "", "false", True, "no"):
+                self.c.post("/api/coach/apply", headers=BASIC, json={**body, "dry_run": value})
+            self.c.post("/api/coach/apply", headers=BASIC, json=body)  # omitted
+            self.assertEqual(seen, [True] * 7)
+            refused = self.c.post("/api/coach/apply", headers=BASIC, json={**body, "dry_run": False})
+            self.assertEqual((refused.status_code, refused.get_json()["error"]), (403, "writes_disabled"))
+            self.assertEqual(len(seen), 7, "a refused real save must not reach apply_program")
+            with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}):
+                self.c.post("/api/coach/apply", headers=BASIC, json={**body, "dry_run": False})
+            self.assertEqual(seen[-1], False)
+
+
+class RealMcpApp(unittest.TestCase):
+    def test_build_app_rejects_missing_and_wrong_tokens_and_has_the_wrapper(self):
+        import mcp_server
+        from auth import BearerAuthASGI
+        app = mcp_server.build_app("127.0.0.1")
+        self.assertIsInstance(app, BearerAuthASGI)
+        from starlette.testclient import TestClient
+        client = TestClient(app, raise_server_exceptions=False)
+        self.assertEqual(client.post("/mcp", json={}).status_code, 401)
+        self.assertEqual(client.post("/mcp", json={}, headers={"Authorization": "Bearer wrong"}).status_code, 401)
+        self.assertNotEqual(client.post("/mcp", json={}, headers=BEARER).status_code, 401)
+
+
+if __name__ == "__main__":
+    unittest.main()

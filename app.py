@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, Response
 from api_client import SpeedianceClient
-from auth import load_token, install_flask_auth
+from auth import load_token, install_flask_auth, install_flask_write_gate
 from features import init_features
 import json
 import os
@@ -30,6 +30,7 @@ else:
 app.secret_key = "speediance_secret_key" # For Flash Messages
 client = SpeedianceClient()
 install_flask_auth(app, load_token())
+install_flask_write_gate(app)
 app.register_blueprint(init_features(client))
 
 # --- Media Caching Logic ---
@@ -269,7 +270,7 @@ def login():
             flash(debug_info, "debug")
         return redirect(url_for('settings'))
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
 def logout():
     client.logout()
     flash("Logged out successfully", "success")
@@ -769,7 +770,7 @@ def create():
         allow_monster_moves=client.allow_monster_moves,
     )
 
-@app.route('/delete/<int:id>')
+@app.route('/delete/<int:id>', methods=['POST'])
 def delete(id):
     client.delete_workout(id)
     flash("Workout deleted.", "info")

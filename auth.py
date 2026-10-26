@@ -67,6 +67,40 @@ def install_flask_auth(app, token: str | None):
                         {"WWW-Authenticate": 'Basic realm="Smart Gym", charset="UTF-8"'})
 
 
+# Flask endpoints that change Speediance state (workouts, schedule, or the vendor login session).
+WRITE_ENDPOINTS = frozenset({"api_schedule", "api_schedule_course", "delete", "logout"})
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def cross_site(headers, host: str) -> bool:
+    """True if a browser says this request was initiated by another site.
+
+    Browsers attach cached Basic credentials to cross-site requests, so auth alone is not CSRF protection.
+    Non-browser clients (curl, MCP) send neither header and are unaffected.
+    """
+    from urllib.parse import urlparse
+    site = headers.get("Sec-Fetch-Site")
+    if site and site not in ("same-origin", "none"):
+        return True
+    origin = headers.get("Origin")
+    return bool(origin and origin != "null" and urlparse(origin).netloc != host) or origin == "null"
+
+
+def install_flask_write_gate(app):
+    """Refuse cross-site unsafe requests, and Speediance-changing endpoints unless GYM_ALLOW_WRITES=1."""
+    from flask import jsonify, request
+
+    @app.before_request
+    def _write_gate():
+        if request.method not in SAFE_METHODS and cross_site(request.headers, request.host):
+            return jsonify({"error": "cross_site_request_refused"}), 403
+        is_write = request.endpoint in WRITE_ENDPOINTS or (request.endpoint == "create" and request.method == "POST")
+        if is_write and not writes_enabled():
+            return jsonify({"error": "writes_disabled",
+                            "message": "Set GYM_ALLOW_WRITES=1 to let this app change your Speediance account."}), 403
+        return None
+
+
 class BearerAuthASGI:
     """Pure-ASGI wrapper: 401 unless the request carries the shared secret."""
 
