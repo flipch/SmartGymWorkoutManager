@@ -237,9 +237,11 @@ class Tokens(unittest.TestCase):
             "    return {'access_token': 'a2', 'refresh_token': 'r2'}\n"
             "print(store.refresh_if_still_stale('r1', refresh)['refresh_token'])\n"
         )
-        procs = [subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                 for _ in range(5)]
+        procs = []
         try:
+            for _ in range(5):  # appended one by one INSIDE the try so a failed launch still reaps the earlier children
+                procs.append(subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE,
+                                              stderr=subprocess.PIPE, text=True))
             deadline = time.monotonic() + 30
             while len(list(Path(self.dir.name).glob("ready.*"))) < len(procs):  # barrier: start the race together
                 self.assertLess(time.monotonic(), deadline, "child processes never became ready")
@@ -311,17 +313,16 @@ class Tokens(unittest.TestCase):
         with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=main_fails):
             self.store.save({"access_token": "a2", "refresh_token": "r2"})  # lands in .pending
         self.assertTrue(self.store.pending_path.exists())
-        # manual re-authorisation writes newer tokens to the MAIN file without going through our unlink
-        real(self.store.path, {"access_token": "a3", "refresh_token": "r3", "saved_at_ns": time.time_ns() + 1})
+        # manual re-authorisation (or another process) writes a NEWER revision to the main file, leaving .pending behind
+        real(self.store.path, {"access_token": "a3", "refresh_token": "r3", "rev": 99})
         self.assertEqual(self.store.load()["refresh_token"], "r3")
         calls = []
         got = self.store.refresh_if_still_stale("r3", lambda old: calls.append(old) or {"access_token": "a4", "refresh_token": "r4"})
         self.assertEqual((calls, got["refresh_token"]), (["r3"], "r4"), "r3 is current: it must be refreshed, not skipped")
         self.assertEqual(self.store.load()["refresh_token"], "r4")
+        self.assertFalse(self.store.pending_path.exists())
 
-    def test_a_newer_main_file_saved_elsewhere_beats_a_stale_pending_file(self):
-        """Another process saved successfully (real timestamp) but did not remove OUR .pending: newest must still win."""
-        import shutil
+    def test_ordering_survives_the_wall_clock_going_backwards(self):
         from unittest import mock
         real = whoop.localsecrets.write_json_private
 
@@ -330,12 +331,22 @@ class Tokens(unittest.TestCase):
                 raise OSError("disk full")
             return real(path, data)
 
-        with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=main_fails):
-            self.store.save({"access_token": "a2", "refresh_token": "r2"})   # -> .pending, stamped now
-        elsewhere = whoop.TokenStore(Path(self.dir.name) / "other" / "whoop.token.json")
-        elsewhere.save({"access_token": "a3", "refresh_token": "r3"})        # stamped LATER by the real code path
-        shutil.copy(elsewhere.path, self.store.path)
-        self.assertEqual(self.store.load()["refresh_token"], "r3")
+        with mock.patch.object(whoop.time, "time_ns", side_effect=[10**18, 10**9, 5, 4, 3, 2]):  # NTP step backwards
+            with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=main_fails):
+                self.store.save({"access_token": "a2", "refresh_token": "r2"})
+                self.store.save({"access_token": "a3", "refresh_token": "r3"})
+            self.assertEqual(self.store.load()["refresh_token"], "r3")
+            self.store.save({"access_token": "a4", "refresh_token": "r4"})  # disk recovered
+        self.assertEqual(self.store.load()["refresh_token"], "r4")
+        self.assertFalse(self.store.pending_path.exists())
+
+    def test_every_save_bumps_the_revision(self):
+        revs = []
+        for n in range(2, 5):
+            self.store.save({"access_token": f"a{n}", "refresh_token": f"r{n}"})
+            revs.append(self.store.load()["rev"])
+        self.assertEqual(revs, sorted(set(revs)), "revisions must strictly increase")
+        self.assertGreater(revs[0], 1, "the setUp save was revision 1")
 
     def test_public_save_takes_the_lock(self):
         import fcntl
@@ -352,7 +363,9 @@ class Tokens(unittest.TestCase):
 
     def test_malformed_refresh_responses_become_sanitised_errors(self):
         import traceback
-        for bad in (None, ["not", "a", "dict"], {"access_token": "a", "refresh_token": "r", "x": object()}):
+        for bad in (None, ["not", "a", "dict"], {"access_token": "a", "refresh_token": "r", "x": object()},
+                    {"access_token": 123, "refresh_token": "r"}, {"access_token": "a", "refresh_token": {"t": "private-secret"}},
+                    {"access_token": "a", "refresh_token": "x" * 5000}):
             try:
                 try:
                     raise ValueError("outer-401-secret-token")

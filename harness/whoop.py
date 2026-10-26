@@ -33,6 +33,7 @@ SOURCE = "whoop"
 TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
 MS_PER_HOUR = 3_600_000
 LOCK_TIMEOUT_S = 30.0
+MAX_TOKEN_LEN = 4096
 
 
 def _parse_ts(value: str, what: str) -> datetime:
@@ -114,11 +115,12 @@ class TokenStore:
         self.pending_path = self.path.with_name(self.path.name + ".pending")
 
     def load(self) -> dict | None:
-        """The newest tokens. `.pending` exists only when the main file could not be written; whichever of the two was
-        saved LATER (by `saved_at_ns`) wins, so a stale pending file can never shadow a newer main file."""
-        candidates = [t for t in (localsecrets.read_json_private(self.pending_path),
-                                  localsecrets.read_json_private(self.path)) if t]
-        return max(candidates, key=lambda t: t.get("saved_at_ns", 0), default=None)
+        """The newest tokens. `.pending` exists only when the main file could not be written. Both carry a `rev`
+        counter that every save bumps under the lock (max(existing revs) + 1), so order never depends on the wall
+        clock; on a tie the main file wins."""
+        candidates = [t for t in (localsecrets.read_json_private(self.path),
+                                  localsecrets.read_json_private(self.pending_path)) if t]
+        return max(candidates, key=lambda t: t.get("rev", 0), default=None)
 
     def save(self, tokens: dict) -> None:
         """Persist a rotated pair under the same cross-process lock the refresher uses."""
@@ -137,9 +139,14 @@ class TokenStore:
         if not isinstance(tokens, dict):
             raise SourceDown(SOURCE, "refresh response was not a JSON object")
         for key in ("access_token", "refresh_token"):
-            if not tokens.get(key):
-                raise SourceDown(SOURCE, f"refresh response lacked {key}")
-        stamped = {**tokens, "saved_at_ns": time.time_ns()}
+            value = tokens.get(key)
+            if not isinstance(value, str) or not value or len(value) > MAX_TOKEN_LEN:
+                raise SourceDown(SOURCE, f"refresh response had a missing or malformed {key}")
+        try:
+            newest = self.load()
+        except (OSError, ValueError):  # an unreadable file must not block saving the new pair
+            newest = None
+        stamped = {**tokens, "rev": (newest or {}).get("rev", 0) + 1}
         for attempt in range(2):
             try:
                 localsecrets.write_json_private(self.path, stamped)
