@@ -15,7 +15,7 @@ so logging in / out through the UI is reflected immediately — no restart.
 import os
 from datetime import date, timedelta
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 import coach
 from api_client import SpeedianceClient
@@ -26,11 +26,7 @@ from features import (  # shared so MCP == HTTP logic
     log_feedback as _persist_feedback, save_readiness as _persist_readiness,
 )
 
-mcp = FastMCP(
-    "smart-gym",
-    host=os.environ.get("MCP_HOST", "0.0.0.0"),
-    port=int(os.environ.get("MCP_PORT", "5002")),
-)
+mcp = MCPServer("smart-gym")
 
 
 def _client():
@@ -452,4 +448,8 @@ def set_readiness(whoop_recovery: float = None, hrv_vs_baseline: str = None,
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp.run(
+        transport="streamable-http",
+        host=os.environ.get("MCP_HOST", "0.0.0.0"),
+        port=int(os.environ.get("MCP_PORT", "5002")),
+    )
