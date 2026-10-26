@@ -106,7 +106,7 @@
 </div>
 
 <script>
-    const unit = {{ unit }};
+    const unit = {{ unit | int }};
     const unitLabel = unit === 1 ? 'lbs' : 'kg';
     const DIFF_MAP = { 1: 'Beginner', 2: 'Intermediate', 3: 'Advanced' };
     const DIFF_COLOR = { 1: 'text-green-400', 2: 'text-yellow-400', 3: 'text-red-400' };
@@ -207,7 +207,7 @@
         let html = `<button onclick="setCourseFilter('All')" class="px-3 py-1 rounded-full text-xs font-medium ${activeCourseFilter === 'All' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}">All (${visibleTotal})</button>`;
         sorted.forEach(([name, count]) => {
             const active = activeCourseFilter === name;
-            html += `<button onclick="setCourseFilter('${name.replace(/'/g, "\\'")}')" class="px-3 py-1 rounded-full text-xs font-medium ${active ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}">${name} (${count})</button>`;
+            html += `<button onclick="setCourseFilter(${jsq(name)})" class="px-3 py-1 rounded-full text-xs font-medium ${active ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}">${esc(name)} (${count})</button>`;
         });
         container.innerHTML = html;
     }
@@ -238,14 +238,14 @@
             const diffColor = DIFF_COLOR[c.difficultyId] || 'text-gray-400';
             const cats = (c.categoryList || []).map(cat => cat.categoryName).filter(Boolean).join(', ');
             return `
-                <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden cursor-pointer hover:border-gray-500 transition" onclick="openCourseDetail(${c.id})">
-                    ${img ? `<div class="h-40 bg-gray-900 overflow-hidden"><img src="${img}" class="w-full h-full object-cover" loading="lazy"></div>` : '<div class="h-40 bg-gray-900 flex items-center justify-center text-gray-600">No Image</div>'}
+                <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden cursor-pointer hover:border-gray-500 transition" onclick="openCourseDetail(${Number(c.id)})">
+                    ${img ? `<div class="h-40 bg-gray-900 overflow-hidden"><img src="${esc(img)}" class="w-full h-full object-cover" loading="lazy"></div>` : '<div class="h-40 bg-gray-900 flex items-center justify-center text-gray-600">No Image</div>'}
                     <div class="p-3">
-                        <h3 class="font-bold text-white text-sm mb-1 line-clamp-2">${c.courseTitle}</h3>
+                        <h3 class="font-bold text-white text-sm mb-1 line-clamp-2">${esc(c.courseTitle)}</h3>
                         <div class="flex flex-wrap gap-2 text-xs">
-                            <span class="text-blue-300">${c.durationMinute} min</span>
+                            <span class="text-blue-300">${esc(c.durationMinute)} min</span>
                             <span class="${diffColor}">${diff}</span>
-                            ${cats ? `<span class="text-gray-400">${cats}</span>` : ''}
+                            ${cats ? `<span class="text-gray-400">${esc(cats)}</span>` : ''}
                         </div>
                         ${c.trainedUserCount ? `<span class="text-xs text-gray-500">${c.trainedUserCount.toLocaleString()} trained</span>` : ''}
                         ${c.isNew ? ' <span class="inline-block px-1.5 py-0.5 bg-green-600 text-white text-[10px] rounded">NEW</span>' : ''}
@@ -313,24 +313,24 @@
                     ? `<span class="text-purple-300">${mins} min follow-along</span>`
                     : `<span class="text-purple-300">Follow-along</span>`;
             } else if (ex.completionMethod === 0) {
-                setsInfo = `<span class="text-blue-300">${setsReps}s timer</span>`;
+                setsInfo = `<span class="text-blue-300">${esc(setsReps)}s timer</span>`;
             } else {
                 const parts = setsReps.split(',');
                 const uniqueReps = [...new Set(parts)];
-                const repStr = uniqueReps.length === 1 ? `${parts.length}&times;${uniqueReps[0]}` : `${parts.length} sets &middot; ${setsReps} reps`;
+                const repStr = uniqueReps.length === 1 ? `${parts.length}&times;${esc(uniqueReps[0])}` : `${parts.length} sets &middot; ${esc(setsReps)} reps`;
                 let weightStr = '';
                 if (ex.recommendedWeight) {
                     const w = unit === 1 ? Math.round(ex.recommendedWeight * 2.2) : ex.recommendedWeight;
-                    weightStr = `<span class="text-green-400">${w} ${unitLabel}</span>`;
+                    weightStr = `<span class="text-green-400">${esc(w)} ${unitLabel}</span>`;
                 }
                 setsInfo = `<span class="text-gray-300">${repStr}</span> ${weightStr}`;
             }
             return `
                 <div class="flex items-center gap-3 p-2 bg-gray-900 rounded-lg">
-                    ${ex.img ? `<img src="${ex.img}" class="w-10 h-10 rounded object-cover bg-black flex-shrink-0" loading="lazy">` : '<div class="w-10 h-10 rounded bg-gray-700 flex-shrink-0"></div>'}
+                    ${ex.img ? `<img src="${esc(ex.img)}" class="w-10 h-10 rounded object-cover bg-black flex-shrink-0" loading="lazy">` : '<div class="w-10 h-10 rounded bg-gray-700 flex-shrink-0"></div>'}
                     <div class="flex-grow min-w-0">
-                        <p class="text-white text-sm font-medium truncate">${ex.title}</p>
-                        <div class="flex gap-2 text-xs">${setsInfo} <span class="text-gray-500">${ex.mainMuscleGroupName || ''}</span></div>
+                        <p class="text-white text-sm font-medium truncate">${esc(ex.title)}</p>
+                        <div class="flex gap-2 text-xs">${setsInfo} <span class="text-gray-500">${esc(ex.mainMuscleGroupName)}</span></div>
                     </div>
                 </div>`;
         }).join('');
@@ -368,7 +368,7 @@
         let html = `<button onclick="setProgramFilter('All')" class="px-3 py-1 rounded-full text-xs font-medium ${activeProgramFilter === 'All' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}">All (${visible.length})</button>`;
         Object.entries(diffs).forEach(([name, count]) => {
             const active = activeProgramFilter === name;
-            html += `<button onclick="setProgramFilter('${name}')" class="px-3 py-1 rounded-full text-xs font-medium ${active ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}">${name} (${count})</button>`;
+            html += `<button onclick="setProgramFilter(${jsq(name)})" class="px-3 py-1 rounded-full text-xs font-medium ${active ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}">${esc(name)} (${count})</button>`;
         });
         container.innerHTML = html;
     }
@@ -398,13 +398,13 @@
             const diff = DIFF_MAP[p.difficultyId] || '';
             const diffColor = DIFF_COLOR[p.difficultyId] || 'text-gray-400';
             return `
-                <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden cursor-pointer hover:border-gray-500 transition" onclick="openProgramDetail(${p.id})">
-                    ${p.coverImg ? `<div class="h-44 bg-gray-900 overflow-hidden"><img src="${p.coverImg}" class="w-full h-full object-cover" loading="lazy"></div>` : '<div class="h-44 bg-gray-900 flex items-center justify-center text-gray-600">No Image</div>'}
+                <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden cursor-pointer hover:border-gray-500 transition" onclick="openProgramDetail(${Number(p.id)})">
+                    ${p.coverImg ? `<div class="h-44 bg-gray-900 overflow-hidden"><img src="${esc(p.coverImg)}" class="w-full h-full object-cover" loading="lazy"></div>` : '<div class="h-44 bg-gray-900 flex items-center justify-center text-gray-600">No Image</div>'}
                     <div class="p-3">
-                        <h3 class="font-bold text-white text-sm mb-1 line-clamp-2">${p.name}</h3>
-                        <p class="text-gray-400 text-xs mb-2 line-clamp-2">${p.description || ''}</p>
+                        <h3 class="font-bold text-white text-sm mb-1 line-clamp-2">${esc(p.name)}</h3>
+                        <p class="text-gray-400 text-xs mb-2 line-clamp-2">${esc(p.description)}</p>
                         <div class="flex flex-wrap gap-2 text-xs">
-                            <span class="text-blue-300">${p.weekCount} weeks &middot; ${p.weekTrainingFrequency}x/week</span>
+                            <span class="text-blue-300">${esc(p.weekCount)} weeks &middot; ${esc(p.weekTrainingFrequency)}x/week</span>
                             <span class="${diffColor}">${diff}</span>
                         </div>
                         ${p.isHot ? '<span class="inline-block mt-1 px-1.5 py-0.5 bg-red-600 text-white text-[10px] rounded">HOT</span>' : ''}
@@ -451,24 +451,24 @@
                 const courses = day.courseList || [];
                 if (courses.length === 0) {
                     return `<div class="flex items-center gap-3 px-3 py-2 border-b border-gray-800 last:border-0">
-                        <span class="text-gray-500 font-mono text-xs w-10">Day ${day.day}</span>
+                        <span class="text-gray-500 font-mono text-xs w-10">Day ${esc(day.day)}</span>
                         <span class="text-gray-600 text-sm italic">Rest Day</span>
                     </div>`;
                 }
                 return courses.map(c => `
-                    <div class="flex items-center gap-3 px-3 py-2 border-b border-gray-800 last:border-0 cursor-pointer hover:bg-gray-800" onclick="event.stopPropagation();closeModal('programModal');openCourseDetailById(${c.id},'${(c.courseTitle||'').replace(/'/g,"\\'")}',${c.durationMinute||0})">
-                        <span class="text-gray-500 font-mono text-xs w-10">Day ${day.day}</span>
-                        ${c.courseImg ? `<img src="${c.courseImg}" class="w-8 h-8 rounded object-cover bg-black flex-shrink-0" loading="lazy">` : ''}
+                    <div class="flex items-center gap-3 px-3 py-2 border-b border-gray-800 last:border-0 cursor-pointer hover:bg-gray-800" onclick="event.stopPropagation();closeModal('programModal');openCourseDetailById(${Number(c.id)},${jsq(c.courseTitle || '')},${Number(c.durationMinute) || 0})">
+                        <span class="text-gray-500 font-mono text-xs w-10">Day ${esc(day.day)}</span>
+                        ${c.courseImg ? `<img src="${esc(c.courseImg)}" class="w-8 h-8 rounded object-cover bg-black flex-shrink-0" loading="lazy">` : ''}
                         <div class="flex-grow min-w-0">
-                            <p class="text-white text-sm truncate">${c.courseTitle}</p>
-                            <span class="text-xs text-blue-300">${c.durationMinute} min</span>
+                            <p class="text-white text-sm truncate">${esc(c.courseTitle)}</p>
+                            <span class="text-xs text-blue-300">${esc(c.durationMinute)} min</span>
                         </div>
                     </div>`).join('');
             }).join('');
 
             return `<div class="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
                 <div class="px-3 py-2 bg-gray-800 border-b border-gray-700">
-                    <span class="text-white font-bold text-sm">Week ${week.week}</span>
+                    <span class="text-white font-bold text-sm">Week ${esc(week.week)}</span>
                 </div>
                 ${daysHtml}
             </div>`;

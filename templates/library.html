@@ -29,7 +29,7 @@
     <div class="flex flex-wrap gap-2 mb-4 justify-center md:justify-start">
         <button onclick="filterByCategory('all', this)" class="cat-btn active px-4 py-2 rounded-full text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition">All Categories</button>
         {% for cat in categories %}
-        <button onclick="filterByCategory('{{ cat.filter_ids | default(cat.id) }}', this)" class="cat-btn px-4 py-2 rounded-full text-sm font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700 transition">{{ cat.name }}</button>
+        <button onclick='filterByCategory({{ cat.filter_ids | default(cat.id) | string | tojson }}, this)' class="cat-btn px-4 py-2 rounded-full text-sm font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700 transition">{{ cat.name }}</button>
         {% endfor %}
     </div>
 
@@ -86,7 +86,7 @@
                 </thead>
                 <tbody class="bg-gray-800 divide-y divide-gray-700">
                     {% for ex in exercises %}
-                    <tr class="hover:bg-gray-700/50 exercise-row cursor-pointer" onclick="window.location.href='/exercise/{{ ex.id }}'" data-title="{{ ex.title | lower }}" data-muscle="{{ ex.trainingPartId2 }}" data-category="{{ ex.category_id }}" data-device="{{ ex.device_type_tag | default(ex.device_type) }}" data-accessories="{{ ex.accessories }}">
+                    <tr class="hover:bg-gray-700/50 exercise-row cursor-pointer" onclick='window.location.href = "/exercise/" + encodeURIComponent({{ ex.id | string | tojson }})' data-title="{{ ex.title | lower }}" data-muscle="{{ ex.trainingPartId2 }}" data-category="{{ ex.category_id }}" data-device="{{ ex.device_type_tag | default(ex.device_type) }}" data-accessories="{{ ex.accessories }}">
                         <td class="px-4 py-2 font-mono text-xs text-gray-500 align-top">{{ ex.id }}</td>
                         <td class="px-4 py-2 font-bold text-white align-top">
                             {{ ex.title }}

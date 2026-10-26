@@ -25,7 +25,7 @@
         <div class="overflow-y-auto flex-grow space-y-2 pr-2" id="library-list">
             {% for ex in library %}
             <div class="bg-gray-700/50 p-3 rounded cursor-pointer hover:bg-gray-700 hover:border-l-4 hover:border-green-500 flex items-center gap-3 exercise-item transition-all" 
-                 onclick="addExerciseToPlan('{{ ex.id }}', '{{ ex.title|escape }}', '{{ ex.img | local_cache }}')"
+                 onclick='addExerciseToPlan({{ ex.id | string | tojson }}, {{ ex.title | tojson }}, {{ ex.img | local_cache | tojson }})'
                  data-category="{{ ex.category_id }}"
                  data-device="{{ ex.device_type_tag | default(ex.device_type) }}">
                 <img src="{{ ex.img | local_cache }}" class="w-12 h-12 object-cover rounded bg-black">
@@ -231,9 +231,9 @@
 
 <script src="/static/workout-logic.js"></script>
 <script>
-    const customInstruction = `{{ custom_instruction | safe }}`;
+    const customInstruction = {{ custom_instruction | default('') | tojson }};
 
-    const userUnit = {{ unit | default(0) }}; // 0=Metric, 1=Imperial
+    const userUnit = {{ unit | default(0) | int }}; // 0=Metric, 1=Imperial
 
     // Human-readable labels for known preset IDs (used for dynamic preset dropdown)
     const PRESET_LABELS = {
@@ -804,7 +804,7 @@
                 const pid = p.id ?? p.templatePresetId ?? p.presetId;
                 if (pid == null || pid == -1) return; // skip custom (already added)
                 const label = PRESET_LABELS[String(pid)] || p.name || p.templatePresetName || `Preset ${pid}`;
-                options.push(`<option value="${pid}" ${ex.selectedPresetId == pid ? 'selected' : ''}>${label}</option>`);
+                options.push(`<option value="${esc(pid)}" ${ex.selectedPresetId == pid ? 'selected' : ''}>${esc(label)}</option>`);
             });
         } else {
             // No API presets returned — show standard fallback options
@@ -838,7 +838,7 @@
             const rules = getRules(ex);
 
             let variantsHtml = ex.variants.map(v => 
-                `<option value="${v.id}" ${v.id == ex.selectedVariantId ? 'selected' : ''}>Coach ${v.coach ? v.coach.name : 'Standard'}</option>`
+                `<option value="${esc(v.id)}" ${v.id == ex.selectedVariantId ? 'selected' : ''}>Coach ${esc(v.coach ? v.coach.name : 'Standard')}</option>`
             ).join('');
 
             const presetsHtml = buildPresetsHtml(ex);
@@ -857,17 +857,17 @@
                 } else {
                     posLabel = String(ex.cablePosition).padStart(2, '0');
                 }
-                cablePositionHtml = `<span class="bg-blue-600/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded text-xs font-mono font-bold">Cable: ${posLabel}</span>`;
+                cablePositionHtml = `<span class="bg-blue-600/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded text-xs font-mono font-bold">Cable: ${esc(posLabel)}</span>`;
             }
 
             card.innerHTML = `
                 <div class="p-4 bg-gray-800 border-b border-gray-700 flex gap-4 items-start">
-                    <img src="${ex.img}" class="w-16 h-16 rounded object-cover bg-black">
+                    <img src="${esc(ex.img)}" class="w-16 h-16 rounded object-cover bg-black">
                     <div class="flex-grow">
                         <div class="flex justify-between">
                             <div class="flex items-center gap-2 flex-wrap">
-                                <h3 class="font-bold text-lg text-white">${ex.title}</h3>
-                                <a href="/exercise/${ex.groupId}" target="_blank" class="text-gray-400 hover:text-blue-400 transition" title="Show Details">
+                                <h3 class="font-bold text-lg text-white">${esc(ex.title)}</h3>
+                                <a href="/exercise/${encodeURIComponent(ex.groupId)}" target="_blank" class="text-gray-400 hover:text-blue-400 transition" title="Show Details">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                                 </a>
                             </div>
@@ -884,7 +884,7 @@
                                 <button onclick="moveExTo(${exIndex}, 'bottom')" class="text-gray-400 hover:text-white disabled:opacity-30" ${exIndex === workoutData.length - 1 ? 'disabled' : ''} title="Move to Bottom">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 13l-7 7-7-7M19 5l-7 7-7-7"></path></svg>
                                 </button>
-                                <button onclick="openStats(${ex.groupId}, '${ex.title.replace(/'/g, "\\'")}')" class="text-blue-400 hover:text-blue-300 ml-2" title="View Stats">
+                                <button onclick="openStats(${Number(ex.groupId)}, ${jsq(ex.title)})" class="text-blue-400 hover:text-blue-300 ml-2" title="View Stats">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
                                 </button>
                                 <button onclick="removeEx(${exIndex})" class="text-red-500 hover:text-red-400 text-sm ml-2">✖ Remove</button>
@@ -946,7 +946,7 @@
                                 <div class="col-span-3 flex gap-1">
                                     <input type="number"
                                            min="${repMin}" max="${repMax}" step="1"
-                                           value="${set.reps}"
+                                           value="${esc(set.reps)}"
                                            onchange="validateAndSet(${exIndex}, ${sIdx}, 'reps', this)"
                                            class="w-full bg-gray-700 text-white text-center rounded border border-gray-600 p-1">
                                     ${unitBtn}
@@ -954,7 +954,7 @@
                                 <div class="col-span-2">
                                     <input type="number"
                                            min="${ex.dataStatType === 6 ? 1 : rules.minW}" max="${ex.dataStatType === 6 ? 10 : rules.maxW}" step="${ex.dataStatType === 6 ? 1 : rules.step}"
-                                           value="${set.weight}"
+                                           value="${esc(set.weight)}"
                                            onchange="validateAndSet(${exIndex}, ${sIdx}, 'weight', this)"
                                            class="w-full bg-gray-700 ${ex.selectedPresetId != -1 ? 'text-yellow-400 font-bold' : 'text-white'} text-center rounded border border-gray-600 p-1">
                                 </div>
@@ -968,7 +968,7 @@
                                 <div class="col-span-2">
                                     <input type="number" 
                                            min="${rules.minRest}" max="${rules.maxRest}" step="5"
-                                           value="${set.rest}" 
+                                           value="${esc(set.rest)}" 
                                            onchange="validateAndSet(${exIndex}, ${sIdx}, 'rest', this)" 
                                            class="w-full bg-gray-700 text-gray-300 text-center rounded border border-gray-600 p-1">
                                 </div>
@@ -1457,10 +1457,10 @@ You must output a JSON object with the following structure:
                     
                     html += `
                         <tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
-                            <td class="p-3">${item.dayStr}</td>
+                            <td class="p-3">${esc(item.dayStr)}</td>
                             <td class="p-3 font-bold text-green-400">${item.oneRepMax ? formatLastMaxWeight(item.oneRepMax) : '-'}</td>
                             <td class="p-3 text-white">${item.maxWeight ? formatLastMaxWeight(item.maxWeight) : '-'}</td>
-                            <td class="p-3 text-gray-400">${item.totalCapacity}</td>
+                            <td class="p-3 text-gray-400">${esc(item.totalCapacity)}</td>
                         </tr>
                     `;
                 });

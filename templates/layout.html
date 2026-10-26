@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Unofficial Speediance Workout Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+    // Vendor-supplied titles/names/URLs end up in innerHTML and inline handlers: escape at every interpolation.
+    function esc(v) {
+        return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+    // A JS string literal that is safe inside a double-quoted onclick="..." attribute.
+    function jsq(v) { return esc(JSON.stringify(String(v == null ? '' : v))); }
+    </script>
     <style>body { background-color: #0d1117; color: #c9d1d9; }</style>
     {% block head %}{% endblock %}
 </head>

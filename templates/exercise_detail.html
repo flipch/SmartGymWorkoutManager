@@ -94,7 +94,7 @@
                 <div class="flex gap-4 overflow-x-auto snap-x snap-mandatory pb-4 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800">
                     {% for step in ex.steps %}
                     <div class="snap-center shrink-0 w-[85%] md:w-[45%] bg-gray-800 rounded-xl overflow-hidden border border-gray-700 flex flex-col shadow-lg">
-                        <div class="h-48 bg-gray-900 relative group cursor-pointer" onclick="openModal('{{ step.img | local_cache(True) }}')">
+                        <div class="h-48 bg-gray-900 relative group cursor-pointer" onclick='openModal({{ step.img | local_cache(True) | tojson }})'>
                             <img src="{{ step.img | local_cache(True) }}" class="w-full h-full object-contain transition-transform duration-300 group-hover:scale-105" loading="lazy">
                             <div class="absolute top-2 left-2 bg-black/60 text-white px-3 py-1 rounded-full text-sm font-bold backdrop-blur-sm">
                                 Step {{ loop.index }}
@@ -331,10 +331,10 @@
 
             tbody.innerHTML = rows.map(item => `
                 <tr class="hover:bg-gray-800/70">
-                    <td class="p-2 whitespace-nowrap">${formatStatDate(item.dayStr)}</td>
-                    <td class="p-2 text-right font-bold text-green-400">${formatWeightStat(item.oneRepMax)}</td>
-                    <td class="p-2 text-right text-white">${formatWeightStat(item.maxWeight)}</td>
-                    <td class="p-2 text-right text-gray-400">${formatStat(item.totalCapacity, 0)}</td>
+                    <td class="p-2 whitespace-nowrap">${esc(formatStatDate(item.dayStr))}</td>
+                    <td class="p-2 text-right font-bold text-green-400">${esc(formatWeightStat(item.oneRepMax))}</td>
+                    <td class="p-2 text-right text-white">${esc(formatWeightStat(item.maxWeight))}</td>
+                    <td class="p-2 text-right text-gray-400">${esc(formatStat(item.totalCapacity, 0))}</td>
                 </tr>
             `).join('');
 

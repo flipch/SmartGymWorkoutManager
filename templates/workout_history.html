@@ -301,21 +301,21 @@
 
             row.innerHTML = `
                 <td class="px-6 py-4 font-mono text-gray-500 text-xs select-all">
-                    ${item.trainingId}
+                    ${esc(item.trainingId)}
                 </td>
-                <td class="px-6 py-4 font-mono text-gray-300 text-xs">${dateStr}</td>
+                <td class="px-6 py-4 font-mono text-gray-300 text-xs">${esc(dateStr)}</td>
                 <td class="px-6 py-4 font-bold text-white">
-                    ${item.title || "Unknown Workout"}
-                    <div class="text-xs text-gray-500 font-normal">Type: ${item.type}</div>
+                    ${esc(item.title || "Unknown Workout")}
+                    <div class="text-xs text-gray-500 font-normal">Type: ${esc(item.type)}</div>
                 </td>
-                <td class="px-6 py-4 text-center text-gray-300">${item.totalCapacity || 0}</td>
+                <td class="px-6 py-4 text-center text-gray-300">${esc(item.totalCapacity || 0)}</td>
                 <td class="px-6 py-4 text-center text-gray-300">${durationMin} min</td>
                 <td class="px-6 py-4 text-right">
                     <div class="flex gap-2 justify-end">
-                        <button onclick="downloadDetail('${exportId}', '${type}')" class="text-green-400 hover:text-white text-xs font-bold border border-green-900/50 hover:border-green-500 bg-green-900/20 px-3 py-1 rounded transition">
+                        <button onclick="downloadDetail(${jsq(exportId)}, ${jsq(type)})" class="text-green-400 hover:text-white text-xs font-bold border border-green-900/50 hover:border-green-500 bg-green-900/20 px-3 py-1 rounded transition">
                             Download
                         </button>
-                        <button onclick="copyDetail('${exportId}', '${type}')" class="text-blue-400 hover:text-white text-xs font-bold border border-blue-900/50 hover:border-blue-500 bg-blue-900/20 px-3 py-1 rounded transition">
+                        <button onclick="copyDetail(${jsq(exportId)}, ${jsq(type)})" class="text-blue-400 hover:text-white text-xs font-bold border border-blue-900/50 hover:border-blue-500 bg-blue-900/20 px-3 py-1 rounded transition">
                             Copy
                         </button>
                     </div>
@@ -666,11 +666,11 @@
         detailsContainer.innerHTML = `
             <div class="border-b border-gray-700 pb-2 mb-2">
                 <div class="text-xs text-gray-500 uppercase">Title</div>
-                <div class="text-white font-bold">${workout.title || 'Unknown'}</div>
+                <div class="text-white font-bold">${esc(workout.title || 'Unknown')}</div>
             </div>
             <div class="border-b border-gray-700 pb-2 mb-2">
                 <div class="text-xs text-gray-500 uppercase">Date</div>
-                <div>${dateStr}</div>
+                <div>${esc(dateStr)}</div>
             </div>
             <div class="grid grid-cols-2 gap-4 border-b border-gray-700 pb-2 mb-2">
                 <div>
@@ -679,17 +679,17 @@
                 </div>
                 <div>
                     <div class="text-xs text-gray-500 uppercase">Volume</div>
-                    <div>${workout.totalCapacity || 0}</div>
+                    <div>${esc(workout.totalCapacity || 0)}</div>
                 </div>
             </div>
             <div class="grid grid-cols-2 gap-4">
                 <div>
                     <div class="text-xs text-gray-500 uppercase">Type</div>
-                    <div>${workout.type}</div>
+                    <div>${esc(workout.type)}</div>
                 </div>
                 <div>
                     <div class="text-xs text-gray-500 uppercase">Training ID</div>
-                    <div class="text-xs">${workout.trainingId}</div>
+                    <div class="text-xs">${esc(workout.trainingId)}</div>
                 </div>
             </div>
         `;
