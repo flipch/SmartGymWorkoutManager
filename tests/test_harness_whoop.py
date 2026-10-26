@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -225,6 +226,11 @@ class Tokens(unittest.TestCase):
             f"sys.path.insert(0, {str(Path(__file__).parent.parent)!r})\n"
             "from harness import whoop\n"
             f"store = whoop.TokenStore({str(self.store.path)!r})\n"
+            f"import os, pathlib\n"
+            f"d = pathlib.Path({self.dir.name!r})\n"
+            "(d / f'ready.{os.getpid()}').touch()\n"
+            "while not (d / 'go').exists():\n"
+            "    time.sleep(0.005)\n"
             "def refresh(old):\n"
             f"    open({str(calls)!r}, 'a').write(old + '\\n')\n"
             "    time.sleep(0.3)\n"
@@ -233,11 +239,68 @@ class Tokens(unittest.TestCase):
         )
         procs = [subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                  for _ in range(5)]
+        deadline = time.monotonic() + 30
+        while len(list(Path(self.dir.name).glob("ready.*"))) < len(procs):  # barrier: start the race together
+            self.assertLess(time.monotonic(), deadline, "child processes never became ready")
+            time.sleep(0.01)
+        (Path(self.dir.name) / "go").touch()
         results = [p.communicate(timeout=60) + (p.returncode,) for p in procs]
         for out, err, code in results:
             self.assertEqual((code, out.strip()), (0, "r2"), err)
         self.assertEqual(calls.read_text().split(), ["r1"], "the stale refresh token must be spent exactly once")
         self.assertEqual(self.store.load()["refresh_token"], "r2")
+
+    def test_a_failed_save_after_a_successful_refresh_does_not_lose_the_new_tokens(self):
+        from unittest import mock
+        real = whoop.localsecrets.write_json_private
+
+        def flaky(path, data):
+            if Path(path) == self.store.path:
+                raise OSError("disk full")
+            return real(path, data)
+
+        calls = []
+
+        def refresh(old):
+            calls.append(old)
+            return {"access_token": "a2", "refresh_token": "r2"}
+
+        with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=flaky):
+            got = self.store.refresh_if_still_stale("r1", refresh)
+        self.assertEqual(got["refresh_token"], "r2")
+        self.assertEqual(self.store.load()["refresh_token"], "r2", "the pending file must be picked up")
+        self.assertEqual(oct(self.store.pending_path.stat().st_mode & 0o777), "0o600")
+        again = self.store.refresh_if_still_stale("r1", refresh)  # a second caller still holding r1
+        self.assertEqual((calls, again["refresh_token"]), (["r1"], "r2"))
+        self.store.save({"access_token": "a3", "refresh_token": "r3"})  # disk recovered
+        self.assertFalse(self.store.pending_path.exists())
+        self.assertEqual(self.store.load()["refresh_token"], "r3")
+
+    def test_a_transient_write_failure_is_retried_into_the_main_file(self):
+        from unittest import mock
+        real = whoop.localsecrets.write_json_private
+        attempts = []
+
+        def once_flaky(path, data):
+            attempts.append(Path(path).name)
+            if len(attempts) == 1:
+                raise OSError("EINTR-ish")
+            return real(path, data)
+
+        with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=once_flaky):
+            self.store.save({"access_token": "a2", "refresh_token": "r2"})
+        self.assertEqual(attempts, ["whoop.token.json", "whoop.token.json"])
+        self.assertFalse(self.store.pending_path.exists())
+        self.assertEqual(self.store.load()["refresh_token"], "r2")
+
+    def test_unsavable_tokens_raise_source_down_not_an_auth_error(self):
+        from unittest import mock
+        with mock.patch.object(whoop.localsecrets, "write_json_private", side_effect=OSError("read-only fs")):
+            with self.assertRaises(SourceDown) as ctx:
+                self.store.refresh_if_still_stale("r1", lambda old: {"access_token": "a2", "refresh_token": "r2"})
+        self.assertNotIsInstance(ctx.exception, SourceAuthError)
+        self.assertIn("re-authorised", str(ctx.exception))
+        self.assertNotIn("r2", str(ctx.exception).replace("re-authorised", ""))
 
     def test_source_down_paths_also_hide_the_callers_exception(self):
         import traceback

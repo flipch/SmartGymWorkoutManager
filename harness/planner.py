@@ -35,8 +35,8 @@ def _norm(name: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", name.lower()).split())
 
 
-# Words that only say WHERE on the machine a lift is done ("(Main Frame)"), not which movement it is.
-LOCATION_WORDS = frozenset({"main", "frame"})
+# A parenthetical that only says WHERE on the machine a lift is done is not part of the movement's identity.
+LOCATION_NOTE = re.compile(r"\(\s*main\s+frame\s*\)", re.I)
 
 
 def _fold(word: str) -> str:
@@ -51,7 +51,8 @@ def _fold(word: str) -> str:
 def _tokens(name: str) -> frozenset[str]:
     """Normalised word set: lowercase, punctuation removed (parenthetical words are KEPT: '(Seated)' vs '(Standing)'
     is a different movement), plurals folded."""
-    return frozenset(_fold(w) for w in re.sub(r"[^a-z0-9 ]", " ", name.lower()).split() if w not in LOCATION_WORDS)
+    name = LOCATION_NOTE.sub(" ", name)
+    return frozenset(_fold(w) for w in re.sub(r"[^a-z0-9 ]", " ", name.lower()).split())
 
 
 def _same_exercise(a: str, b: str) -> bool:

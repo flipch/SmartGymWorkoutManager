@@ -219,6 +219,11 @@ class HistoryTrust(unittest.TestCase):
         self.assertTrue(planner._same_exercise("Dual-Handle Bench Press", "Dual-Handle Bench Press (Main Frame)"))
         self.assertTrue(planner._same_exercise("Tricep Rope Pushdown (Main Frame)", "tricep rope pushdown"))
         self.assertFalse(planner._same_exercise("Chest Press (Main Frame)", "Chest Press (Seated)"))
+        self.assertTrue(planner._same_exercise("Chest Press ( main  frame )", "chest press"))
+        # only the parenthetical note is a location; the words elsewhere in a name still distinguish movements
+        self.assertFalse(planner._same_exercise("Frame Squat", "Squat"))
+        self.assertFalse(planner._same_exercise("Main Frame Row", "Row"))
+        self.assertFalse(planner._same_exercise("(Main Frame)", "(Main Frame)"))
 
     def test_plural_and_hyphen_variants_of_the_same_name_still_match(self):
         for a, b in (("Leg Press", "Leg Presses"), ("Abs Crunch", "Ab Crunch"), ("Dual-Handle Bench Press", "Bench Press (Dual Handle)"),

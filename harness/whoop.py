@@ -111,15 +111,30 @@ class TokenStore:
     def __init__(self, path):
         self.path = pathlib.Path(path)
         self.lock_path = self.path.with_name(self.path.name + ".lock")
+        self.pending_path = self.path.with_name(self.path.name + ".pending")
 
     def load(self) -> dict | None:
-        return localsecrets.read_json_private(self.path)
+        """The newest tokens: a `.pending` file (written when the main file could not be) wins over the main file."""
+        return localsecrets.read_json_private(self.pending_path) or localsecrets.read_json_private(self.path)
 
     def save(self, tokens: dict) -> None:
+        """Persist a rotated pair. WHOOP has already invalidated the old refresh token, so losing this write would
+        force a full re-authorisation: retry once, then fall back to a `.pending` file, and only then give up."""
         for key in ("access_token", "refresh_token"):
             if not tokens.get(key):
                 raise SourceDown(SOURCE, f"refresh response lacked {key}")
-        localsecrets.write_json_private(self.path, tokens)
+        for attempt in range(2):
+            try:
+                localsecrets.write_json_private(self.path, tokens)
+                self.pending_path.unlink(missing_ok=True)
+                return
+            except OSError:
+                time.sleep(0.1 * attempt)
+        try:
+            localsecrets.write_json_private(self.pending_path, tokens)
+        except OSError:
+            raise SourceDown(SOURCE, "token refresh succeeded but the new tokens could not be saved anywhere "
+                                     "(disk full or permissions): WHOOP must be re-authorised") from None
 
     @staticmethod
     def _lock(fd: int, timeout_s: float = LOCK_TIMEOUT_S) -> None:
@@ -152,11 +167,15 @@ class TokenStore:
             failure, down = None, None
             try:
                 fresh = refresh_fn(seen_refresh_token)
-                self.save(fresh)
             except SourceDown as err:  # refresh_fn contract: SourceDown messages never contain response bodies/tokens
                 down = err
             except Exception as err:  # noqa: BLE001
                 failure = type(err).__name__  # keep only the class name
+            if failure is None and down is None:
+                try:
+                    self.save(fresh)  # a local persistence failure is NOT an auth failure: it keeps its own class
+                except SourceDown as err:
+                    down = err
             # Raise OUTSIDE the except blocks, always `from None`: refresh_fn's exception stays out of the chain, and
             # an exception the CALLER is handling (e.g. the 401 that triggered the refresh) is not printed either.
             if down is not None:
