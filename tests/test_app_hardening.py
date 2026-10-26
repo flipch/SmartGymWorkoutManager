@@ -97,6 +97,24 @@ class RealFlaskApp(unittest.TestCase):
             self.assertEqual(self.c.post("/delete/1", headers={**browser, "Origin": "https://evil.example",
                                                                "X-Forwarded-Host": "gym.example.com"}).status_code, 403)
 
+    def test_pages_with_the_new_post_forms_actually_render(self):
+        """The Delete / Logout links became POST forms; render the real templates with a stubbed signed-in client."""
+        creds = {"token": "x", "user_id": "42", "unit": 0, "region": "Global", "device_type": 1,
+                 "owned_accessories": [], "owned_devices": [], "custom_instruction": "", "allow_monster_moves": False}
+        workouts = [{"id": 5, "code": "abc", "title": "Push", "name": "Push", "totalCapacity": 100, "durationMinute": 30,
+                     "actionNum": 4}]
+        with mock.patch.object(gym_app.client, "credentials", creds), \
+                mock.patch.object(gym_app.client, "load_config", return_value=creds), \
+                mock.patch.object(gym_app.client, "get_user_workouts", return_value=workouts), \
+                mock.patch.object(gym_app.client, "get_accessories", return_value=[]):
+            home = self.c.get("/", headers=BASIC)
+            settings = self.c.get("/settings", headers=BASIC)
+        self.assertEqual((home.status_code, settings.status_code), (200, 200))
+        self.assertIn(b'<form method="post" action="/delete/5"', home.data)
+        self.assertNotIn(b'href="/delete/', home.data)
+        self.assertIn(b'<form method="post" action="/logout"', settings.data)
+        self.assertNotIn(b'href="/logout"', settings.data)
+
     def test_malformed_forwarded_host_cannot_whitelist_a_null_origin(self):
         from auth import allowed_origins, cross_site
         for xfh in (", x", ",", " ", ""):
