@@ -1,0 +1,1425 @@
+{
+ "autoregulate": [
+  [
+   {},
+   {
+    "band": "moderate",
+    "intensity_pct": 0,
+    "message": "Train as planned; hold intensity, no PRs.",
+    "overrides": [],
+    "rir_min": 2,
+    "session": "as_planned",
+    "signals": [
+     "no readiness data \u2014 defaulting to MODERATE (train as planned)"
+    ],
+    "volume_pct": 0
+   }
+  ],
+  [
+   {
+    "whoop_recovery": 90
+   },
+   {
+    "band": "high",
+    "intensity_pct": 3,
+    "message": "Well recovered \u2014 proceed or push; high-CNS lifts OK.",
+    "overrides": [],
+    "rir_min": 1,
+    "session": "push",
+    "signals": [
+     "Whoop recovery 90%"
+    ],
+    "volume_pct": 10
+   }
+  ],
+  [
+   {
+    "whoop_recovery": 67
+   },
+   {
+    "band": "high",
+    "intensity_pct": 3,
+    "message": "Well recovered \u2014 proceed or push; high-CNS lifts OK.",
+    "overrides": [],
+    "rir_min": 1,
+    "session": "push",
+    "signals": [
+     "Whoop recovery 67%"
+    ],
+    "volume_pct": 10
+   }
+  ],
+  [
+   {
+    "whoop_recovery": 66
+   },
+   {
+    "band": "moderate",
+    "intensity_pct": 0,
+    "message": "Train as planned; hold intensity, no PRs.",
+    "overrides": [],
+    "rir_min": 2,
+    "session": "as_planned",
+    "signals": [
+     "Whoop recovery 66%"
+    ],
+    "volume_pct": 0
+   }
+  ],
+  [
+   {
+    "whoop_recovery": 34
+   },
+   {
+    "band": "moderate",
+    "intensity_pct": 0,
+    "message": "Train as planned; hold intensity, no PRs.",
+    "overrides": [],
+    "rir_min": 2,
+    "session": "as_planned",
+    "signals": [
+     "Whoop recovery 34%"
+    ],
+    "volume_pct": 0
+   }
+  ],
+  [
+   {
+    "whoop_recovery": 33
+   },
+   {
+    "band": "low",
+    "intensity_pct": -15,
+    "message": "Low readiness \u2014 cut volume ~40%, drop load ~15%, defer high-CNS work or do active recovery.",
+    "overrides": [],
+    "rir_min": 3,
+    "session": "reduce_or_recover",
+    "signals": [
+     "Whoop recovery 33%"
+    ],
+    "volume_pct": -40
+   }
+  ],
+  [
+   {
+    "hrv_vs_baseline": "above"
+   },
+   {
+    "band": "high",
+    "intensity_pct": 3,
+    "message": "Well recovered \u2014 proceed or push; high-CNS lifts OK.",
+    "overrides": [],
+    "rir_min": 1,
+    "session": "push",
+    "signals": [
+     "HRV above baseline"
+    ],
+    "volume_pct": 10
+   }
+  ],
+  [
+   {
+    "hrv_vs_baseline": "below"
+   },
+   {
+    "band": "low",
+    "intensity_pct": -15,
+    "message": "Low readiness \u2014 cut volume ~40%, drop load ~15%, defer high-CNS work or do active recovery.",
+    "overrides": [],
+    "rir_min": 3,
+    "session": "reduce_or_recover",
+    "signals": [
+     "HRV below baseline"
+    ],
+    "volume_pct": -40
+   }
+  ],
+  [
+   {
+    "sleep_hours": 5.5
+   },
+   {
+    "band": "low",
+    "intensity_pct": -15,
+    "message": "Low readiness \u2014 cut volume ~40%, drop load ~15%, defer high-CNS work or do active recovery.",
+    "overrides": [],
+    "rir_min": 3,
+    "session": "reduce_or_recover",
+    "signals": [
+     "sleep 5.5 h"
+    ],
+    "volume_pct": -40
+   }
+  ],
+  [
+   {
+    "sleep_hours": 8
+   },
+   {
+    "band": "high",
+    "intensity_pct": 3,
+    "message": "Well recovered \u2014 proceed or push; high-CNS lifts OK.",
+    "overrides": [],
+    "rir_min": 1,
+    "session": "push",
+    "signals": [
+     "sleep 8 h"
+    ],
+    "volume_pct": 10
+   }
+  ],
+  [
+   {
+    "rhr_delta_bpm": 6
+   },
+   {
+    "band": "low",
+    "intensity_pct": -15,
+    "message": "Low readiness \u2014 cut volume ~40%, drop load ~15%, defer high-CNS work or do active recovery.",
+    "overrides": [],
+    "rir_min": 3,
+    "session": "reduce_or_recover",
+    "signals": [
+     "RHR +6 bpm vs baseline"
+    ],
+    "volume_pct": -40
+   }
+  ],
+  [
+   {
+    "subjective": 2
+   },
+   {
+    "band": "low",
+    "intensity_pct": -15,
+    "message": "Low readiness \u2014 cut volume ~40%, drop load ~15%, defer high-CNS work or do active recovery.",
+    "overrides": [],
+    "rir_min": 3,
+    "session": "reduce_or_recover",
+    "signals": [
+     "subjective readiness 2/5"
+    ],
+    "volume_pct": -40
+   }
+  ],
+  [
+   {
+    "subjective": 5
+   },
+   {
+    "band": "high",
+    "intensity_pct": 3,
+    "message": "Well recovered \u2014 proceed or push; high-CNS lifts OK.",
+    "overrides": [],
+    "rir_min": 1,
+    "session": "push",
+    "signals": [
+     "subjective readiness 5/5"
+    ],
+    "volume_pct": 10
+   }
+  ],
+  [
+   {
+    "sleep_hours": 5,
+    "whoop_recovery": 90
+   },
+   {
+    "band": "low",
+    "intensity_pct": -15,
+    "message": "Low readiness \u2014 cut volume ~40%, drop load ~15%, defer high-CNS work or do active recovery.",
+    "overrides": [],
+    "rir_min": 3,
+    "session": "reduce_or_recover",
+    "signals": [
+     "Whoop recovery 90%",
+     "sleep 5 h"
+    ],
+    "volume_pct": -40
+   }
+  ],
+  [
+   {
+    "rhr_delta_bpm": 5,
+    "whoop_recovery": 90
+   },
+   {
+    "band": "low",
+    "intensity_pct": -15,
+    "message": "Low readiness \u2014 cut volume ~40%, drop load ~15%, defer high-CNS work or do active recovery.",
+    "overrides": [],
+    "rir_min": 3,
+    "session": "reduce_or_recover",
+    "signals": [
+     "Whoop recovery 90%",
+     "RHR +5 bpm vs baseline"
+    ],
+    "volume_pct": -40
+   }
+  ],
+  [
+   {
+    "acwr": 1.8,
+    "sleep_hours": 8,
+    "subjective": 5,
+    "whoop_recovery": 80
+   },
+   {
+    "band": "moderate",
+    "intensity_pct": 0,
+    "message": "Train as planned; hold intensity, no PRs.",
+    "overrides": [
+     "ACWR 1.8 > 1.5 \u2192 dropped one band (soft guardrail)"
+    ],
+    "rir_min": 2,
+    "session": "as_planned",
+    "signals": [
+     "Whoop recovery 80%",
+     "sleep 8 h",
+     "subjective readiness 5/5"
+    ],
+    "volume_pct": 0
+   }
+  ],
+  [
+   {
+    "sleep_hours": 8,
+    "subjective": 5,
+    "whoop_recovery": 20
+   },
+   {
+    "band": "low",
+    "intensity_pct": -15,
+    "message": "Low readiness \u2014 cut volume ~40%, drop load ~15%, defer high-CNS work or do active recovery.",
+    "overrides": [],
+    "rir_min": 3,
+    "session": "reduce_or_recover",
+    "signals": [
+     "Whoop recovery 20%",
+     "sleep 8 h",
+     "subjective readiness 5/5"
+    ],
+    "volume_pct": -40
+   }
+  ]
+ ],
+ "programs": [
+  [
+   [
+    "muscle",
+    4,
+    "intermediate"
+   ],
+   {
+    "days": [
+     {
+      "exercises": [
+       [
+        "Cable overhead press",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Lat pulldown",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable chest press",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Seated cable row",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable curl",
+        6,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable lateral raise",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable fly",
+        3,
+        9,
+        1,
+        "eccentric"
+       ]
+      ],
+      "name": "Upper A (strength lean)",
+      "setup_swaps": 5
+     },
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Romanian deadlift",
+        2,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Leg curl (ankle)",
+        2,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Leg extension (ankle)",
+        3,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Cable crunch",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Standing calf raise",
+        5,
+        9,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Lower A (strength lean)",
+      "setup_swaps": 3
+     },
+     {
+      "exercises": [
+       [
+        "Cable overhead press",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Lat pulldown",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable chest press",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Seated cable row",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable curl",
+        6,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Face pull",
+        7,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable lateral raise",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable fly",
+        3,
+        9,
+        1,
+        "eccentric"
+       ]
+      ],
+      "name": "Upper B (hypertrophy lean)",
+      "setup_swaps": 6
+     },
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Romanian deadlift",
+        2,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Leg curl (ankle)",
+        2,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Leg extension (ankle)",
+        3,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Cable crunch",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Standing calf raise",
+        5,
+        9,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Lower B (hypertrophy lean)",
+      "setup_swaps": 3
+     }
+    ],
+    "days_per_week": 4,
+    "experience": "intermediate",
+    "goal": "muscle",
+    "prescription": {
+     "pct1rm": [
+      0.67,
+      0.8
+     ],
+     "reps": [
+      6,
+      12
+     ],
+     "rest_sec": [
+      90,
+      180
+     ],
+     "rir": [
+      1,
+      3
+     ]
+    },
+    "split": "Upper/Lower/Upper/Lower",
+    "weekly_sets_per_muscle": {
+     "abs": 8,
+     "back": 14,
+     "biceps": 12,
+     "calves": 10,
+     "chest": 12,
+     "hamstrings": 8,
+     "quads": 12,
+     "rear_delts": 7,
+     "shoulders": 12
+    }
+   }
+  ],
+  [
+   [
+    "strength",
+    3,
+    "beginner"
+   ],
+   {
+    "days": [
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        4,
+        3,
+        1,
+        "standard"
+       ],
+       [
+        "Lat pulldown",
+        4,
+        3,
+        1,
+        "standard"
+       ],
+       [
+        "Cable chest press",
+        5,
+        3,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Full body A \u2014 squat focus",
+      "setup_swaps": 2
+     },
+     {
+      "exercises": [
+       [
+        "Cable overhead press",
+        4,
+        3,
+        1,
+        "standard"
+       ],
+       [
+        "Romanian deadlift",
+        6,
+        3,
+        1,
+        "standard"
+       ],
+       [
+        "Lat pulldown",
+        4,
+        3,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Full body B \u2014 hinge focus",
+      "setup_swaps": 1
+     },
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        4,
+        3,
+        1,
+        "standard"
+       ],
+       [
+        "Lat pulldown",
+        4,
+        3,
+        1,
+        "standard"
+       ],
+       [
+        "Incline cable press",
+        5,
+        3,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Full body C \u2014 push/pull",
+      "setup_swaps": 2
+     }
+    ],
+    "days_per_week": 3,
+    "experience": "beginner",
+    "goal": "strength",
+    "prescription": {
+     "pct1rm": [
+      0.8,
+      0.92
+     ],
+     "reps": [
+      3,
+      6
+     ],
+     "rest_sec": [
+      180,
+      300
+     ],
+     "rir": [
+      1,
+      3
+     ]
+    },
+    "split": "Full/Full/Full",
+    "weekly_sets_per_muscle": {
+     "back": 12,
+     "chest": 10,
+     "hamstrings": 6,
+     "quads": 8,
+     "shoulders": 4
+    }
+   }
+  ],
+  [
+   [
+    "fatloss",
+    5,
+    "advanced"
+   ],
+   {
+    "days": [
+     {
+      "exercises": [
+       [
+        "Cable overhead press",
+        4,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Cable chest press",
+        4,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Incline cable press",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Cable lateral raise",
+        3,
+        10,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Push",
+      "setup_swaps": 2
+     },
+     {
+      "exercises": [
+       [
+        "Lat pulldown",
+        4,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Seated cable row",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Cable curl",
+        7,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Face pull",
+        7,
+        10,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Pull",
+      "setup_swaps": 3
+     },
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        4,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Romanian deadlift",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Cable pull-through",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Bulgarian split squat",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Standing calf raise",
+        6,
+        10,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Legs",
+      "setup_swaps": 2
+     },
+     {
+      "exercises": [
+       [
+        "Cable overhead press",
+        4,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Lat pulldown",
+        4,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Cable chest press",
+        4,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Seated cable row",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Incline cable press",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Cable curl",
+        7,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Cable lateral raise",
+        3,
+        10,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Upper",
+      "setup_swaps": 5
+     },
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        4,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Romanian deadlift",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Cable pull-through",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Bulgarian split squat",
+        3,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Cable crunch",
+        7,
+        10,
+        1,
+        "standard"
+       ],
+       [
+        "Standing calf raise",
+        6,
+        10,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Lower",
+      "setup_swaps": 4
+     }
+    ],
+    "days_per_week": 5,
+    "experience": "advanced",
+    "goal": "fatloss",
+    "prescription": {
+     "pct1rm": [
+      0.7,
+      0.85
+     ],
+     "reps": [
+      8,
+      12
+     ],
+     "rest_sec": [
+      75,
+      120
+     ],
+     "rir": [
+      1,
+      3
+     ]
+    },
+    "split": "Push/Pull/Legs/Upper/Lower",
+    "weekly_sets_per_muscle": {
+     "abs": 7,
+     "back": 14,
+     "biceps": 14,
+     "calves": 12,
+     "chest": 14,
+     "hamstrings": 12,
+     "quads": 14,
+     "rear_delts": 7,
+     "shoulders": 14
+    }
+   }
+  ],
+  [
+   [
+    "general",
+    2,
+    "intermediate"
+   ],
+   {
+    "days": [
+     {
+      "exercises": [
+       [
+        "Cable overhead press",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Lat pulldown",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable chest press",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Seated cable row",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable curl",
+        7,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable lateral raise",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable fly",
+        3,
+        9,
+        1,
+        "eccentric"
+       ]
+      ],
+      "name": "Upper",
+      "setup_swaps": 5
+     },
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Romanian deadlift",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Leg curl (ankle)",
+        3,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Leg extension (ankle)",
+        3,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Cable crunch",
+        7,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Standing calf raise",
+        7,
+        9,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Lower",
+      "setup_swaps": 3
+     }
+    ],
+    "days_per_week": 2,
+    "experience": "intermediate",
+    "goal": "general",
+    "prescription": {
+     "pct1rm": [
+      0.67,
+      0.8
+     ],
+     "reps": [
+      6,
+      12
+     ],
+     "rest_sec": [
+      90,
+      180
+     ],
+     "rir": [
+      1,
+      3
+     ]
+    },
+    "split": "Upper/Lower",
+    "weekly_sets_per_muscle": {
+     "abs": 7,
+     "back": 7,
+     "biceps": 7,
+     "calves": 7,
+     "chest": 7,
+     "hamstrings": 7,
+     "quads": 7,
+     "shoulders": 7
+    }
+   }
+  ],
+  [
+   [
+    "muscle",
+    1,
+    "beginner"
+   ],
+   {
+    "days": [
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        7,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable overhead press",
+        7,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Romanian deadlift",
+        6,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Lat pulldown",
+        7,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable chest press",
+        7,
+        9,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Full body",
+      "setup_swaps": 2
+     }
+    ],
+    "days_per_week": 1,
+    "experience": "beginner",
+    "goal": "muscle",
+    "prescription": {
+     "pct1rm": [
+      0.67,
+      0.8
+     ],
+     "reps": [
+      6,
+      12
+     ],
+     "rest_sec": [
+      90,
+      180
+     ],
+     "rir": [
+      1,
+      3
+     ]
+    },
+    "split": "Full",
+    "weekly_sets_per_muscle": {
+     "back": 7,
+     "chest": 7,
+     "hamstrings": 6,
+     "quads": 7,
+     "shoulders": 7
+    }
+   }
+  ],
+  [
+   [
+    "nonsense",
+    9,
+    "nobody"
+   ],
+   {
+    "days": [
+     {
+      "exercises": [
+       [
+        "Cable overhead press",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable chest press",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable lateral raise",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable fly",
+        3,
+        9,
+        1,
+        "eccentric"
+       ]
+      ],
+      "name": "Push",
+      "setup_swaps": 3
+     },
+     {
+      "exercises": [
+       [
+        "Lat pulldown",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Seated cable row",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable curl",
+        6,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Face pull",
+        7,
+        9,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Pull",
+      "setup_swaps": 3
+     },
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Romanian deadlift",
+        2,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Leg curl (ankle)",
+        2,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Leg extension (ankle)",
+        3,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Standing calf raise",
+        5,
+        9,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Legs",
+      "setup_swaps": 2
+     },
+     {
+      "exercises": [
+       [
+        "Cable overhead press",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Lat pulldown",
+        4,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable chest press",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Seated cable row",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable curl",
+        6,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable lateral raise",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Cable fly",
+        3,
+        9,
+        1,
+        "eccentric"
+       ]
+      ],
+      "name": "Upper",
+      "setup_swaps": 5
+     },
+     {
+      "exercises": [
+       [
+        "Cable front squat",
+        3,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Romanian deadlift",
+        2,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Leg curl (ankle)",
+        2,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Leg extension (ankle)",
+        3,
+        9,
+        1,
+        "eccentric"
+       ],
+       [
+        "Cable crunch",
+        7,
+        9,
+        1,
+        "standard"
+       ],
+       [
+        "Standing calf raise",
+        5,
+        9,
+        1,
+        "standard"
+       ]
+      ],
+      "name": "Lower",
+      "setup_swaps": 3
+     }
+    ],
+    "days_per_week": 5,
+    "experience": "intermediate",
+    "goal": "general",
+    "prescription": {
+     "pct1rm": [
+      0.67,
+      0.8
+     ],
+     "reps": [
+      6,
+      12
+     ],
+     "rest_sec": [
+      90,
+      180
+     ],
+     "rir": [
+      1,
+      3
+     ]
+    },
+    "split": "Push/Pull/Legs/Upper/Lower",
+    "weekly_sets_per_muscle": {
+     "abs": 7,
+     "back": 14,
+     "biceps": 12,
+     "calves": 10,
+     "chest": 12,
+     "hamstrings": 8,
+     "quads": 12,
+     "rear_delts": 7,
+     "shoulders": 12
+    }
+   }
+  ]
+ ]
+}
