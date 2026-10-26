@@ -160,12 +160,26 @@ class Sleep(unittest.TestCase):
                      with_stage("total_light_sleep_time_milli", -5 * HOUR), with_stage("total_rem_sleep_time_milli", True),
                      page(5), page("x"), {"records": [5]}, page({**sleep(), "score": [1]}),
                      page(sleep(light=0, sws=0, rem=0))]  # a SCORED night with zero sleep is not real
+        # a negative stage that the other stages mask: total is a plausible +2 h, so only a per-field check catches it
+        masked_negative = with_stage("total_light_sleep_time_milli", -1 * HOUR)
+        masked_negative["records"][0]["score"]["stage_summary"]["total_slow_wave_sleep_time_milli"] = 1.5 * HOUR
+        masked_negative["records"][0]["score"]["stage_summary"]["total_rem_sleep_time_milli"] = 1.5 * HOUR
+        with self.assertRaises(SchemaDrift) as ctx:
+            whoop.parse_sleep(masked_negative)
+        self.assertIn("non-negative", str(ctx.exception))
         for bad in bad_sleep:
             with self.assertRaises(SchemaDrift, msg=repr(bad)[:100]):
                 whoop.parse_sleep(bad)
-        for bad in (page({**recovery(), "score": [1]}), page(5), {"records": [None]}, page({**recovery(), "score": "x"})):
+        # `score: 5` makes `"recovery_score" in 5` a raw TypeError unless the shape guard converts it
+        for bad in (page({**recovery(), "score": [1]}), page(5), {"records": [None]}, page({**recovery(), "score": "x"}),
+                    page({**recovery(), "score": 5}), page({**recovery(), "score": {"recovery_score": 50, "user_calibrating": []}}),
+                    page({**recovery(), "cycle_id": None, "created_at": 7})):
             with self.assertRaises(SchemaDrift, msg=repr(bad)[:100]):
                 whoop.parse_recovery(bad)
+        for fn in (whoop.parse_sleep, whoop.parse_recovery):  # the explicit, readable message for non-object records
+            with self.assertRaises(SchemaDrift) as ctx:
+                fn({"records": [5]})
+            self.assertIn("not an object", str(ctx.exception))
 
     def test_only_naps_means_no_reading(self):
         readings, notes = whoop.parse_sleep(page(sleep(nap=True)))

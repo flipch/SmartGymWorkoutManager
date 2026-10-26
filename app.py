@@ -2,10 +2,12 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 from api_client import SpeedianceClient
 from auth import load_token, install_flask_auth, install_flask_write_gate
 from features import init_features
+import media
 import json
 import os
 import sys
 import webbrowser
+import threading
 from threading import Timer, Thread
 import requests
 try:
@@ -44,30 +46,18 @@ else:
     current_dir = app.root_path
     
 CACHE_ROOT = os.path.join(current_dir, 'static', 'media_cache')
+_PRELOAD_LOCK = threading.Lock()
 
 def get_cache_path(url):
-    """Determines local path and subfolder based on URL extension."""
-    parsed = urlparse(url)
-    filename = os.path.basename(parsed.path)
-    if not filename: return None, None
-
-    ext = os.path.splitext(filename)[1].lower()
-    if ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
-        subfolder = 'images'
-    elif ext in ['.mp4', '.mov', '.webm']:
-        subfolder = 'videos'
-    elif ext in ['.mp3', '.wav', '.aac']:
-        subfolder = 'audio'
-    else:
-        subfolder = 'misc'
-    
-    return os.path.join(CACHE_ROOT, subfolder, filename), subfolder
+    """(local path, subfolder) for a vendor media URL, keyed by a hash of the whole URL; (None, None) if not allowed."""
+    return media.cache_path(CACHE_ROOT, url)
 
 @app.template_filter('local_cache')
 def local_cache_filter(url, force=False):
     """Jinja filter to rewrite remote URLs to local proxy URLs."""
     if not url: return ""
-    
+    if not media.is_allowed_url(url): return url  # not ours to cache: the browser handles it directly
+
     # Check if file exists locally
     local_path, _ = get_cache_path(url)
     if local_path and os.path.exists(local_path):
@@ -82,46 +72,24 @@ def local_cache_filter(url, force=False):
 
 @app.route('/media_proxy')
 def media_proxy():
-    """Downloads and serves media files locally."""
+    """Downloads and serves vendor media locally. Only allowlisted https media hosts; never redirects the caller."""
     remote_url = request.args.get('url')
     if not remote_url:
         return "No URL provided", 400
-
     local_path, subfolder = get_cache_path(remote_url)
     if not local_path:
-        return redirect(remote_url) # Fallback if filename parsing fails
+        return "URL is not an allowed media URL", 400
 
-    filename = os.path.basename(local_path)
-
-    # Serve from cache if exists
-    if os.path.exists(local_path):
-        size = os.path.getsize(local_path)
-        print(f"[CACHE HIT] Served {filename} from disk. Saved {size/1024:.2f} KB of CDN traffic.")
-        return send_from_directory(os.path.dirname(local_path), filename)
-
-    # Download if missing
-    try:
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        
-        # Stream download
-        print(f"[CACHE MISS] Downloading {filename} from CDN...")
-        resp = requests.get(remote_url, stream=True, timeout=10)
-        if resp.status_code == 200:
-            with open(local_path, 'wb') as f:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            size = os.path.getsize(local_path)
-            print(f"[DOWNLOAD] Saved {filename} ({size/1024:.2f} KB) to cache.")
-            return send_from_directory(os.path.dirname(local_path), filename)
-        else:
-            # If download fails, redirect to original URL
-            print(f"[ERROR] Failed to download {remote_url} (Status {resp.status_code})")
-            return redirect(remote_url)
-    except Exception as e:
-        print(f"[ERROR] Cache download failed for {remote_url}: {e}")
-        return redirect(remote_url)
+    if not os.path.exists(local_path):
+        try:
+            media.download(remote_url, local_path, subfolder)
+        except media.MediaError as err:
+            print(f"[ERROR] media download refused/failed: {err}")
+            return f"Could not fetch media: {err}", 502
+    resp = send_from_directory(os.path.dirname(local_path), os.path.basename(local_path))
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+    return resp
 
 @app.route('/')
 def index():
@@ -276,32 +244,21 @@ def logout():
     flash("Logged out successfully", "success")
     return redirect(url_for('settings'))
 
-@app.route('/settings/preload')
+@app.route('/settings/preload', methods=['POST'])
 def preload_assets():
     """Streamed response that downloads all assets."""
     if not client.credentials.get("token"): return "Unauthorized", 401
 
     def download_url(url):
-        if not url or not url.startswith('http'): return "Skipped (Invalid URL)"
-        
         local_path, subfolder = get_cache_path(url)
-        if not local_path: return "Skipped (Path error)"
-        
+        if not local_path: return "Skipped (not an allowed media URL)"
         if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
             return "Skipped (Already exists)"
-            
         try:
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            resp = requests.get(url, stream=True, timeout=20)
-            if resp.status_code == 200:
-                with open(local_path, 'wb') as f:
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                return "Downloaded"
-            else:
-                return f"Failed (Status {resp.status_code})"
-        except Exception as e:
-            return f"Error: {e}"
+            media.download(url, local_path, subfolder, timeout=20)
+            return "Downloaded"
+        except media.MediaError as err:
+            return f"Failed ({err})"
 
     def extract_urls_from_exercise(ex):
         urls = set()
@@ -391,7 +348,16 @@ def preload_assets():
         
         yield "\nDone! All assets have been processed."
 
-    return Response(generate(), mimetype='text/plain')
+    if not _PRELOAD_LOCK.acquire(blocking=False):
+        return "A preload is already running", 409
+
+    def guarded():
+        try:
+            yield from generate()
+        finally:
+            _PRELOAD_LOCK.release()
+
+    return Response(guarded(), mimetype='text/plain')
 
 @app.route('/api/stats/<int:group_id>')
 def api_stats(group_id):
@@ -443,7 +409,7 @@ def library():
         owned_devices=owned_devices,
     )
 
-@app.route('/library/refresh')
+@app.route('/library/refresh', methods=['POST'])
 def refresh_library():
     if not client.credentials.get("token"): return redirect(url_for('settings'))
     

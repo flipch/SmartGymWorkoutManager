@@ -77,6 +77,7 @@ LOCAL_ONLY_ENDPOINTS = frozenset({
     "features.coach_apply", "features.coach_autoregulate", "features.coach_critique", "features.coach_feedback",
     "features.coach_program", "features.coach_readiness",
     "update_custom_instruction", "update_accessories", "update_owned_devices", "login", "settings",
+    "preload_assets", "refresh_library",  # local media/library cache only
 })
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 

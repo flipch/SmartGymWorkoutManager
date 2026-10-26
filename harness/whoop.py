@@ -87,7 +87,10 @@ def parse_recovery(payload) -> tuple[list[Reading], list[str]]:
     score = newest.get("score") or {}
     if "recovery_score" not in score:
         raise SchemaDrift(SOURCE, "SCORED recovery without score.recovery_score")
-    if score.get("user_calibrating"):
+    calibrating = score.get("user_calibrating")
+    if not isinstance(calibrating, bool):  # required boolean in the spec; a falsy non-bool must not read as "not calibrating"
+        raise SchemaDrift(SOURCE, "score.user_calibrating is missing or not a boolean")
+    if calibrating:
         return [], ["WHOOP is still calibrating this user: recovery score not usable"]
     value = score["recovery_score"]
     if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= value <= 100:
