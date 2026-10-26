@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import webbrowser
+import secrets
 import threading
 from threading import Timer, Thread
 import requests
@@ -30,7 +31,8 @@ else:
     # If running as script, use default paths
     app = Flask(__name__)
 
-app.secret_key = "speediance_secret_key" # For Flash Messages
+# Signs the flash-message cookie only. Not a constant (it was a published string): env, else random per process.
+app.secret_key = os.environ.get("GYM_SECRET_KEY") or secrets.token_hex(32)
 client = SpeedianceClient()
 install_flask_auth(app, load_token())
 install_flask_write_gate(app)
@@ -119,8 +121,8 @@ def settings():
         device_type = int(request.form.get('device_type', client.credentials.get('device_type', 1)))
         allow_monster_moves = bool(request.form.get('allow_monster_moves'))
         client.save_config(
-            request.form['user_id'],
-            request.form['token'],
+            request.form.get('user_id') or client.credentials.get('user_id'),
+            request.form.get('token') or client.credentials.get('token'),
             request.form.get('region', 'Global'),
             int(request.form.get('unit', 0)),
             request.form.get('custom_instruction', ''),
@@ -144,7 +146,8 @@ def settings():
             accessories = client.get_accessories()
         except Exception:
             pass
-    return render_template('settings.html', creds=creds, accessories=accessories)
+    shown = {**creds, "token_set": bool(creds.get("token")), "token": ""}  # the token never leaves the server
+    return render_template('settings.html', creds=shown, accessories=accessories)
 
 @app.route('/settings/custom_instruction', methods=['POST'])
 def update_custom_instruction():
@@ -235,8 +238,6 @@ def login():
         return redirect(url_for('index'))
     else:
         flash(message, "error")
-        if debug_info:
-            flash(debug_info, "debug")
         return redirect(url_for('settings'))
 
 @app.route('/logout', methods=['POST'])
@@ -805,6 +806,12 @@ class TextRedirector(object):
     def flush(self):
         pass
 
+def dev_server_options(env=None) -> dict:
+    """`python app.py` settings. The Werkzeug debugger is remote code execution: loopback only, and only when asked."""
+    env = os.environ if env is None else env
+    return {"debug": env.get("GYM_DEBUG") == "1", "host": env.get("GYM_BIND", "127.0.0.1"), "port": 5001}
+
+
 def open_browser():
     webbrowser.open_new("http://127.0.0.1:5001")
 
@@ -863,4 +870,4 @@ if __name__ == '__main__':
     if getattr(sys, 'frozen', False):
         start_gui()
     else:
-        app.run(debug=True, port=5001, host='0.0.0.0')
+        app.run(**dev_server_options())

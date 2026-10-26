@@ -4,6 +4,7 @@ import requests
 import os
 from urllib.parse import quote
 
+from harness.localsecrets import write_json_private
 from insights_core import valid_iso_date
 
 def _q(value, safe: str = "") -> str:
@@ -155,8 +156,7 @@ class SpeedianceClient:
         self.base_url = "https://" + self.host
         self.library_cache_file = self._get_library_cache_file()
         self.library_cache = self._load_library_cache()
-        with open(self.config_file, 'w') as f:
-            json.dump(self.credentials, f)
+        write_json_private(self.config_file, self.credentials)  # atomic, 0600: it holds the vendor session token
 
     def update_unit(self, unit):
         """Updates the unit setting on the server (0=Metric, 1=Imperial)"""
