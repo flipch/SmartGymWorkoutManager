@@ -90,6 +90,29 @@ class Login(AdapterCase):
         adapter, _ = self.make(OK_LOGIN)
         self.assertFalse(hasattr(adapter, "logout"))
 
+    def test_every_request_is_a_get_or_one_of_the_two_login_posts(self):
+        """Behavioural guard for 'never log the user out / never write': drive every public path incl. re-login."""
+        script = {**OK_LOGIN,
+                  "/api/mobile/v2/report": [(200, {"code": 90, "message": "session gone"}), (200, {"code": 0, "data": []})],
+                  "/api/app/trainingInfo": [(200, {"code": 0, "data": []})]}
+        adapter, api = self.make(script)
+        adapter.history(date(2026, 10, 1), date(2026, 10, 2))   # includes forced re-login on code 90
+        for record_type in (2, 5):
+            adapter.detail(1, record_type)
+        self.assertGreater(len(api.calls), 4)
+        allowed_posts = {"/api/app/v2/login/verifyIdentity", "/api/app/v2/login/byPass"}
+        for method, path, _, _ in api.calls:
+            self.assertTrue(method == "GET" or (method == "POST" and path in allowed_posts), f"{method} {path}")
+            self.assertNotRegex(path.lower(), r"logout|save|delete|schedule|push|send|create|update")
+
+    def test_no_harness_module_mentions_a_write_or_logout_endpoint(self):
+        import re
+        for src in (Path(__file__).parent.parent / "harness").glob("*.py"):
+            for n, line in enumerate(src.read_text().splitlines(), 1):
+                if line.lstrip().startswith(("#", '"""')):
+                    continue
+                self.assertNotRegex(line.lower(), r"[\"'/](logout|saveworkout|deleteworkout|schedule)\b", f"{src.name}:{n}")
+
     def test_refuses_world_readable_credentials(self):
         os.chmod(self.creds, 0o644)
         adapter, _ = self.make(OK_LOGIN)

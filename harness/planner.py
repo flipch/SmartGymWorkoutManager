@@ -28,6 +28,12 @@ NAME_MATCH_RATIO = 0.86
 ROUND_TO = 0.5
 TEMPLATE_WINDOW_DAYS = 90
 TEMPLATE_MIN_COUNT = 2
+ANCHOR_MAX_AGE_DAYS = 90  # a load logged longer ago than this is not trusted as an anchor
+LAYOFF_DAYS = 14          # after this long without logging a lift, hold its load: no increases
+# Words that make two exercises different movements even when the rest of the name matches (Incline vs Decline).
+DISCRIMINATORS = frozenset("""incline decline flat seated standing kneeling lying prone supine single dual left right
+overhead close wide narrow reverse front rear lateral high low hammer neutral underhand overhand supinated pronated
+unilateral bilateral alternating""".split())
 
 
 def _norm(name: str) -> str:
@@ -36,7 +42,13 @@ def _norm(name: str) -> str:
 
 def _same_exercise(a: str, b: str) -> bool:
     na, nb = _norm(a), _norm(b)
-    return bool(na) and (na == nb or SequenceMatcher(None, na, nb).ratio() >= NAME_MATCH_RATIO)
+    if not na:
+        return False
+    if na == nb:
+        return True
+    if DISCRIMINATORS & set(na.split()) != DISCRIMINATORS & set(nb.split()):
+        return False
+    return SequenceMatcher(None, na, nb).ratio() >= NAME_MATCH_RATIO
 
 
 def _round(x: float) -> float:
@@ -71,9 +83,14 @@ def newest_with_title(sessions: list[SessionResult], title: str) -> SessionResul
 
 
 # ── helpers over logged sets ────────────────────────────────────────────────
-def last_logged(name: str, sessions: list[SessionResult]):
-    """(median load, sets, day) from the newest session that logged this exercise with loads (catalog fallback)."""
+def last_logged(name: str, sessions: list[SessionResult], *, since: date | None = None):
+    """(median load, sets, day) from the newest session that logged this exercise with loads (catalog fallback).
+
+    Sessions before `since` are ignored: an old load is not an anchor.
+    """
     for s in sorted(sessions, key=lambda x: x.started_at_ms, reverse=True):
+        if since is not None and s.local_day < since:
+            continue
         sets = [x for x in s.sets if _same_exercise(x.exercise, name)]
         loads = [x.load for x in sets if x.load]
         if loads:
@@ -97,9 +114,16 @@ def _readiness_dict(fresh: list[Reading]) -> tuple[dict, list[str]]:
     return data, prov
 
 
-def _progress(last: float, hit_all: bool, band: str, intensity_pct: float, max_jump_pct: float):
-    """(load, basis) for one exercise given its last logged load. Never exceeds the jump cap."""
-    if band == "low":
+def _progress(last: float, hit_all: bool, band: str, intensity_pct: float, max_jump_pct: float,
+              *, allow_increase: bool = True):
+    """(load, basis) for one exercise given its last logged load.
+
+    Never exceeds the jump cap, and never exceeds `last` unless it is a deliberate progression. Rounding to the
+    plate grid only ever steps DOWN past a ceiling, so a "hold" can come out up to one step below the logged load.
+    """
+    if band == "high" and hit_all and not allow_increase:
+        proposed, basis = last, f"hold the last logged load (no increases after {LAYOFF_DAYS}+ days without this lift)"
+    elif band == "low":
         proposed, basis = last * (1 + intensity_pct / 100.0), "low readiness: load reduced from last logged"
     elif band == "high" and hit_all:
         proposed, basis = last * (1 + PROGRESSION_PCT / 100.0), "high readiness and every last set hit its rep target: small increase"
@@ -108,6 +132,8 @@ def _progress(last: float, hit_all: bool, band: str, intensity_pct: float, max_j
     else:
         proposed, basis = last, "hold the last logged load (not every set hit its rep target)"
     limit = interlocks.clamp_to_jump(float("inf"), last, max_jump_pct)
+    if proposed <= last:
+        limit = min(limit, last)
     load = _round(min(proposed, limit))
     while load > limit + 1e-9:  # rounding must never break the cap
         load -= ROUND_TO
@@ -115,7 +141,9 @@ def _progress(last: float, hit_all: bool, band: str, intensity_pct: float, max_j
 
 
 # ── plan builders ───────────────────────────────────────────────────────────
-def _from_template(template: SessionResult, auto: dict, max_jump_pct: float) -> list[ProposedExercise]:
+def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day: date) -> list[ProposedExercise]:
+    age = (day - template.local_day).days
+    too_old = age > ANCHOR_MAX_AGE_DAYS
     out = []
     for name, rows in _by_exercise(template.sets).items():
         performed = [r for r in rows if r.reps]
@@ -125,13 +153,19 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float) -> 
         if auto["volume_pct"] < 0:
             n_sets = max(1, round(n_sets * (1 + auto["volume_pct"] / 100.0)))
         loads = [r.load for r in performed if r.load]
+        if too_old:
+            out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
+                                        f"last logged {age} days ago (over {ANCHOR_MAX_AGE_DAYS}): too old to anchor, "
+                                        "choose a load that leaves the target RIR"))
+            continue
         if not loads:
             out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
                                         "no recorded sets last time (skipped or unrecorded): use your template's targets"))
             continue
         last = float(median(loads))
         hit_all = bool(targets) and all((r.reps or 0) >= r.target for r in rows if r.target)
-        load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct)
+        load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
+                                allow_increase=age < LAYOFF_DAYS)
         out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", load,
                                     f"{basis} (last {last:g})", last_load=last))
     return out
@@ -150,14 +184,15 @@ def _from_catalog(sessions: list[SessionResult], auto: dict, goal: str, days_per
         if mode not in interlocks.ALLOWED_MODES:
             warnings.append(f"{ex['name']}: coach suggested {mode!r}; held to standard until done by hand")
             mode = "standard"
-        anchor = last_logged(ex["name"], sessions)
+        anchor = last_logged(ex["name"], sessions, since=day - timedelta(days=ANCHOR_MAX_AGE_DAYS))
         if anchor is None:
             out.append(ProposedExercise(ex["name"], sets, ex["reps"], max(ex["rir"], auto["rir_min"]), mode, None,
                                         "no logged history for this exercise: choose a load that leaves the target RIR"))
             continue
         last, logged, last_day = anchor
         hit_all = all(x.reps is not None and x.reps >= ex["reps"] for x in logged)
-        load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct)
+        load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
+                                allow_increase=(day - last_day).days < LAYOFF_DAYS)
         out.append(ProposedExercise(ex["name"], sets, ex["reps"], max(ex["rir"], auto["rir_min"]), mode, load,
                                     f"{basis} (last {last:g} on {last_day.isoformat()})", last_load=last))
     return todays["name"], out
@@ -173,6 +208,11 @@ def todays_plan(*, sessions: list[SessionResult] | None, readings: list[Reading]
         reasons.append("training history was not provided")
     fresh, stale = interlocks.split_fresh(readings, now, max_reading_age_h)
     fresh = [r for r in fresh if r.kind in READINESS_KINDS]
+    day = local_today(tz, now)
+    future = sorted({s.local_day for s in sessions or [] if s.local_day > day})
+    if future:  # a vendor clock/unit bug would otherwise silently become the load anchor
+        reasons.append(f"history has {len(future)} future-dated day(s) (e.g. {future[-1].isoformat()}): "
+                       "training data is not trustworthy")
     if not fresh:
         why = "no readiness input"
         if stale:
@@ -183,7 +223,6 @@ def todays_plan(*, sessions: list[SessionResult] | None, readings: list[Reading]
         return Unavailable(tuple(reasons))
 
     sessions = sessions or []
-    day = local_today(tz, now)
     readiness, provenance = _readiness_dict(fresh)
     auto = coach.autoregulate(readiness)
 
@@ -194,6 +233,10 @@ def todays_plan(*, sessions: list[SessionResult] | None, readings: list[Reading]
     if len({s.local_day for s in sessions if day - timedelta(days=7) <= s.local_day <= day}) >= 6:
         warnings.append("6+ training days in the last 7: consider a rest day")
 
+    last_any = max((s.local_day for s in sessions), default=None)
+    if last_any is not None and (day - last_any).days >= LAYOFF_DAYS:
+        warnings.append(f"{(day - last_any).days} days since your last logged session: no load increases, "
+                        "start conservatively")
     title = next_template_title(sessions, day, override=template)
     source, day_name, exercises, chosen = "coach_catalog", "", [], None
     if template and title is None:
@@ -202,7 +245,7 @@ def todays_plan(*, sessions: list[SessionResult] | None, readings: list[Reading]
         chosen = newest_with_title(sessions, title)
         if chosen is not None and chosen.sets:
             source, day_name = "user_template", title
-            exercises = _from_template(chosen, auto, max_jump_pct)
+            exercises = _from_template(chosen, auto, max_jump_pct, day)
         else:
             warnings.append(f"no per-set detail loaded for your template {title!r}; fell back to the generic program")
     if source == "coach_catalog":

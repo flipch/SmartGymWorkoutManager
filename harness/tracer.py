@@ -135,6 +135,8 @@ def main(argv=None) -> int:
             sessions = load_live(now, a.tz, a.history_days, a.detail, a.unit, a.template)
     except (SourceDown, PermissionError, FileNotFoundError, KeyError, ValueError) as err:
         errors["speediance"] = str(err)
+    except Exception as err:  # noqa: BLE001 - a drifted payload must end in Unavailable (exit 2), never a traceback
+        errors["speediance"] = f"unexpected {type(err).__name__} while reading history (likely schema drift)"
 
     result = planner.todays_plan(sessions=sessions, readings=readings, now=now, feed_errors=errors, tz=a.tz,
                                  goal=a.goal, days_per_week=a.days_per_week, experience=a.experience, template=a.template)

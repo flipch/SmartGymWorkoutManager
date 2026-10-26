@@ -5,7 +5,7 @@ Run with `pytest tests/test_harness_eval.py -s` to see the scorecard. Every inva
   I2  no load exceeds the last logged load by more than the jump cap
   I3  an exercise without a logged anchor never has a load
   I4  LOW readiness: every anchored load <= its last load, and sets never increase
-  I5  non-HIGH readiness: no anchored load above its last load (rounding tolerance of one plate step)
+  I5  non-HIGH readiness: no anchored load above its last load (strict: rounding steps down, never up)
   I6  missing / stale / errored inputs -> Unavailable (never a plan)
   I7  deterministic: same inputs, same plan
 Real-data eval (skips without local recordings): every exercise that has recorded sets gets an anchored load.
@@ -98,7 +98,7 @@ class PlannerEval(unittest.TestCase):
                 self.assertIsNotNone(ex.last_load, f"I3 trial {trial}: {ex.name}")
                 self.assertLessEqual(ex.load, ex.last_load * 1.10 + 1e-9, f"I2 trial {trial}: {ex.name}")
                 if result.band != "high":
-                    self.assertLessEqual(ex.load, ex.last_load + 0.5, f"I5 trial {trial}: {ex.name}")
+                    self.assertLessEqual(ex.load, ex.last_load + 1e-9, f"I5 trial {trial}: {ex.name}")
                 if result.band == "low":
                     self.assertLessEqual(ex.load, ex.last_load, f"I4 trial {trial}: {ex.name}")
             for ex in result.exercises:
@@ -123,7 +123,7 @@ class PlannerEval(unittest.TestCase):
         rng = random.Random(99)
         for trial in range(300):
             sessions = random_history(rng)
-            mode = rng.choice(["none", "stale", "future", "feed_error", "no_history"])
+            mode = rng.choice(["none", "stale", "future", "feed_error", "no_history", "future_session"])
             readings = random_readings(rng)
             kwargs = {}
             if mode == "none":
@@ -137,6 +137,10 @@ class PlannerEval(unittest.TestCase):
                 sessions = None
             elif mode == "no_history":
                 sessions = None
+            elif mode == "future_session":
+                d = TODAY + timedelta(days=rng.randint(1, 400))
+                rec = synth.history_record(rng.randrange(10**7, 10**8), synth.ts_ms(d.year, d.month, d.day), title="Push")
+                sessions = sessions + [session_header(rec)]
             result = planner.todays_plan(sessions=sessions, readings=readings, now=NOW, **kwargs)
             self.assertIsInstance(result, Unavailable, f"I6 trial {trial} mode={mode}")
             STATS["unavailable_expected"] += 1

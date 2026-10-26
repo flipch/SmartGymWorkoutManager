@@ -14,12 +14,15 @@ Semantics enforced here (from the spec + research):
   * only score_state == SCORED counts; PENDING_SCORE / UNSCORABLE yield NO reading (never "0") so the planner's
     freshness gate decides; a user still calibrating yields no recovery reading either;
   * naps are ignored for sleep_hours; sleep_hours counts light + slow-wave + REM time asleep;
+  * a reading's `as_of` is when it was MEASURED (recovery `created_at`, sleep `end`), never `updated_at`: WHOOP
+    bumps updated_at when it rescores an old record, which would make stale data look fresh to the 18 h gate;
   * WHOOP does not expose a resting-HR/HRV baseline, so we do not derive rhr/hrv signals here (recovery already
     encodes them, and unvalidated thresholds would only add noise).
 """
 import fcntl
 import os
 import pathlib
+import time
 from datetime import datetime
 
 from . import localsecrets
@@ -29,6 +32,7 @@ from .model import Reading
 SOURCE = "whoop"
 TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
 MS_PER_HOUR = 3_600_000
+LOCK_TIMEOUT_S = 30.0
 
 
 def _parse_ts(value: str, what: str) -> datetime:
@@ -49,17 +53,17 @@ def _records(payload) -> list[dict]:
 
 def _newest(records: list[dict], keep) -> dict | None:
     candidates = [r for r in records if keep(r)]
-    return max(candidates, key=lambda r: _parse_ts(r["updated_at"], "updated_at")) if candidates else None
+    return max(candidates, key=lambda r: _parse_ts(r["end"], "end")) if candidates else None
 
 
 def parse_recovery(payload) -> tuple[list[Reading], list[str]]:
     """RecoveryCollection -> ([whoop_recovery reading] or [], notes explaining any absence)."""
     records = _records(payload)
     for r in records:
-        for key in ("score_state", "updated_at", "cycle_id"):
+        for key in ("score_state", "created_at", "cycle_id"):
             if key not in r:
                 raise SchemaDrift(SOURCE, f"recovery record lacks {key}")
-    newest = max(records, key=lambda r: _parse_ts(r["updated_at"], "updated_at"), default=None)
+    newest = max(records, key=lambda r: _parse_ts(r["created_at"], "created_at"), default=None)
     if newest is None:
         return [], ["no recovery records returned"]
     if newest["score_state"] != "SCORED":
@@ -72,14 +76,14 @@ def parse_recovery(payload) -> tuple[list[Reading], list[str]]:
     value = score["recovery_score"]
     if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= value <= 100:
         raise SchemaDrift(SOURCE, f"recovery_score out of range: {value!r}")
-    return [Reading("whoop_recovery", float(value), SOURCE, _parse_ts(newest["updated_at"], "updated_at"))], []
+    return [Reading("whoop_recovery", float(value), SOURCE, _parse_ts(newest["created_at"], "created_at"))], []
 
 
 def parse_sleep(payload) -> tuple[list[Reading], list[str]]:
     """PaginatedSleepResponse -> ([sleep_hours reading] or [], notes). Naps are ignored."""
     records = _records(payload)
     for r in records:
-        for key in ("score_state", "updated_at", "nap"):
+        for key in ("score_state", "end", "nap"):
             if key not in r:
                 raise SchemaDrift(SOURCE, f"sleep record lacks {key}")
     newest = _newest(records, lambda r: not r["nap"])
@@ -98,7 +102,7 @@ def parse_sleep(payload) -> tuple[list[Reading], list[str]]:
     hours = asleep_ms / MS_PER_HOUR
     if not 0 <= hours <= 16:
         raise SchemaDrift(SOURCE, f"implausible sleep duration: {hours:.1f} h")
-    return [Reading("sleep_hours", round(hours, 2), SOURCE, _parse_ts(newest["updated_at"], "updated_at"))], []
+    return [Reading("sleep_hours", round(hours, 2), SOURCE, _parse_ts(newest["end"], "end"))], []
 
 
 class TokenStore:
@@ -117,6 +121,19 @@ class TokenStore:
                 raise SourceDown(SOURCE, f"refresh response lacked {key}")
         localsecrets.write_json_private(self.path, tokens)
 
+    @staticmethod
+    def _lock(fd: int, timeout_s: float = LOCK_TIMEOUT_S) -> None:
+        """Take the exclusive lock, giving up after `timeout_s` so a hung refresher cannot hang every caller."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise SourceDown(SOURCE, f"token refresh lock busy for over {timeout_s:g} s") from None
+                time.sleep(0.05)
+
     def refresh_if_still_stale(self, seen_refresh_token: str, refresh_fn) -> dict:
         """Refresh at most once across all processes.
 
@@ -128,7 +145,7 @@ class TokenStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            self._lock(fd)
             current = self.load()
             if current and current.get("refresh_token") != seen_refresh_token:
                 return current
@@ -136,8 +153,10 @@ class TokenStore:
                 fresh = refresh_fn(seen_refresh_token)
             except SourceDown:
                 raise
-            except Exception as err:  # noqa: BLE001 - never leak token material in the message
-                raise SourceAuthError(SOURCE, f"token refresh failed: {type(err).__name__}") from err
+            except Exception as err:  # noqa: BLE001
+                # `from None`: the original exception's text/body may contain token material, so it must not
+                # reach a traceback or log through exception chaining.
+                raise SourceAuthError(SOURCE, f"token refresh failed: {type(err).__name__}") from None
             self.save(fresh)
             return fresh
         finally:

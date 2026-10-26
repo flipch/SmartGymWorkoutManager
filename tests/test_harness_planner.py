@@ -144,6 +144,66 @@ class LoadLogic(unittest.TestCase):
         self.assertTrue(all(e.mode == "as_template" for e in r.exercises))
 
 
+class HistoryTrust(unittest.TestCase):
+    """Review findings: future-dated / ancient / layoff history must not become an unchecked load anchor."""
+
+    def two_pushes(self, ago_a, ago_b, **kw):
+        d = date(2026, 10, 26)
+        return [session(d - timedelta(days=ago_a), "Push", push_day(**kw)), session(d - timedelta(days=ago_b), "Push")]
+
+    def bench(self, result):
+        return next(e for e in result.exercises if e.name == "Synthetic Bench Press")
+
+    def test_a_future_dated_session_makes_the_plan_unavailable(self):
+        bad = session(date(2027, 1, 1), "Push", push_day(weights=(500, 500, 500)))
+        r = plan(self.two_pushes(3, 10) + [bad], readings(("whoop_recovery", 90), ("subjective", 5)))
+        self.assertIsInstance(r, Unavailable)
+        self.assertIn("future-dated", r.reasons[0])
+
+    def test_session_later_today_is_not_future(self):
+        later = session(date(2026, 10, 26), "Legs")
+        self.assertIsInstance(plan(self.two_pushes(3, 10) + [later], readings(("subjective", 3))), Plan)
+
+    def test_ancient_anchor_is_not_trusted_for_a_load(self):
+        r = plan(self.two_pushes(400, 410), readings(("subjective", 3)), template="Push")  # explicit pick
+        self.assertIsInstance(r, Plan)
+        self.assertEqual(r.source, "user_template")
+        self.assertIsNone(self.bench(r).load)
+        self.assertIn("too old", self.bench(r).load_basis)
+
+    def test_catalog_ignores_loads_older_than_the_anchor_window(self):
+        d = date(2026, 10, 26)
+        old = session(d - timedelta(days=400), "X", [synth.exercise("Synthetic Press", [(8, 60, 8)] * 3)])
+        self.assertIsNotNone(planner.last_logged("Synthetic Press", [old]))
+        self.assertIsNone(planner.last_logged("Synthetic Press", [old], since=d - timedelta(days=90)))
+
+    def test_layoff_blocks_increases_even_on_a_green_day(self):
+        r = plan(self.two_pushes(20, 27), readings(("whoop_recovery", 90), ("subjective", 5)))
+        self.assertEqual(r.band, "high")
+        self.assertEqual(self.bench(r).load, 40.0)  # not 41.0
+        self.assertTrue(any("no load increases" in w for w in r.warnings))
+
+    def test_recent_green_day_still_progresses(self):
+        r = plan(self.two_pushes(3, 10), readings(("whoop_recovery", 90), ("subjective", 5)))
+        self.assertEqual(self.bench(r).load, 41.0)
+
+    def test_hold_never_exceeds_the_logged_load_when_off_the_plate_grid(self):
+        r = plan(self.two_pushes(3, 10, weights=(20.3, 20.3, 20.3)), readings(("subjective", 3)))
+        self.assertLessEqual(self.bench(r).load, 20.3)
+
+    def test_similar_names_that_are_different_movements_do_not_share_an_anchor(self):
+        self.assertFalse(planner._same_exercise("Incline Bench Press", "Decline Bench Press"))
+        self.assertFalse(planner._same_exercise("Seated Row", "Standing Row"))
+        self.assertFalse(planner._same_exercise("Left Curl", "Right Curl"))
+        self.assertTrue(planner._same_exercise("Bench Press", "bench  press"))
+        self.assertTrue(planner._same_exercise("Cable Row", "Cable Rows"))
+
+    def test_catalog_does_not_anchor_on_a_lookalike_exercise(self):
+        d = date(2026, 10, 26)
+        decline = [synth.exercise("Decline Bench Press", [(8, 100, 8)] * 3)]
+        self.assertIsNone(planner.last_logged("Incline Bench Press", [session(d - timedelta(days=2), "X", decline)]))
+
+
 class Warnings(unittest.TestCase):
     def test_already_trained_today_and_overreach_warnings(self):
         d = date(2026, 10, 26)

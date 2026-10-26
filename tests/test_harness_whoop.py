@@ -35,9 +35,9 @@ def conforms(schema_name: str, obj: dict) -> None:
             conforms(ref.split("/")[-1], obj[key])
 
 
-def recovery(state="SCORED", score=72.0, calibrating=False, updated="2026-10-26T14:05:00.000Z", cycle=1):
+def recovery(state="SCORED", score=72.0, calibrating=False, updated="2026-10-26T14:05:00.000Z", cycle=1, created=None):
     rec = {"cycle_id": cycle, "sleep_id": "11111111-1111-1111-1111-111111111111", "user_id": 7,
-           "created_at": updated, "updated_at": updated, "score_state": state}
+           "created_at": created or updated, "updated_at": updated, "score_state": state}
     if state == "SCORED":
         rec["score"] = {"user_calibrating": calibrating, "recovery_score": score, "resting_heart_rate": 52.0,
                         "hrv_rmssd_milli": 65.0}
@@ -45,9 +45,10 @@ def recovery(state="SCORED", score=72.0, calibrating=False, updated="2026-10-26T
     return rec
 
 
-def sleep(state="SCORED", light=4 * HOUR, sws=1.5 * HOUR, rem=1.5 * HOUR, nap=False, updated="2026-10-26T14:00:00.000Z"):
-    rec = {"id": "22222222-2222-2222-2222-222222222222", "cycle_id": 1, "user_id": 7, "created_at": updated,
-           "updated_at": updated, "start": "2026-10-26T06:00:00.000Z", "end": "2026-10-26T14:00:00.000Z",
+def sleep(state="SCORED", light=4 * HOUR, sws=1.5 * HOUR, rem=1.5 * HOUR, nap=False, end="2026-10-26T14:00:00.000Z",
+          updated=None):
+    rec = {"id": "22222222-2222-2222-2222-222222222222", "cycle_id": 1, "user_id": 7, "created_at": end,
+           "updated_at": updated or end, "start": "2026-10-26T06:00:00.000Z", "end": end,
            "timezone_offset": "-07:00", "nap": nap, "score_state": state}
     if state == "SCORED":
         rec["score"] = {"stage_summary": {"total_in_bed_time_milli": int(8 * HOUR), "total_awake_time_milli": int(0.5 * HOUR),
@@ -89,13 +90,19 @@ class Recovery(unittest.TestCase):
         readings, notes = whoop.parse_recovery(page(old, new))
         self.assertEqual(readings, [], "must not fall back to yesterday's score")
 
+    def test_rescoring_an_old_record_does_not_make_it_look_fresh(self):
+        """updated_at moves when WHOOP rescores; as_of must stay at the measurement time (created_at)."""
+        rescored = recovery(created="2026-10-23T14:00:00Z", updated="2026-10-26T14:00:00Z")
+        readings, _ = whoop.parse_recovery(page(rescored))
+        self.assertEqual(readings[0].as_of, datetime(2026, 10, 23, 14, 0, tzinfo=timezone.utc))
+
     def test_empty_page_is_a_note_not_an_error(self):
         self.assertEqual(whoop.parse_recovery(page()), ([], ["no recovery records returned"]))
 
     def test_drift_is_loud(self):
         for bad in (None, {}, {"records": "x"}, page({"score_state": "SCORED"}), page(recovery(score=140.0)),
-                    page(recovery(score=True)), page({**recovery(), "updated_at": "yesterday"}),
-                    page({**recovery(), "updated_at": "2026-10-26T14:00:00"})):
+                    page(recovery(score=True)), page({**recovery(), "created_at": "yesterday"}),
+                    page({**recovery(), "created_at": "2026-10-26T14:00:00"})):
             with self.assertRaises(SchemaDrift, msg=repr(bad)[:80]):
                 whoop.parse_recovery(bad)
 
@@ -112,10 +119,15 @@ class Sleep(unittest.TestCase):
         self.assertEqual([(r.kind, r.value) for r in readings], [("sleep_hours", 7.0)])  # awake + in-bed excluded
 
     def test_naps_are_ignored(self):
-        night = sleep(updated="2026-10-26T13:00:00Z")
-        nap = sleep(nap=True, light=0.5 * HOUR, sws=0, rem=0, updated="2026-10-26T20:00:00Z")
+        night = sleep(end="2026-10-26T13:00:00Z")
+        nap = sleep(nap=True, light=0.5 * HOUR, sws=0, rem=0, end="2026-10-26T20:00:00Z")
         readings, _ = whoop.parse_sleep(page(nap, night))
         self.assertEqual(readings[0].value, 7.0)
+
+    def test_rescored_old_sleep_is_stamped_with_when_it_ended(self):
+        rescored = sleep(end="2026-10-23T14:00:00Z", updated="2026-10-26T14:00:00Z")
+        readings, _ = whoop.parse_sleep(page(rescored))
+        self.assertEqual(readings[0].as_of, datetime(2026, 10, 23, 14, 0, tzinfo=timezone.utc))
 
     def test_only_naps_means_no_reading(self):
         readings, notes = whoop.parse_sleep(page(sleep(nap=True)))
@@ -129,7 +141,7 @@ class Sleep(unittest.TestCase):
     def test_drift_is_loud(self):
         no_stage = sleep()
         del no_stage["score"]["stage_summary"]["total_rem_sleep_time_milli"]
-        for bad in (None, page({"score_state": "SCORED", "updated_at": "2026-10-26T14:00:00Z"}), page(no_stage),
+        for bad in (None, page({"score_state": "SCORED", "end": "2026-10-26T14:00:00Z"}), page(no_stage),
                     page(sleep(light=30 * HOUR))):
             with self.assertRaises(SchemaDrift, msg=repr(bad)[:80]):
                 whoop.parse_sleep(bad)
@@ -182,7 +194,23 @@ class Tokens(unittest.TestCase):
         with self.assertRaises(SourceAuthError) as ctx:
             self.store.refresh_if_still_stale("r1", boom)
         self.assertNotIn("secret", str(ctx.exception))
+        self.assertIsNone(ctx.exception.__cause__, "chaining would print the original message in tracebacks")
+        self.assertTrue(ctx.exception.__suppress_context__)
         self.assertEqual(self.store.load()["refresh_token"], "r1")
+
+    def test_a_hung_refresher_cannot_block_everyone_forever(self):
+        import fcntl
+        self.store.path.parent.mkdir(parents=True, exist_ok=True)
+        holder = os.open(self.store.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        waiter = os.open(self.store.lock_path, os.O_RDWR)
+        try:
+            with self.assertRaises(SourceDown) as ctx:
+                whoop.TokenStore._lock(waiter, timeout_s=0.2)
+            self.assertIn("lock busy", str(ctx.exception))
+        finally:
+            os.close(waiter)
+            os.close(holder)
 
     def test_source_down_passes_through_untouched(self):
         def down(old):

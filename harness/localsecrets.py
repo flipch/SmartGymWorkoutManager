@@ -19,8 +19,15 @@ def load_env_file(path: pathlib.Path) -> dict:
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
-            env[key.strip()] = value.strip().strip('"').strip("'")
+            env[key.strip()] = _unquote(value.strip())
     return env
+
+
+def _unquote(value: str) -> str:
+    """Remove ONE matching pair of surrounding quotes; a password may legitimately start or end with a quote."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
 
 
 def read_json_private(path: pathlib.Path) -> dict | None:
