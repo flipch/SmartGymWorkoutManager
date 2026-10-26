@@ -38,6 +38,7 @@ DEFAULT_TOKENS = localsecrets.CONFIG_DIR / "whoop.token.json"
 HTTP_TIMEOUT_S = 15
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _SECRET_LINE = re.compile(r"\S{64}")
+_MASKED = re.compile(r"[*\u2022\u25cf\u00b7]{8,}")  # the dashboard hides the secret behind a row of these
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,10 @@ class AppCredentials:
 
     def __repr__(self) -> str:
         return "AppCredentials(client_id=<redacted>, client_secret=<redacted>)"
+
+
+_MASKED_MSG = ("{name}: the client secret is the masked placeholder (a row of asterisks) from the dashboard, not the "
+               "real secret; copy the real value from the WHOOP developer dashboard (it is shown once, or regenerate it)")
 
 
 def load_app_credentials(path=DEFAULT_CREDS) -> AppCredentials:
@@ -63,11 +68,15 @@ def load_app_credentials(path=DEFAULT_CREDS) -> AppCredentials:
         if "=" in line and not line.lstrip().startswith(("#", "http")):
             key, value = line.split("=", 1)
             kv[key.strip().upper()] = value.strip().strip("\"'")
+    if _MASKED.fullmatch(kv.get("WHOOP_CLIENT_SECRET", "")):
+        raise ValueError(_MASKED_MSG.format(name=path.name))
     if kv.get("WHOOP_CLIENT_ID") and kv.get("WHOOP_CLIENT_SECRET"):
         return AppCredentials(kv["WHOOP_CLIENT_ID"], kv["WHOOP_CLIENT_SECRET"])
     lines = [ln.strip() for ln in text.splitlines()]
     ids = [ln for ln in lines if _UUID.fullmatch(ln)]
-    secrets_found = [ln for ln in lines if _SECRET_LINE.fullmatch(ln) and "://" not in ln]
+    secrets_found = [ln for ln in lines if _SECRET_LINE.fullmatch(ln) and "://" not in ln and not _MASKED.fullmatch(ln)]
+    if not secrets_found and any(_MASKED.fullmatch(ln) for ln in lines):
+        raise ValueError(_MASKED_MSG.format(name=path.name))
     if len(ids) != 1 or len(secrets_found) != 1:
         raise ValueError(f"{path.name}: expected exactly one client id (UUID) and one 64-character client secret, "
                          f"found {len(ids)} and {len(secrets_found)}")
@@ -158,7 +167,7 @@ class _Callback(http.server.BaseHTTPRequestHandler):
         if not code:
             return self._reply(400, "Missing code.")
         self.server.result = {"code": code}
-        self._reply(200, "WHOOP is connected. You can close this tab and return to the terminal.")
+        self._reply(200, "Authorisation received. Return to the terminal: it says whether the token exchange worked.")
 
 
 def run_consent(creds: AppCredentials, store: TokenStore, *, open_url, port: int = 8000, timeout_s: float = 180,

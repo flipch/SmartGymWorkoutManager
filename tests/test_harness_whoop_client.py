@@ -11,6 +11,7 @@ import socket
 import stat
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -107,6 +108,21 @@ class Credentials(unittest.TestCase):
         path = tmpfile(f"Client ID\n{CID}\n\nClient Secret\n{SECRET}\nRedirect\nhttp://localhost:8000/callback\n")
         c = wc.load_app_credentials(path)
         self.assertEqual((c.client_id, c.client_secret), (CID, SECRET))
+
+    def test_the_dashboards_masked_secret_is_refused_with_a_clear_message(self):
+        for mask in ("*" * 64, "\u2022" * 64, "*" * 8):
+            path = tmpfile(f"Client ID\n{CID}\nClient Secret\n{mask}\nRedirect\nhttp://localhost:8000/callback\n")
+            with self.assertRaises(ValueError) as ctx:
+                wc.load_app_credentials(path)
+            self.assertIn("masked", str(ctx.exception))
+            self.assertNotIn(CID, str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            wc.load_app_credentials(tmpfile(f"WHOOP_CLIENT_ID={CID}\nWHOOP_CLIENT_SECRET={'*' * 64}\n"))
+        self.assertIn("masked", str(ctx.exception))
+
+    def test_a_real_secret_next_to_a_masked_line_is_still_found(self):
+        c = wc.load_app_credentials(tmpfile(f"{CID}\n{'*' * 64}\n{SECRET}\n"))
+        self.assertEqual(c.client_secret, SECRET)
 
     def test_key_value_format(self):
         path = tmpfile(f"WHOOP_CLIENT_ID={CID}\nWHOOP_CLIENT_SECRET='{SECRET}'\n")
@@ -401,6 +417,20 @@ class Consent(unittest.TestCase):
         self.assertNotIn("CODE1", body)
         self.assertEqual(headers.get("Cache-Control"), "no-store")
         self.assertEqual(headers.get("Referrer-Policy"), "no-referrer")
+
+    def test_the_page_never_claims_success_before_the_exchange(self):
+        """The page is sent when the code arrives, before the token exchange: a rejected exchange (401) must not have
+        been preceded by "connected" (this misled a real consent run)."""
+        outcome, results, _, store = self.run_flow([{"code": "C", "state": "<state>"}], token_status=401, token_body={})
+        self.assertIsInstance(outcome, SourceAuthError)
+        self.assertIsNone(store.load())
+        for _ in range(100):  # the browser thread may still be reading the page when the failed exchange returns
+            if results:
+                break
+            time.sleep(0.02)
+        body = results[0][1].lower()
+        self.assertNotIn("connected", body)
+        self.assertIn("terminal", body)
 
     def test_a_wrong_state_is_refused_and_does_not_end_the_wait(self):
         outcome, results, http, store = self.run_flow([{"code": "EVIL", "state": "nope"},
