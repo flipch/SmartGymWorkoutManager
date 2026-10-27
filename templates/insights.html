@@ -1,0 +1,139 @@
+{% extends "layout.html" %}
+{% block title %}Insights · Smart Gym{% endblock %}
+{% block head %}
+<style>
+    /* Page-local styles are scoped under #insights so they cannot collide with the shell or Tailwind (.grid, .card, ...). */
+    #insights .i-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .9rem; }
+    #insights .i-card { background: rgb(var(--surface)); border: 1px solid rgb(var(--line)); border-radius: var(--radius-lg); padding: 1.1rem 1.25rem; }
+    #insights .val { font-size: 1.9rem; font-weight: 800; line-height: 1; color: rgb(var(--fg-strong)); }
+    #insights .lbl { margin-top: .4rem; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--muted)); }
+    #insights .rec { margin-top: 1.1rem; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; background: rgb(var(--surface)); border: 1px solid rgb(var(--line)); border-radius: var(--radius-lg); padding: 1rem 1.25rem; }
+    #insights #badge:empty { display: none; }
+    #insights .rec:empty { display: none; }
+    #insights .pill { display: inline-block; padding: .15rem .65rem; border-radius: 999px; font-size: .75rem; font-weight: 700; background: rgb(var(--raised)); color: rgb(var(--fg)); }
+    #insights .pill.train { background: rgb(var(--success) / .16); color: rgb(var(--success)); }
+    #insights .pill.rest { background: rgb(var(--warning) / .16); color: rgb(var(--warning)); }
+    #insights .pill.active_recovery { background: rgb(var(--accent) / .16); color: rgb(var(--blue-400)); }
+    #insights h2 { margin: 2rem 0 .75rem; font-size: 1.05rem; font-weight: 700; color: rgb(var(--fg-strong)); }
+    #insights .panel { background: rgb(var(--surface)); border: 1px solid rgb(var(--line)); border-radius: var(--radius-lg); padding: 1rem 1.25rem; }
+    #insights .vrow { display: flex; align-items: center; gap: .6rem; margin: .5rem 0; font-size: .86rem; }
+    #insights .vname { width: 6rem; flex: none; color: rgb(var(--fg)); text-transform: capitalize; }
+    #insights .vtrack { position: relative; flex: 1; min-width: 4rem; height: .9rem; background: rgb(var(--inset)); border: 1px solid rgb(var(--line)); border-radius: .5rem; overflow: hidden; }
+    #insights .vfill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: .5rem; }
+    #insights .tick { position: absolute; top: 0; bottom: 0; width: 2px; background: rgb(var(--fg-strong)); opacity: .55; }
+    #insights .vmeta { width: 7.5rem; flex: none; text-align: right; color: rgb(var(--muted)); font-size: .78rem; }
+    #insights .liftgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: .75rem; }
+    #insights .lift { background: rgb(var(--surface)); border: 1px solid rgb(var(--line)); border-radius: var(--radius); padding: .75rem .9rem; }
+    #insights .up { color: rgb(var(--success)); }
+    #insights .down { color: rgb(var(--orange-400)); }
+    #insights .flat { color: rgb(var(--muted)); }
+    #insights .warn { color: rgb(var(--orange-400)); }
+    #insights .muted { color: rgb(var(--muted)); font-size: .82rem; }
+    #insights .spark { display: block; margin-top: .4rem; }
+    #insights .spark polyline { stroke: rgb(var(--accent)); }
+    #insights .gauge { height: 1.25rem; border-radius: .6rem; overflow: hidden; display: flex; background: rgb(var(--inset)); border: 1px solid rgb(var(--line)); }
+    #insights .gp { background: rgb(var(--accent)); }
+    #insights .gpull { background: rgb(var(--success)); }
+    #insights .gl { background: rgb(var(--purple-400)); }
+    #insights .glo { background: rgb(var(--yellow-400)); }
+    #insights .weekbar { background: rgb(var(--accent)); border-radius: 4px 4px 0 0; }
+    #insights table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    #insights td { padding: .35rem .4rem; border-bottom: 1px solid rgb(var(--line)); }
+    #insights .foot { margin-top: 2rem; }
+    #insights .foot a { color: rgb(var(--accent)); text-decoration: underline; text-underline-offset: 2px; font-weight: 600; }
+    @media (max-width: 30rem) { #insights .vmeta { width: 5.5rem; } #insights .vname { width: 4.5rem; } }
+</style>
+{% endblock %}
+{% block content %}
+<div id="insights">
+    <div class="ui-page-header">
+        <div>
+            <h1 class="ui-title">Workout Insights</h1>
+            <p class="ui-subtitle">flipch fork · last 90 days</p>
+        </div>
+        <span class="ui-chip" id="badge" role="status"></span>
+    </div>
+    <div class="i-grid" id="cards"></div>
+    <div class="rec" id="rec"></div>
+    <div id="deep"></div>
+    <p class="ui-muted foot">Subscribe to your schedule in a calendar app: <a href="/calendar.ics">/calendar.ics</a></p>
+</div>
+<script>
+// insights-page:start
+async function j(u){try{const r=await fetch(u); const b=await r.json(); return r.ok?b:{unavailable:(b&&(b.message||b.error))||('HTTP '+r.status)}}catch(e){return{unavailable:'network error'}}}
+function spark(series){const v=series.map(p=>p.e1rm),w=130,h=30,n=v.length;if(n<2)return'';
+ const mn=Math.min(...v),mx=Math.max(...v),r=(mx-mn)||1;
+ const pts=v.map((x,i)=>`${(i/(n-1))*w},${(h-3)-((x-mn)/r)*(h-8)}`).join(' ');
+ return `<svg class=spark width=${w} height=${h} role=img aria-label="Estimated 1RM trend"><polyline fill=none stroke-width=2 points="${pts}"/></svg>`;}
+(async()=>{
+ const i=await j('/api/insights'), r=await j('/api/recovery'), U=i.unit||'';
+ document.getElementById('badge').textContent = i.unavailable
+   ? 'Could not load your insights ('+i.unavailable+'). The numbers below are not real zeros.'
+   : i.authenticated ? (i.data_note||'') : 'Not logged in — set up in Settings to populate.';
+ const cards=[['current_streak_days','Day streak'],['sessions_last_7d','This week'],
+  ['sessions_last_30d','Last 30 days'],['avg_sessions_per_week','Avg / week'],
+  ['active_days','Active days'],['total_sessions','Total sessions']];
+ document.getElementById('cards').innerHTML=cards.map(([k,l])=>
+  `<div class=i-card><div class=val>${esc(i[k]??(i.unavailable?'–':'0'))}</div><div class=lbl>${esc(l)}</div></div>`).join('');
+ const cls=r.unavailable?'unavailable':(r.recommendation||'log_in');
+ document.getElementById('rec').innerHTML=`<span class="pill ${esc(cls)}">${esc(cls.replace('_',' '))}</span><b>${esc(r.unavailable?('Recovery could not be loaded ('+r.unavailable+')'):(r.message||''))}</b>`;
+ if(!i.authenticated)return;
+ let h='';
+ if(i.deep_error)h+='<div class=warn style="margin:10px 0" role=alert>⚠ Detailed analytics could not be loaded ('+esc(i.deep_error)+'). The sections below are incomplete, not empty: reload to retry.</div>';
+ // 1) volume vs landmarks
+ if((i.muscle_volume||[]).length){
+  h+='<h2>Weekly volume vs landmarks <span class=muted>(sets/muscle/wk)</span></h2><div class=panel>';
+  for(const m of i.muscle_volume){
+   const max=m.mrv*1.12, col=m.status=='under_mev'?'rgb(var(--orange-400))':m.status=='over_mrv'?'rgb(var(--yellow-400))':'rgb(var(--success))';
+   const fp=Math.min(100,100*m.sets_per_wk/max),mev=100*m.mev/max,mav=100*m.mav/max;
+   const fl=m.freq_per_wk<2?` <span class=down>⚠ ${esc(m.freq_per_wk)}×/wk</span>`:` ${esc(m.freq_per_wk)}×/wk`;
+   h+=`<div class=vrow><div class=vname>${esc(m.muscle.replace('_',' '))}</div>
+     <div class=vtrack><div class=vfill style="width:${fp}%;background:${col}"></div>
+     <div class=tick style="left:${mev}%" title="MEV ${esc(m.mev)}"></div><div class=tick style="left:${mav}%" title="MAV ${esc(m.mav)}"></div></div>
+     <div class=vmeta>${esc(m.sets_per_wk)}${fl}</div></div>`;
+  }
+  h+='<div class=muted style="margin-top:8px">Ticks = MEV / MAV. Orange below MEV (too little to grow), amber over MRV (recovery risk).</div>';
+  if((i.untrained_muscles||[]).length)h+=`<div class=muted style="margin-top:4px">Untrained: ${i.untrained_muscles.map(esc).join(', ')}</div>`;
+  h+='</div>';
+ }
+ // 2) strength progression
+ if((i.lifts||[]).length){
+  h+='<h2>Strength progression <span class=muted>(estimated 1RM, Epley)</span></h2><div class=liftgrid>';
+  for(const l of i.lifts){const a=l.trend=='up'?'▲':l.trend=='down'?'▼':'■';
+   h+=`<div class=lift><div style="font-size:.86rem">${esc(l.name)}</div>
+     <div style="margin-top:4px"><b style="font-size:1.3rem">${esc(l.e1rm_now)}</b> ${esc(U)}
+     <span class="${esc(l.trend)}">${a} ${l.e1rm_delta>0?'+':''}${esc(l.e1rm_delta)}</span></div>${spark(l.e1rm_series)}</div>`;}
+  h+='</div>';
+ }
+ // 3) balance
+ if(i.balance && (i.balance.push_sets||i.balance.pull_sets)){
+  const b=i.balance,tot=(b.push_sets+b.pull_sets)||1,ut=(b.upper_sets+b.lower_sets)||1;
+  h+='<h2>Balance</h2><div class=panel>';
+  h+=`<div class=muted>Push : Pull — ${esc(b.push_sets)}:${esc(b.pull_sets)} (${esc(b.push_pull_ratio??'–')}) <b class=${b.verdict=='balanced'?'up':'down'}>${esc(b.verdict.replace('_',' '))}</b></div>
+   <div class=gauge style="margin:6px 0 12px"><div class=gp style="width:${100*b.push_sets/tot}%"></div><div class=gpull style="width:${100*b.pull_sets/tot}%"></div></div>
+   <div class=muted>Upper : Lower — ${esc(b.upper_sets)}:${esc(b.lower_sets)}</div>
+   <div class=gauge style="margin-top:6px"><div class=gl style="width:${100*b.upper_sets/ut}%"></div><div class=glo style="width:${100*b.lower_sets/ut}%"></div></div>`;
+  if((i.frequency||{}).muscles_below_2x||[].length){const bl=i.frequency.muscles_below_2x||[];
+   if(bl.length)h+=`<div class=muted style="margin-top:10px">Trained &lt;2×/wk: ${bl.map(esc).join(', ')}</div>`;}
+  h+='</div>';
+ }
+ // 4) weekly trend
+ if((i.weekly||[]).length){
+  const mx=Math.max(...i.weekly.map(w=>w.tonnage))||1;
+  h+='<h2>Weekly tonnage</h2><div class=panel><div style="display:flex;align-items:flex-end;gap:10px;height:120px">';
+  for(const w of i.weekly)h+=`<div style="flex:1;text-align:center">
+    <div class=weekbar style="height:${Math.max(3,100*w.tonnage/mx)}px" title="${esc(w.tonnage)} ${esc(U)}"></div>
+    <div class=muted style="font-size:.68rem;margin-top:4px">${esc(w.week.split('-')[1])}</div><div class=muted style="font-size:.66rem">${Math.round(w.tonnage/1000)}k</div></div>`;
+  h+='</div><div class=muted style="margin-top:6px">Per ISO week · sessions/cal/min also tracked.</div></div>';
+ }
+ // 5) PRs
+ if((i.prs||[]).length){
+  h+='<h2>Top weights</h2><div class=panel><table>';
+  for(const p of i.prs)h+=`<tr><td>${esc(p.name)}</td><td style="text-align:right">${esc(p.weight)} ${esc(U)}</td></tr>`;
+  h+='</table></div>';
+ }
+ document.getElementById('deep').innerHTML=h||'<div class=ui-empty style="margin-top:1.5rem"><p class=ui-empty-title>No per-set detail yet</p>Log a Speediance workout to unlock deep analytics.</div>';
+})();
+// insights-page:end
+</script>
+{% endblock %}

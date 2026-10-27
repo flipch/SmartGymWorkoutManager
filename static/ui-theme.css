@@ -1,0 +1,629 @@
+/*
+ * Smart Gym UI theme: design tokens, app shell and shared components.
+ * Linked from templates/layout.html. No build step. See docs/ui-theme.md.
+ *
+ * Every colour is an "R G B" triplet so Tailwind (see tailwind.config in layout.html) can append an alpha:
+ * bg-gray-800/50 -> rgb(var(--gray-800) / 0.5). Never write a hex value in a page: use a token.
+ * Dark is the default. The light block is written three times on purpose: for an explicit choice
+ * (data-theme="light"), for "follow the system" (no data-theme attribute) and for print. tests/test_ui_theme.py checks
+ * that the copies stay identical.
+ */
+
+:root {
+    color-scheme: dark;
+    /* shared (theme independent) */
+    --radius-sm: .375rem; --radius: .625rem; --radius-lg: 1rem;
+    --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem; --space-6: 1.5rem; --space-8: 2rem;
+    --text-xs: .75rem; --text-sm: .875rem; --text-base: 1rem; --text-lg: 1.125rem; --text-xl: 1.25rem; --text-2xl: 1.5rem; --text-3xl: 2rem;
+    /* dark theme */
+    --canvas: 10 15 20;
+    --inset: 13 19 25;
+    --surface: 19 27 35;
+    --raised: 29 40 51;
+    --line: 42 55 68;
+    --control-line: 107 123 140;
+    --fg: 232 237 241;
+    --fg-strong-base: 255 255 255;
+    --muted: 158 171 184;
+    --accent: 45 212 191;
+    --accent-solid: 15 118 110;
+    --accent-solid-hover: 17 94 89;
+    --on-accent: 255 255 255;
+    --success: 74 222 128;
+    --warning: 250 204 21;
+    --danger: 248 113 113;
+    --focus: 94 234 212;
+    --header-bg: 13 19 25;
+    --gray-50: 244 247 249;
+    --gray-100: 232 237 241;
+    --gray-200: 214 221 228;
+    --gray-300: 188 199 209;
+    --gray-400: 158 171 184;
+    --gray-500: 138 152 166;
+    --gray-600: 47 61 75;
+    --gray-700: 34 46 58;
+    --gray-800: 19 27 35;
+    --gray-900: 13 19 25;
+    --gray-950: 10 15 20;
+    --blue-50: 240 253 250;
+    --blue-100: 204 251 241;
+    --blue-200: 153 246 228;
+    --blue-300: 94 234 212;
+    --blue-400: 45 212 191;
+    --blue-500: 14 124 114;
+    --blue-600: 15 118 110;
+    --blue-700: 17 94 89;
+    --blue-800: 19 78 74;
+    --blue-900: 15 61 58;
+    --blue-950: 4 47 46;
+    --green-50: 240 253 244;
+    --green-100: 220 252 231;
+    --green-200: 187 247 208;
+    --green-300: 134 239 172;
+    --green-400: 74 222 128;
+    --green-500: 22 128 60;
+    --green-600: 21 128 61;
+    --green-700: 22 101 52;
+    --green-800: 20 83 45;
+    --green-900: 5 46 22;
+    --green-950: 2 44 15;
+    --red-50: 254 242 242;
+    --red-100: 254 226 226;
+    --red-200: 254 202 202;
+    --red-300: 252 165 165;
+    --red-400: 248 113 113;
+    --red-500: 239 68 68;
+    --red-600: 220 38 38;
+    --red-700: 185 28 28;
+    --red-800: 127 29 29;
+    --red-900: 69 10 10;
+    --red-950: 42 6 6;
+    --yellow-50: 254 252 232;
+    --yellow-100: 254 249 195;
+    --yellow-200: 254 240 138;
+    --yellow-300: 253 224 71;
+    --yellow-400: 250 204 21;
+    --yellow-500: 234 179 8;
+    --yellow-600: 161 98 7;
+    --yellow-700: 133 77 14;
+    --yellow-800: 113 63 18;
+    --yellow-900: 66 32 6;
+    --yellow-950: 45 22 4;
+    --orange-50: 255 247 237;
+    --orange-100: 255 237 213;
+    --orange-200: 254 215 170;
+    --orange-300: 253 186 116;
+    --orange-400: 251 146 60;
+    --orange-500: 249 115 22;
+    --orange-600: 194 65 12;
+    --orange-700: 154 52 18;
+    --orange-800: 124 45 18;
+    --orange-900: 67 20 7;
+    --orange-950: 42 13 4;
+    --purple-50: 250 245 255;
+    --purple-100: 243 232 255;
+    --purple-200: 233 213 255;
+    --purple-300: 216 180 254;
+    --purple-400: 192 132 252;
+    --purple-500: 147 51 234;
+    --purple-600: 147 51 234;
+    --purple-700: 126 34 206;
+    --purple-800: 88 28 135;
+    --purple-900: 59 7 100;
+    --purple-950: 46 16 101;
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+    --canvas: 241 244 247;
+    --inset: 238 242 245;
+    --surface: 255 255 255;
+    --raised: 230 235 240;
+    --line: 205 213 220;
+    --control-line: 111 124 138;
+    --fg: 31 41 51;
+    --fg-strong-base: 11 18 24;
+    --muted: 75 88 102;
+    --accent: 15 118 110;
+    --accent-solid: 15 118 110;
+    --accent-solid-hover: 17 94 89;
+    --on-accent: 255 255 255;
+    --success: 22 101 52;
+    --warning: 133 77 14;
+    --danger: 185 28 28;
+    --focus: 15 118 110;
+    --header-bg: 255 255 255;
+    --gray-50: 10 16 22;
+    --gray-100: 18 26 34;
+    --gray-200: 31 41 51;
+    --gray-300: 53 64 75;
+    --gray-400: 75 88 102;
+    --gray-500: 88 101 115;
+    --gray-600: 201 210 218;
+    --gray-700: 230 235 240;
+    --gray-800: 255 255 255;
+    --gray-900: 238 242 245;
+    --gray-950: 241 244 247;
+    --blue-50: 4 47 46;
+    --blue-100: 19 78 74;
+    --blue-200: 19 78 74;
+    --blue-300: 17 94 89;
+    --blue-400: 17 94 89;
+    --blue-500: 14 124 114;
+    --blue-600: 15 118 110;
+    --blue-700: 17 94 89;
+    --blue-800: 153 246 228;
+    --blue-900: 204 251 241;
+    --blue-950: 240 253 250;
+    --green-50: 5 46 22;
+    --green-100: 20 83 45;
+    --green-200: 20 83 45;
+    --green-300: 22 101 52;
+    --green-400: 22 101 52;
+    --green-500: 22 128 60;
+    --green-600: 21 128 61;
+    --green-700: 22 101 52;
+    --green-800: 187 247 208;
+    --green-900: 220 252 231;
+    --green-950: 240 253 244;
+    --red-50: 69 10 10;
+    --red-100: 127 29 29;
+    --red-200: 127 29 29;
+    --red-300: 153 27 27;
+    --red-400: 185 28 28;
+    --red-500: 185 28 28;
+    --red-600: 220 38 38;
+    --red-700: 185 28 28;
+    --red-800: 254 202 202;
+    --red-900: 254 226 226;
+    --red-950: 254 242 242;
+    --yellow-50: 45 22 4;
+    --yellow-100: 113 63 18;
+    --yellow-200: 113 63 18;
+    --yellow-300: 133 77 14;
+    --yellow-400: 133 77 14;
+    --yellow-500: 161 98 7;
+    --yellow-600: 161 98 7;
+    --yellow-700: 133 77 14;
+    --yellow-800: 254 240 138;
+    --yellow-900: 254 249 195;
+    --yellow-950: 254 252 232;
+    --orange-50: 42 13 4;
+    --orange-100: 124 45 18;
+    --orange-200: 124 45 18;
+    --orange-300: 154 52 18;
+    --orange-400: 154 52 18;
+    --orange-500: 154 52 18;
+    --orange-600: 194 65 12;
+    --orange-700: 154 52 18;
+    --orange-800: 254 215 170;
+    --orange-900: 255 237 213;
+    --orange-950: 255 247 237;
+    --purple-50: 59 7 100;
+    --purple-100: 88 28 135;
+    --purple-200: 88 28 135;
+    --purple-300: 107 33 168;
+    --purple-400: 126 34 206;
+    --purple-500: 126 34 206;
+    --purple-600: 147 51 234;
+    --purple-700: 126 34 206;
+    --purple-800: 233 213 255;
+    --purple-900: 243 232 255;
+    --purple-950: 250 245 255;
+}
+
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+        color-scheme: light;
+        --canvas: 241 244 247;
+        --inset: 238 242 245;
+        --surface: 255 255 255;
+        --raised: 230 235 240;
+        --line: 205 213 220;
+        --control-line: 111 124 138;
+        --fg: 31 41 51;
+        --fg-strong-base: 11 18 24;
+        --muted: 75 88 102;
+        --accent: 15 118 110;
+        --accent-solid: 15 118 110;
+        --accent-solid-hover: 17 94 89;
+        --on-accent: 255 255 255;
+        --success: 22 101 52;
+        --warning: 133 77 14;
+        --danger: 185 28 28;
+        --focus: 15 118 110;
+        --header-bg: 255 255 255;
+        --gray-50: 10 16 22;
+        --gray-100: 18 26 34;
+        --gray-200: 31 41 51;
+        --gray-300: 53 64 75;
+        --gray-400: 75 88 102;
+        --gray-500: 88 101 115;
+        --gray-600: 201 210 218;
+        --gray-700: 230 235 240;
+        --gray-800: 255 255 255;
+        --gray-900: 238 242 245;
+        --gray-950: 241 244 247;
+        --blue-50: 4 47 46;
+        --blue-100: 19 78 74;
+        --blue-200: 19 78 74;
+        --blue-300: 17 94 89;
+        --blue-400: 17 94 89;
+        --blue-500: 14 124 114;
+        --blue-600: 15 118 110;
+        --blue-700: 17 94 89;
+        --blue-800: 153 246 228;
+        --blue-900: 204 251 241;
+        --blue-950: 240 253 250;
+        --green-50: 5 46 22;
+        --green-100: 20 83 45;
+        --green-200: 20 83 45;
+        --green-300: 22 101 52;
+        --green-400: 22 101 52;
+        --green-500: 22 128 60;
+        --green-600: 21 128 61;
+        --green-700: 22 101 52;
+        --green-800: 187 247 208;
+        --green-900: 220 252 231;
+        --green-950: 240 253 244;
+        --red-50: 69 10 10;
+        --red-100: 127 29 29;
+        --red-200: 127 29 29;
+        --red-300: 153 27 27;
+        --red-400: 185 28 28;
+        --red-500: 185 28 28;
+        --red-600: 220 38 38;
+        --red-700: 185 28 28;
+        --red-800: 254 202 202;
+        --red-900: 254 226 226;
+        --red-950: 254 242 242;
+        --yellow-50: 45 22 4;
+        --yellow-100: 113 63 18;
+        --yellow-200: 113 63 18;
+        --yellow-300: 133 77 14;
+        --yellow-400: 133 77 14;
+        --yellow-500: 161 98 7;
+        --yellow-600: 161 98 7;
+        --yellow-700: 133 77 14;
+        --yellow-800: 254 240 138;
+        --yellow-900: 254 249 195;
+        --yellow-950: 254 252 232;
+        --orange-50: 42 13 4;
+        --orange-100: 124 45 18;
+        --orange-200: 124 45 18;
+        --orange-300: 154 52 18;
+        --orange-400: 154 52 18;
+        --orange-500: 154 52 18;
+        --orange-600: 194 65 12;
+        --orange-700: 154 52 18;
+        --orange-800: 254 215 170;
+        --orange-900: 255 237 213;
+        --orange-950: 255 247 237;
+        --purple-50: 59 7 100;
+        --purple-100: 88 28 135;
+        --purple-200: 88 28 135;
+        --purple-300: 107 33 168;
+        --purple-400: 126 34 206;
+        --purple-500: 126 34 206;
+        --purple-600: 147 51 234;
+        --purple-700: 126 34 206;
+        --purple-800: 233 213 255;
+        --purple-900: 243 232 255;
+        --purple-950: 250 245 255;
+    }
+}
+
+/* ------------------------------------------------------------------------------------------ base */
+html { background: rgb(var(--canvas)); }
+body { background: rgb(var(--canvas)); color: rgb(var(--fg)); -webkit-font-smoothing: antialiased; }
+/* Prevents a flash of an open modal before the Tailwind CDN script has generated its own .hidden rule. */
+.hidden { display: none; }
+::selection { background: rgb(var(--accent) / .35); color: inherit; }
+
+/* Focus: always visible, never colour alone, and stronger than Tailwind's focus:outline-none (0,2,0). */
+html :is(a, button, input, select, textarea, summary, [tabindex], [role="button"]):focus-visible {
+    outline: 2px solid rgb(var(--focus));
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+}
+html main:focus { outline: none; }
+
+/* Motion: nothing animates for people who asked for less. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important; scroll-behavior: auto !important;
+    }
+}
+
+/* ------------------------------------------------------------------------------------------ skip link */
+.ui-skip {
+    position: absolute; left: .75rem; top: -4rem; z-index: 100;
+    padding: .6rem 1rem; border-radius: var(--radius);
+    background: rgb(var(--accent-solid)); color: rgb(var(--on-accent)); font-weight: 600;
+}
+.ui-skip:focus { top: .75rem; }
+
+/* ------------------------------------------------------------------------------------------ header + nav */
+.ui-header { position: sticky; top: 0; z-index: 40; background: rgb(var(--header-bg)); border-bottom: 1px solid rgb(var(--line)); }
+.ui-header-inner { max-width: 80rem; margin: 0 auto; padding: .5rem 1rem; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.ui-brand { display: inline-flex; align-items: center; gap: .6rem; color: rgb(var(--fg-strong)); font-weight: 800; letter-spacing: .02em; min-height: 2.75rem; }
+.ui-brand-mark { width: 1.75rem; height: 1.75rem; color: rgb(var(--accent)); flex: none; }
+.ui-brand-name { display: flex; flex-direction: column; line-height: 1.1; font-size: .95rem; text-transform: uppercase; }
+.ui-brand-name small { font-size: .62rem; font-weight: 600; letter-spacing: .14em; color: rgb(var(--muted)); }
+.ui-icon-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+    min-width: 2.75rem; min-height: 2.75rem; padding: 0 .65rem; border-radius: var(--radius);
+    background: transparent; color: rgb(var(--fg)); border: 1px solid rgb(var(--line)); font-size: .85rem; font-weight: 600; cursor: pointer;
+}
+.ui-icon-btn:hover { background: rgb(var(--raised)); color: rgb(var(--fg-strong)); }
+.ui-icon-btn svg { width: 1.2rem; height: 1.2rem; flex: none; }
+
+/* The theme button is useless without script, so it only exists once script ran (html.js). */
+.ui-theme-btn { display: none; }
+.js .ui-theme-btn { display: inline-flex; }
+.ui-theme-btn .ui-ic { display: none; }
+[data-theme-mode="auto"] .ui-theme-btn .ui-ic-auto,
+[data-theme-mode="light"] .ui-theme-btn .ui-ic-light,
+[data-theme-mode="dark"] .ui-theme-btn .ui-ic-dark { display: block; }
+html:not([data-theme-mode]) .ui-theme-btn .ui-ic-auto { display: block; }
+.ui-theme-label { display: none; }
+
+/* Without script the menu button does nothing and the nav is always shown. */
+.ui-menu-btn { display: none; }
+.js .ui-menu-btn { display: inline-flex; }
+
+.ui-brand { order: 1; }
+.ui-theme-btn { order: 2; margin-left: auto; }
+.ui-menu-btn { order: 3; }
+.ui-nav { flex-basis: 100%; order: 4; max-height: calc(100vh - 4.5rem); overflow-y: auto; }
+.js .ui-nav[data-open="false"] { display: none; }
+.ui-nav-group { padding: .5rem 0; border-top: 1px solid rgb(var(--line)); }
+.ui-nav-group:first-child { border-top: 0; }
+.ui-nav-label { margin: 0 0 .25rem; padding: 0 .75rem; font-size: .68rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: rgb(var(--muted)); }
+.ui-nav ul { list-style: none; margin: 0; padding: 0; }
+.ui-nav-link {
+    display: flex; align-items: center; min-height: 2.75rem; padding: .5rem .75rem; border-radius: var(--radius);
+    color: rgb(var(--fg)); font-weight: 500; border-left: 3px solid transparent;
+}
+.ui-nav-link:hover { background: rgb(var(--raised)); color: rgb(var(--fg-strong)); }
+.ui-nav-link[aria-current="page"] {
+    background: rgb(var(--accent) / .14); color: rgb(var(--blue-400)); font-weight: 700; border-left-color: rgb(var(--accent));
+}
+
+@media (min-width: 64rem) {
+    .ui-header-inner { flex-wrap: nowrap; gap: 1.25rem; }
+    .ui-menu-btn, .js .ui-menu-btn { display: none; }
+    .ui-theme-btn { order: 3; margin-left: 0; }
+    .ui-theme-label { display: inline; }
+    .ui-nav, .js .ui-nav[data-open="false"] { display: flex; flex-basis: auto; order: 2; flex: 1; align-items: center; gap: .25rem; max-height: none; overflow: visible; }
+    .ui-nav-group { display: flex; align-items: center; padding: 0; border-top: 0; margin-left: .35rem; padding-left: .6rem; border-left: 1px solid rgb(var(--line)); }
+    .ui-nav-group:first-child { margin-left: 0; padding-left: 0; border-left: 0; }
+    .ui-nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; padding: 0; margin: -1px; }
+    .ui-nav ul { display: flex; gap: .1rem; }
+    .ui-nav-link { min-height: 2.5rem; padding: .35rem .7rem; font-size: .9rem; border-left: 0; border-bottom: 3px solid transparent; border-radius: var(--radius) var(--radius) 0 0; white-space: nowrap; }
+    .ui-nav-link[aria-current="page"] { border-left: 0; border-bottom-color: rgb(var(--accent)); }
+}
+@media (min-width: 64rem) and (max-width: 74.99rem) {
+    .ui-nav-link { padding: .35rem .5rem; font-size: .85rem; }
+    .ui-brand-name small { display: none; }
+}
+
+/* ------------------------------------------------------------------------------------------ main + footer */
+.ui-main { width: 100%; max-width: 80rem; margin: 0 auto; padding: 1rem; flex: 1 0 auto; }
+@media (min-width: 40rem) { .ui-main { padding: 1.5rem; } }
+.ui-footer { border-top: 1px solid rgb(var(--line)); color: rgb(var(--muted)); font-size: .8rem; }
+.ui-footer-inner { max-width: 80rem; margin: 0 auto; padding: 1rem; display: flex; flex-wrap: wrap; gap: .25rem 1rem; justify-content: space-between; }
+.ui-footer a { color: rgb(var(--accent)); text-decoration: underline; text-underline-offset: 2px; font-weight: 600; }
+.ui-footer a:hover { color: rgb(var(--fg-strong)); }
+
+/* ------------------------------------------------------------------------------------------ flash messages */
+.ui-flash {
+    display: flex; align-items: flex-start; gap: .75rem; margin-bottom: 1rem; padding: .75rem 1rem;
+    border-radius: var(--radius); border: 1px solid rgb(var(--flash-line)); background: rgb(var(--flash-bg)); color: rgb(var(--flash-fg));
+}
+.ui-flash-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ui-flash-close {
+    flex: none; min-width: 2.25rem; min-height: 2.25rem; margin: -.4rem -.5rem -.4rem 0; border-radius: var(--radius-sm);
+    background: transparent; color: inherit; border: 0; font-size: 1.4rem; line-height: 1; cursor: pointer;
+}
+.ui-flash-close:hover { background: rgb(var(--flash-fg) / .14); }
+.ui-flash-error   { --flash-bg: var(--red-900);    --flash-line: var(--red-700);    --flash-fg: var(--red-200); }
+.ui-flash-success { --flash-bg: var(--green-900);  --flash-line: var(--green-700);  --flash-fg: var(--green-200); }
+.ui-flash-info    { --flash-bg: var(--blue-900);   --flash-line: var(--blue-700);   --flash-fg: var(--blue-200); }
+.ui-flash-debug   { --flash-bg: var(--surface);    --flash-line: var(--line);       --flash-fg: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; white-space: pre-wrap; }
+
+/* ------------------------------------------------------------------------------------------ components (ui- prefix) */
+.ui-page-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: .75rem 1rem; margin-bottom: 1.5rem; }
+.ui-title { margin: 0; font-size: 1.75rem; line-height: 1.2; font-weight: 800; color: rgb(var(--fg-strong)); }
+.ui-subtitle { margin: .25rem 0 0; color: rgb(var(--muted)); font-size: .9rem; }
+.ui-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+@media (min-width: 40rem) { .ui-title { font-size: 2rem; } }
+
+.ui-card { background: rgb(var(--surface)); border: 1px solid rgb(var(--line)); border-radius: var(--radius-lg); padding: 1.1rem 1.25rem; }
+.ui-card > h2, .ui-card > h3 { margin: 0 0 .5rem; font-size: 1rem; font-weight: 700; color: rgb(var(--fg-strong)); }
+.ui-section-title { margin: 2rem 0 .75rem; font-size: 1.05rem; font-weight: 700; color: rgb(var(--fg-strong)); }
+.ui-muted { color: rgb(var(--muted)); font-size: .85rem; }
+.ui-grid { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
+.ui-stat-value { font-size: 1.9rem; font-weight: 800; line-height: 1; color: rgb(var(--fg-strong)); }
+.ui-stat-label { margin-top: .4rem; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--muted)); }
+
+.ui-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-height: 2.5rem; padding: .5rem 1rem;
+    border-radius: var(--radius); border: 1px solid transparent; font-size: .9rem; font-weight: 600; line-height: 1.2; cursor: pointer;
+    transition: background-color .15s, border-color .15s;
+}
+.ui-btn[disabled], .ui-btn[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.ui-btn-primary { background: rgb(var(--accent-solid)); color: rgb(var(--on-accent)); }
+.ui-btn-primary:hover { background: rgb(var(--accent-solid-hover)); }
+.ui-btn-secondary { background: rgb(var(--raised)); color: rgb(var(--fg-strong)); border-color: rgb(var(--line)); }
+.ui-btn-secondary:hover { border-color: rgb(var(--control-line)); }
+.ui-btn-danger { background: rgb(var(--red-600)); color: rgb(var(--on-accent)); }
+.ui-btn-danger:hover { background: rgb(var(--red-700)); }
+@media (pointer: coarse) { .ui-btn { min-height: 2.75rem; } }
+
+.ui-input {
+    width: 100%; padding: .55rem .75rem; border-radius: var(--radius); background: rgb(var(--inset)); color: rgb(var(--fg-strong));
+    border: 1px solid rgb(var(--control-line)); font-size: .95rem;
+}
+.ui-input::placeholder { color: rgb(var(--muted)); }
+
+.ui-chip { display: inline-flex; align-items: center; gap: .3rem; padding: .15rem .6rem; border-radius: 999px; font-size: .75rem; font-weight: 700; background: rgb(var(--raised)); color: rgb(var(--fg)); }
+.ui-chip-accent  { background: rgb(var(--accent) / .16);  color: rgb(var(--blue-400)); }
+.ui-chip-success { background: rgb(var(--success) / .16); color: rgb(var(--success)); }
+.ui-chip-warning { background: rgb(var(--warning) / .16); color: rgb(var(--warning)); }
+.ui-chip-danger  { background: rgb(var(--danger) / .16);  color: rgb(var(--danger)); }
+
+.ui-empty { padding: 2rem 1rem; text-align: center; border: 1px dashed rgb(var(--control-line)); border-radius: var(--radius-lg); color: rgb(var(--muted)); }
+.ui-empty-title { margin: 0 0 .25rem; font-size: 1.05rem; font-weight: 700; color: rgb(var(--fg-strong)); }
+
+/* ------------------------------------------------------------------------------------------ legacy bridge
+ * Existing pages use Tailwind's gray/blue/green/... and text-white. The Tailwind config maps those names onto the tokens
+ * above, so most of them just work in both themes. What a name remap cannot express is handled here.
+ */
+/* text-white means "strong text": dark in the light theme. Solid coloured fills and photo overlays keep white text; a
+   surface inside them goes back to the theme's strong colour (custom properties inherit, so it has to be reset). */
+:root { --fg-strong: var(--fg-strong-base); }
+.bg-blue-500,
+.bg-blue-600,
+.bg-blue-700,
+.bg-green-500,
+.bg-green-600,
+.bg-green-700,
+.bg-red-500,
+.bg-red-600,
+.bg-red-700,
+.bg-purple-500,
+.bg-purple-600,
+.bg-purple-700,
+.bg-yellow-600,
+.bg-yellow-700,
+.bg-orange-600,
+.bg-orange-700,
+.bg-black, [class*="bg-black/"], .ui-btn-primary, .ui-btn-danger { --fg-strong: 255 255 255; }
+[class*="bg-gray-"], .ui-card, .ui-input { --fg-strong: var(--fg-strong-base); }
+/* text-gray-600 and the 500-level hues were written for a dark page; use the readable token instead. */
+html .text-gray-600 { color: rgb(var(--muted)); }
+html :is(.text-green-500, .text-red-500, .text-yellow-500, .text-blue-500, .text-purple-600) { color: rgb(var(--hue-text)); }
+.text-green-500 { --hue-text: var(--green-400); } .text-red-500 { --hue-text: var(--red-400); } .text-yellow-500 { --hue-text: var(--yellow-400); }
+.text-blue-500 { --hue-text: var(--blue-400); } .text-purple-600 { --hue-text: var(--purple-400); }
+html [class*="placeholder-gray"]::placeholder { color: rgb(var(--muted)); }
+/* A control's border has to be visible (3:1), not a faint card hairline. */
+input[class*="border-gray-"]:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(:focus),
+select[class*="border-gray-"]:not(:focus), textarea[class*="border-gray-"]:not(:focus) { border-color: rgb(var(--control-line)); }
+/* Radar chart in create.html is built in script with literal colours; presentation attributes lose to CSS. */
+svg text[fill="#9ca3af"] { fill: rgb(var(--muted)); }
+svg [stroke="#374151"] { stroke: rgb(var(--line)); }
+svg [stroke="#34d399"] { stroke: rgb(var(--success)); }
+svg [fill="#34d399"] { fill: rgb(var(--success)); }
+
+/* ------------------------------------------------------------------------------------------ print */
+@media print {
+    :root, :root[data-theme] {
+        color-scheme: light;
+        --canvas: 241 244 247;
+        --inset: 238 242 245;
+        --surface: 255 255 255;
+        --raised: 230 235 240;
+        --line: 205 213 220;
+        --control-line: 111 124 138;
+        --fg: 31 41 51;
+        --fg-strong-base: 11 18 24;
+        --muted: 75 88 102;
+        --accent: 15 118 110;
+        --accent-solid: 15 118 110;
+        --accent-solid-hover: 17 94 89;
+        --on-accent: 255 255 255;
+        --success: 22 101 52;
+        --warning: 133 77 14;
+        --danger: 185 28 28;
+        --focus: 15 118 110;
+        --header-bg: 255 255 255;
+        --gray-50: 10 16 22;
+        --gray-100: 18 26 34;
+        --gray-200: 31 41 51;
+        --gray-300: 53 64 75;
+        --gray-400: 75 88 102;
+        --gray-500: 88 101 115;
+        --gray-600: 201 210 218;
+        --gray-700: 230 235 240;
+        --gray-800: 255 255 255;
+        --gray-900: 238 242 245;
+        --gray-950: 241 244 247;
+        --blue-50: 4 47 46;
+        --blue-100: 19 78 74;
+        --blue-200: 19 78 74;
+        --blue-300: 17 94 89;
+        --blue-400: 17 94 89;
+        --blue-500: 14 124 114;
+        --blue-600: 15 118 110;
+        --blue-700: 17 94 89;
+        --blue-800: 153 246 228;
+        --blue-900: 204 251 241;
+        --blue-950: 240 253 250;
+        --green-50: 5 46 22;
+        --green-100: 20 83 45;
+        --green-200: 20 83 45;
+        --green-300: 22 101 52;
+        --green-400: 22 101 52;
+        --green-500: 22 128 60;
+        --green-600: 21 128 61;
+        --green-700: 22 101 52;
+        --green-800: 187 247 208;
+        --green-900: 220 252 231;
+        --green-950: 240 253 244;
+        --red-50: 69 10 10;
+        --red-100: 127 29 29;
+        --red-200: 127 29 29;
+        --red-300: 153 27 27;
+        --red-400: 185 28 28;
+        --red-500: 185 28 28;
+        --red-600: 220 38 38;
+        --red-700: 185 28 28;
+        --red-800: 254 202 202;
+        --red-900: 254 226 226;
+        --red-950: 254 242 242;
+        --yellow-50: 45 22 4;
+        --yellow-100: 113 63 18;
+        --yellow-200: 113 63 18;
+        --yellow-300: 133 77 14;
+        --yellow-400: 133 77 14;
+        --yellow-500: 161 98 7;
+        --yellow-600: 161 98 7;
+        --yellow-700: 133 77 14;
+        --yellow-800: 254 240 138;
+        --yellow-900: 254 249 195;
+        --yellow-950: 254 252 232;
+        --orange-50: 42 13 4;
+        --orange-100: 124 45 18;
+        --orange-200: 124 45 18;
+        --orange-300: 154 52 18;
+        --orange-400: 154 52 18;
+        --orange-500: 154 52 18;
+        --orange-600: 194 65 12;
+        --orange-700: 154 52 18;
+        --orange-800: 254 215 170;
+        --orange-900: 255 237 213;
+        --orange-950: 255 247 237;
+        --purple-50: 59 7 100;
+        --purple-100: 88 28 135;
+        --purple-200: 88 28 135;
+        --purple-300: 107 33 168;
+        --purple-400: 126 34 206;
+        --purple-500: 126 34 206;
+        --purple-600: 147 51 234;
+        --purple-700: 126 34 206;
+        --purple-800: 233 213 255;
+        --purple-900: 243 232 255;
+        --purple-950: 250 245 255;
+    }
+    .ui-header, .ui-footer, .ui-flash, .no-print, .ui-skip { display: none !important; }
+    .ui-main { max-width: none; padding: 0; }
+    * { box-shadow: none !important; }
+    a { text-decoration: underline; }
+}
+
+@media (forced-colors: active) {
+    .ui-nav-link[aria-current="page"] { outline: 2px solid CanvasText; }
+    .ui-btn, .ui-input, .ui-card { border: 1px solid CanvasText; }
+}

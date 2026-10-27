@@ -1,10 +1,62 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme-mode="auto">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unofficial Speediance Workout Manager</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="color-scheme" content="dark light">
+    <title>{% block title %}Workout Manager · Unofficial Speediance{% endblock %}</title>
+    <script>
+    // ui-theme:start
+    // Runs before first paint so a saved choice never flashes the wrong theme. Every storage access is guarded: with
+    // storage blocked the page still renders (dark, or the system's light) and the button still works for this page.
+    var uiTheme = (function () {
+        var KEY = 'sg-theme', MODES = ['auto', 'light', 'dark'];
+        function stored() {
+            try { var v = window.localStorage.getItem(KEY); return v === 'light' || v === 'dark' ? v : 'auto'; }
+            catch (e) { return 'auto'; }
+        }
+        function save(mode) {
+            try { if (mode === 'auto') window.localStorage.removeItem(KEY); else window.localStorage.setItem(KEY, mode); }
+            catch (e) { /* blocked or full storage: the choice then lasts until the page is closed */ }
+        }
+        function apply(mode) {
+            var root = document.documentElement;
+            if (mode === 'light' || mode === 'dark') root.setAttribute('data-theme', mode); else root.removeAttribute('data-theme');
+            root.setAttribute('data-theme-mode', mode);
+            return mode;
+        }
+        function next(mode) { return MODES[(MODES.indexOf(mode) + 1) % MODES.length]; }
+        return { stored: stored, save: save, apply: apply, next: next };
+    })();
+    uiTheme.apply(uiTheme.stored());
+    document.documentElement.classList.add('js');
+    // ui-theme:end
+    </script>
+    <link rel="stylesheet" href="/static/ui-theme.css">
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <script>
+    // tailwind-config:start
+    // Tailwind reads the theme tokens from static/ui-theme.css, so bg-gray-800, text-blue-400 and text-white follow the
+    // active theme, and the semantic names (bg-surface, text-muted, border-line, ...) are available to new pages.
+    (function () {
+        var STEPS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
+        function token(name) { return 'rgb(var(--' + name + ') / <alpha-value>)'; }
+        function scale(name) { var o = {}; STEPS.forEach(function (s) { o[s] = token(name + '-' + s); }); return o; }
+        tailwind.config = {
+            theme: { extend: { colors: {
+                gray: scale('gray'), blue: scale('blue'), green: scale('green'), red: scale('red'),
+                yellow: scale('yellow'), orange: scale('orange'), purple: scale('purple'),
+                white: token('fg-strong'),
+                canvas: token('canvas'), surface: token('surface'), raised: token('raised'), inset: token('inset'),
+                line: token('line'), 'control-line': token('control-line'),
+                fg: token('fg'), muted: token('muted'),
+                accent: token('accent'), 'accent-solid': token('accent-solid'), 'on-accent': token('on-accent'),
+                success: token('success'), warning: token('warning'), danger: token('danger'), focus: token('focus')
+            } } }
+        };
+    })();
+    // tailwind-config:end
+    </script>
     <script>
     // Vendor-supplied titles/names/URLs end up in innerHTML and inline handlers: escape at every interpolation.
     function esc(v) {
@@ -13,52 +65,128 @@
     // A JS string literal that is safe inside a double-quoted onclick="..." attribute.
     function jsq(v) { return esc(JSON.stringify(String(v == null ? '' : v))); }
     </script>
-    <style>body { background-color: #0d1117; color: #c9d1d9; }</style>
     {% block head %}{% endblock %}
 </head>
 <body class="min-h-screen flex flex-col">
-    <div class="bg-gray-800 text-gray-400 text-xs py-1 border-b border-gray-700 text-center">
-        <div class="container mx-auto">
-            If this tool helped you save time, I would appreciate your support! 
-            <a href="https://buymeacoffee.com/hbui3" target="_blank" class="text-[#FFDD00] hover:underline font-bold ml-2">
-                ☕ Buy me a coffee
+{#- Which nav entry is "current": the first one whose exact path or path prefix matches the request. -#}
+{% set ui_path = request.path %}
+{% set ui_nav = [
+    ('Train', [
+        ('Dashboard', '/', ['/'], []),
+        ('Create plan', '/create', ['/create'], ['/edit/']),
+        ('Library', '/library', ['/library'], ['/exercise/']),
+        ('Browse', '/browse', ['/browse'], []),
+    ]),
+    ('Progress', [
+        ('History', '/history', ['/history', '/workout_history'], []),
+        ('Insights', '/insights', ['/insights'], []),
+    ]),
+    ('Coach', [
+        ('AI Coach', '/coach', ['/coach'], []),
+    ]),
+    ('Account', [
+        ('Settings', '/settings', ['/settings'], []),
+    ]),
+] %}
+{% set ui_active = namespace(href='') %}
+{% for group_name, items in ui_nav %}{% for label, href, exact, prefixes in items %}
+    {%- if ui_path in exact %}{% set ui_active.href = href %}{% endif -%}
+    {%- for p in prefixes %}{% if ui_path.startswith(p) %}{% set ui_active.href = href %}{% endif %}{% endfor -%}
+{% endfor %}{% endfor %}
+    <a class="ui-skip" href="#main-content">Skip to content</a>
+    <header class="ui-header">
+        <div class="ui-header-inner">
+            <a href="/" class="ui-brand" aria-label="Workout Manager, unofficial Speediance, home">
+                <svg class="ui-brand-mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+                    <path d="M4 12v8M8 9v14M24 9v14M28 12v8M8 16h16"/>
+                </svg>
+                <span class="ui-brand-name">Workout Manager<small>Unofficial · Speediance</small></span>
             </a>
-        </div>
-    </div>
-    <nav class="bg-gray-900 border-b border-gray-800 p-4">
-        <div class="container mx-auto flex justify-between items-center">
-            <a href="/" class="text-xl font-bold text-white">UNOFFICIAL <span class="text-green-500">WORKOUT MANAGER</span></a>
-            <div class="space-x-4">
-                <a href="/" class="hover:text-white">Dashboard</a>
-                <a href="/library" class="hover:text-white">Library</a>
-                <a href="/create" class="hover:text-white">Create Plan</a>
-                <a href="/history" class="hover:text-white">History</a>
-                <a href="/insights" class="hover:text-white">Insights</a>
-                <a href="/coach" class="hover:text-white">AI Coach</a>
-                <a href="/browse" class="hover:text-white">Browse</a>
-                <a href="/settings" class="text-gray-500 hover:text-white">Settings</a>
-            </div>
-        </div>
-    </nav>
-
-    <main class="container mx-auto p-4 flex-grow">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    {% if category == 'error' %}
-                        <div class="p-4 mb-4 rounded bg-red-900 text-red-200 border border-red-700">{{ message }}</div>
-                    {% elif category == 'success' %}
-                        <div class="p-4 mb-4 rounded bg-green-900 text-green-200 border border-green-700">{{ message }}</div>
-                    {% elif category == 'debug' %}
-                        <div class="p-4 mb-4 rounded bg-gray-800 text-gray-300 border border-gray-600 font-mono text-sm whitespace-pre-wrap overflow-x-auto"><strong>Debug Info:</strong><br>{{ message }}</div>
-                    {% else %}
-                        <div class="p-4 mb-4 rounded bg-blue-900 text-blue-200 border border-blue-700">{{ message }}</div>
-                    {% endif %}
+            <button type="button" id="ui-menu-btn" class="ui-icon-btn ui-menu-btn" onclick="uiToggleMenu(this)" aria-expanded="false" aria-controls="ui-nav">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+                <span>Menu</span>
+            </button>
+            <nav id="ui-nav" class="ui-nav" aria-label="Main" data-open="false">
+                {% for group_name, items in ui_nav %}
+                <div class="ui-nav-group">
+                    <p class="ui-nav-label" id="ui-nav-{{ group_name|lower }}">{{ group_name }}</p>
+                    <ul aria-labelledby="ui-nav-{{ group_name|lower }}">
+                        {% for label, href, exact, prefixes in items %}
+                        <li><a class="ui-nav-link" href="{{ href }}"{% if ui_active.href == href %} aria-current="page"{% endif %}>{{ label }}</a></li>
+                        {% endfor %}
+                    </ul>
+                </div>
                 {% endfor %}
-            {% endif %}
+            </nav>
+            <button type="button" id="ui-theme-btn" class="ui-icon-btn ui-theme-btn" onclick="uiCycleTheme(this)" aria-label="Theme: Auto (follows your system). Switch to Light.">
+                <svg class="ui-ic ui-ic-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v18" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
+                <svg class="ui-ic ui-ic-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+                <svg class="ui-ic ui-ic-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+                <span class="ui-theme-label" id="ui-theme-label">Auto</span>
+            </button>
+        </div>
+    </header>
+
+    <main id="main-content" class="ui-main" tabindex="-1">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                {% set kind = category if category in ('error', 'success', 'debug') else 'info' %}
+                <div class="ui-flash ui-flash-{{ kind }}" role="{{ 'alert' if kind == 'error' else 'status' }}" data-ui-flash>
+                    <div class="ui-flash-body">{% if kind == 'debug' %}<strong>Debug Info:</strong><br>{% endif %}{{ message }}</div>
+                    <button type="button" class="ui-flash-close" aria-label="Dismiss message" onclick="uiDismissFlash(this)">&times;</button>
+                </div>
+            {% endfor %}
         {% endwith %}
         {% block content %}{% endblock %}
     </main>
-    <!-- Debug Button -->
+
+    <footer class="ui-footer">
+        <div class="ui-footer-inner">
+            <span>Unofficial Speediance workout manager. Not affiliated with Speediance.</span>
+            <span>If this tool helped you save time, the upstream author would appreciate your support:
+                <a href="https://buymeacoffee.com/hbui3" target="_blank" rel="noopener noreferrer">Buy me a coffee</a></span>
+        </div>
+    </footer>
+    <script>
+    // ui-shell:start
+    var UI_THEME_LABELS = {auto: 'Auto', light: 'Light', dark: 'Dark'};
+    function uiThemeLabel(btn, mode) {
+        var nextMode = uiTheme.next(mode);
+        btn.setAttribute('aria-label', 'Theme: ' + UI_THEME_LABELS[mode] + (mode === 'auto' ? ' (follows your system)' : '') +
+            '. Switch to ' + UI_THEME_LABELS[nextMode] + '.');
+        btn.setAttribute('title', 'Theme: ' + UI_THEME_LABELS[mode]);
+        var label = document.getElementById('ui-theme-label');
+        if (label) label.textContent = UI_THEME_LABELS[mode];
+    }
+    function uiCycleTheme(btn) {
+        var current = document.documentElement.getAttribute('data-theme-mode') || uiTheme.stored();
+        var mode = uiTheme.next(current);
+        uiTheme.apply(mode);
+        uiTheme.save(mode);
+        uiThemeLabel(btn, mode);
+    }
+    function uiToggleMenu(btn) {
+        var open = btn.getAttribute('aria-expanded') !== 'true';
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        document.getElementById('ui-nav').setAttribute('data-open', open ? 'true' : 'false');
+    }
+    function uiMenuKey(event) {
+        var btn = document.getElementById('ui-menu-btn');
+        if (event.key === 'Escape' && btn && btn.getAttribute('aria-expanded') === 'true') {
+            uiToggleMenu(btn);
+            btn.focus();
+        }
+    }
+    function uiDismissFlash(btn) {
+        var box = btn.closest('[data-ui-flash]');
+        if (box) box.remove();
+    }
+    (function () {
+        var btn = document.getElementById('ui-theme-btn');
+        if (btn) uiThemeLabel(btn, document.documentElement.getAttribute('data-theme-mode') || 'auto');
+        document.addEventListener('keydown', uiMenuKey);
+    })();
+    // ui-shell:end
+    </script>
 </body>
 </html>

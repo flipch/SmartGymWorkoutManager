@@ -1,7 +1,9 @@
-"""The two pages that live inside features.py (/insights and /coach) build innerHTML from vendor/user strings.
+"""The /insights and /coach pages build innerHTML from vendor/user strings.
 
 Their real <script> blocks are executed in node with a stubbed document and hostile data; the captured markup is parsed
-and must contain no injected tags and no event-handler attributes.
+and must contain no injected tags and no event-handler attributes. A page that extends templates/layout.html gets esc()
+and jsq() from the layout, exactly as in the browser: the layout script runs first and the page script second, as two
+classic scripts (a page that declared its own `const esc` would be a SyntaxError there, and is one here).
 """
 import base64
 import json
@@ -51,12 +53,18 @@ def inspect(markup):
     return t
 
 
-def page_script(path):
+SHELL_MARKERS = ("// ui-theme:start", "// tailwind-config:start", "// ui-shell:start", "function esc(v)")
+
+
+def page_scripts(path):
+    """(layout helper script or None, the page's own script). The shell's scripts are told apart by their markers."""
     resp = gym_app.app.test_client().get(path, headers=BASIC)
     assert resp.status_code == 200, (path, resp.status_code)
-    m = re.search(r"<script>(.*?)</script>", resp.get_data(as_text=True), re.S)
-    assert m, path
-    return m.group(1)
+    scripts = re.findall(r"<script>(.*?)</script>", resp.get_data(as_text=True), re.S)
+    helpers = [x for x in scripts if "function esc(v)" in x]
+    own = [x for x in scripts if not any(mark in x for mark in SHELL_MARKERS)]
+    assert len(own) == 1, (path, len(own))
+    return (helpers[0] if helpers else None), own[0]
 
 
 HARNESS = r"""
@@ -68,6 +76,7 @@ globalThis.window = {};
 globalThis.PWNED = 0;
 const DATA = %(data)s;
 globalThis.fetch = async (u, o) => ({status: DATA.__status || 200, ok: (DATA.__status || 200) < 400, json: async () => DATA[u.split('?')[0]] ?? DATA.__default ?? {}});
+if (%(helpers)s) vm.runInThisContext(%(helpers)s);
 vm.runInThisContext(%(script)s);
 (async () => {
   %(driver)s
@@ -79,8 +88,8 @@ vm.runInThisContext(%(script)s);
 """
 
 
-def run_page(script, data, driver=""):
-    code = HARNESS % {"data": json.dumps(data), "script": json.dumps(script), "driver": driver}
+def run_page(script, data, driver="", helpers=None):
+    code = HARNESS % {"data": json.dumps(data), "script": json.dumps(script), "helpers": json.dumps(helpers), "driver": driver}
     out = subprocess.run([NODE, "-e", code], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])
@@ -120,13 +129,31 @@ class InsightsPage(unittest.TestCase):
         }
 
     def test_hostile_values_render_as_text(self):
-        script = page_script("/insights")
+        helpers, script = page_scripts("/insights")
         for payload in PAYLOADS:
-            captured = run_page(script, self.data(payload))
+            captured = run_page(script, self.data(payload), helpers=helpers)
             self.assertTrue(captured.get("deep"), "the deep analytics section must have rendered")
             assert_inert(self, captured)
             self.assertIn(py_esc(payload), captured["deep"])
             self.assertIn(py_esc(payload), captured["rec"])
+
+
+    def test_the_page_is_a_template_inside_the_shell_and_uses_the_layouts_esc(self):
+        html = gym_app.app.test_client().get("/insights", headers=BASIC).get_data(as_text=True)
+        self.assertIn('<nav id="ui-nav"', html)
+        self.assertIn('aria-current="page">Insights<', html)
+        self.assertIn("<title>Insights · Smart Gym</title>", html)
+        helpers, script = page_scripts("/insights")
+        self.assertIsNotNone(helpers)
+        self.assertNotRegex(script, r"\b(const|let|var|function)\s+esc\b")  # the layout owns esc(); a second declaration kills the page
+
+    def test_a_page_script_that_redeclares_esc_is_rejected_like_in_a_browser(self):
+        helpers, script = page_scripts("/insights")
+        out = subprocess.run([NODE, "-e", HARNESS % {"data": "{}", "script": json.dumps("const esc = v => v;\n" + script),
+                                                     "helpers": json.dumps(helpers), "driver": ""}],
+                             capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("already been declared", out.stderr)
 
 
 @unittest.skipUnless(NODE, "node is required")
@@ -144,27 +171,27 @@ class CoachPage(unittest.TestCase):
                 "disclaimer": payload}
 
     def test_program_render_is_inert(self):
-        script = page_script("/coach")
+        helpers, script = page_scripts("/coach")
         for payload in PAYLOADS:
-            captured = run_page(script, {}, driver=f"render({json.dumps(self.program(payload))});")
+            captured = run_page(script, {}, driver=f"render({json.dumps(self.program(payload))});", helpers=helpers)
             self.assertIn("out", captured)
             assert_inert(self, captured, allowed_handlers=[r"saveDay\(\d+\)"])
             self.assertIn(py_esc(payload), captured["out"])
 
     def test_save_result_is_inert(self):
-        script = page_script("/coach")
+        helpers, script = page_scripts("/coach")
         for payload in PAYLOADS:
             data = {"/api/coach/apply": {"results": [{"created": True, "name": payload, "exercise_count": payload,
                                                       "unresolved": [{"name": payload}]}]}}
-            captured = run_page(script, data, driver="await saveDay(0);")
+            captured = run_page(script, data, driver="await saveDay(0);", helpers=helpers)
             assert_inert(self, captured)
             self.assertEqual(captured["save0"].count(py_esc(payload)), 3)  # name, exercise_count, unresolved
 
     def test_save_error_is_inert(self):
-        script = page_script("/coach")
+        helpers, script = page_scripts("/coach")
         for payload in PAYLOADS:
             data = {"/api/coach/apply": {"results": [{"error": payload}], "message": payload}}
-            captured = run_page(script, data, driver="await saveDay(0);")
+            captured = run_page(script, data, driver="await saveDay(0);", helpers=helpers)
             assert_inert(self, captured)
             self.assertIn(py_esc(payload), captured["save0"])
 

@@ -663,14 +663,17 @@ test('the coach page does not leave Saving… up when the answer is not JSON', a
     assert.match(doc.getElementById('save0').innerHTML, /Unexpected answer \(HTTP 502\)/);
 });
 
+/** The shared esc()/jsq() script of layout.html and the Insights page script (templates/insights.html), run as two classic scripts. */
+const layoutHelpers = () => between(read('layout.html'), 'function esc(v)', '\n    </script>');
+const insightsScript = () => between(read('insights.html'), '// insights-page:start', '// insights-page:end');
+
 test('the insights page does not show an outage as zeros or as "not logged in"', async () => {
-    const py = fs.readFileSync(path.join(__dirname, '..', 'features.py'), 'utf8');
-    const html = between(py, '_INSIGHTS_HTML = """', '"""\n');
-    const script = between(html, '<script>', '</script>').slice('<script>'.length);
+    const script = insightsScript();
     const doc = makeDocument();
     const ctx = { document: doc, console, JSON, Number, Object, Math, Array,
                   fetch: async () => ({ ok: false, status: 503, json: async () => ({ error: 'history_unavailable' }) }) };
     vm.createContext(ctx);
+    vm.runInContext(layoutHelpers(), ctx);  // esc() comes from the layout, as in the browser: the page must not redeclare it
     vm.runInContext(script, ctx);
     await new Promise((r) => setTimeout(r, 20));
     assert.match(doc.getElementById('badge').textContent, /Could not load your insights/);
@@ -960,14 +963,13 @@ test('the workout history page ignores a stale search', async () => {
 });
 
 test('the insights page says when the deep analytics could not be loaded', async () => {
-    const py = fs.readFileSync(path.join(__dirname, '..', 'features.py'), 'utf8');
-    const html = between(py, '_INSIGHTS_HTML = """', '"""\n');
-    const script = between(html, '<script>', '</script>').slice('<script>'.length);
+    const script = insightsScript();
     const doc = makeDocument();
     const answers = { '/api/insights': { authenticated: true, deep_error: 'RuntimeError', data_note: 'Detailed analytics could not be loaded (RuntimeError)', unit: 'kg' },
                       '/api/recovery': { recommendation: 'train', message: 'ok' } };
     const ctx = { document: doc, console, JSON, Number, Object, Math, Array, fetch: async (u) => ({ ok: true, status: 200, json: async () => answers[u.split('?')[0]] }) };
     vm.createContext(ctx);
+    vm.runInContext(layoutHelpers(), ctx);
     vm.runInContext(script, ctx);
     await new Promise((r) => setTimeout(r, 20));
     assert.match(doc.getElementById('deep').innerHTML, /Detailed analytics could not be loaded \(RuntimeError\)/);
@@ -1474,4 +1476,134 @@ test('the same workout booked on two days can be moved from both at once', async
     assert.equal(alerts.filter((a) => /already being moved/.test(a)).length, 0);
     release({ success: true });
     await first;
+});
+
+// ----------------------------------------------------------------------------------------------- shell: theme + menu (layout.html)
+/** The real head and footer scripts of layout.html under a stub DOM. storage: 'ok' | 'blocked' (every access throws) | 'full' (writes throw). */
+function shell({ storage = 'ok', stored = null } = {}) {
+    const src = read('layout.html');
+    const attrs = new Map();
+    const classes = new Set();
+    const data = new Map(stored == null ? [] : [['sg-theme', stored]]);
+    const writes = [];
+    const element = (id) => {
+        const a = new Map();
+        return {
+            id, textContent: '', focused: 0,
+            setAttribute: (k, v) => a.set(k, String(v)), getAttribute: (k) => (a.has(k) ? a.get(k) : null),
+            focus() { this.focused += 1; },
+        };
+    };
+    const els = { 'ui-nav': element('ui-nav'), 'ui-menu-btn': element('ui-menu-btn'), 'ui-theme-btn': element('ui-theme-btn'), 'ui-theme-label': element('ui-theme-label') };
+    const listeners = {};
+    const document = {
+        documentElement: {
+            setAttribute: (k, v) => attrs.set(k, String(v)), getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+            removeAttribute: (k) => attrs.delete(k), classList: { add: (c) => classes.add(c) },
+        },
+        getElementById: (id) => els[id] ?? null,
+        addEventListener: (type, fn) => { listeners[type] = fn; },
+    };
+    const localStorage = {
+        getItem: (k) => data.has(k) ? data.get(k) : null,
+        setItem: (k, v) => { if (storage !== 'ok') throw new Error('QuotaExceededError'); data.set(k, v); writes.push(['set', k, v]); },
+        removeItem: (k) => { if (storage !== 'ok') throw new Error('QuotaExceededError'); data.delete(k); writes.push(['remove', k]); },
+    };
+    const window = {};
+    // blocked storage: even reading window.localStorage throws (Safari private mode, cookies blocked)
+    Object.defineProperty(window, 'localStorage', { get() { if (storage === 'blocked') throw new Error('SecurityError'); return localStorage; } });
+    const ctx = { document, window, console };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, '// ui-theme:start', '// ui-theme:end'), ctx);
+    vm.runInContext(between(src, '// ui-shell:start', '// ui-shell:end'), ctx);
+    return { ctx, attrs, classes, data, writes, els, listeners };
+}
+
+test('a saved theme is applied before first paint; anything else means follow the system', () => {
+    for (const [stored, mode, dataTheme] of [['light', 'light', 'light'], ['dark', 'dark', 'dark'], [null, 'auto', null], ['purple', 'auto', null], ['', 'auto', null]]) {
+        const { attrs, classes } = shell({ stored });
+        assert.equal(attrs.get('data-theme-mode'), mode, String(stored));
+        assert.equal(attrs.get('data-theme') ?? null, dataTheme, String(stored));
+        assert.ok(classes.has('js'));
+    }
+});
+
+test('with storage blocked the page still renders and the theme button still works for this page', () => {
+    const { ctx, attrs, els } = shell({ storage: 'blocked' });
+    assert.equal(attrs.get('data-theme-mode'), 'auto');
+    assert.equal(attrs.get('data-theme') ?? null, null);
+    const seen = [];
+    for (let i = 0; i < 4; i += 1) { ctx.uiCycleTheme(els['ui-theme-btn']); seen.push(attrs.get('data-theme-mode')); }
+    same(seen, ['light', 'dark', 'auto', 'light']);
+    assert.equal(attrs.get('data-theme'), 'light');
+});
+
+test('a full or write-blocked storage does not stop the theme from changing', () => {
+    const { ctx, attrs, els } = shell({ storage: 'full' });
+    ctx.uiCycleTheme(els['ui-theme-btn']);
+    assert.equal(attrs.get('data-theme'), 'light');
+});
+
+test('the theme button cycles auto, light, dark, auto and persists each choice (auto removes it)', () => {
+    const { ctx, attrs, data, writes, els } = shell();
+    const btn = els['ui-theme-btn'];
+    ctx.uiCycleTheme(btn); assert.equal(data.get('sg-theme'), 'light'); assert.equal(attrs.get('data-theme'), 'light');
+    ctx.uiCycleTheme(btn); assert.equal(data.get('sg-theme'), 'dark'); assert.equal(attrs.get('data-theme'), 'dark');
+    ctx.uiCycleTheme(btn); assert.equal(data.has('sg-theme'), false); assert.equal(attrs.has('data-theme'), false);
+    same(writes, [['set', 'sg-theme', 'light'], ['set', 'sg-theme', 'dark'], ['remove', 'sg-theme']]);
+});
+
+test('the theme button names the current mode and what a click does, and shows it on the label', () => {
+    const { ctx, els } = shell();
+    const btn = els['ui-theme-btn'];
+    assert.equal(btn.getAttribute('aria-label'), 'Theme: Auto (follows your system). Switch to Light.');
+    ctx.uiCycleTheme(btn);
+    assert.equal(btn.getAttribute('aria-label'), 'Theme: Light. Switch to Dark.');
+    assert.equal(els['ui-theme-label'].textContent, 'Light');
+    ctx.uiCycleTheme(btn);
+    assert.equal(btn.getAttribute('aria-label'), 'Theme: Dark. Switch to Auto.');
+    assert.equal(els['ui-theme-label'].textContent, 'Dark');
+});
+
+test('the label starts from the saved mode, not from auto', () => {
+    const { els } = shell({ stored: 'dark' });
+    assert.equal(els['ui-theme-btn'].getAttribute('aria-label'), 'Theme: Dark. Switch to Auto.');
+});
+
+test('the menu button opens and closes the nav and keeps aria-expanded in step', () => {
+    const { ctx, els } = shell();
+    const btn = els['ui-menu-btn'];
+    btn.setAttribute('aria-expanded', 'false');
+    els['ui-nav'].setAttribute('data-open', 'false');
+    ctx.uiToggleMenu(btn);
+    assert.equal(btn.getAttribute('aria-expanded'), 'true');
+    assert.equal(els['ui-nav'].getAttribute('data-open'), 'true');
+    ctx.uiToggleMenu(btn);
+    assert.equal(btn.getAttribute('aria-expanded'), 'false');
+    assert.equal(els['ui-nav'].getAttribute('data-open'), 'false');
+});
+
+test('Escape closes an open menu and returns focus to its button; other keys and a closed menu do nothing', () => {
+    const { ctx, els, listeners } = shell();
+    const btn = els['ui-menu-btn'];
+    btn.setAttribute('aria-expanded', 'false');
+    els['ui-nav'].setAttribute('data-open', 'false');
+    assert.equal(typeof listeners.keydown, 'function');  // registered on the document
+    listeners.keydown({ key: 'Escape' });
+    assert.equal(btn.focused, 0);  // closed already: nothing to do
+    ctx.uiToggleMenu(btn);
+    listeners.keydown({ key: 'Tab' });
+    assert.equal(btn.getAttribute('aria-expanded'), 'true');
+    listeners.keydown({ key: 'Escape' });
+    assert.equal(btn.getAttribute('aria-expanded'), 'false');
+    assert.equal(els['ui-nav'].getAttribute('data-open'), 'false');
+    assert.equal(btn.focused, 1);
+});
+
+test('a flash message is removed by its close button', () => {
+    const { ctx } = shell();
+    const box = { removed: false, remove() { this.removed = true; } };
+    ctx.uiDismissFlash({ closest: (sel) => (sel === '[data-ui-flash]' ? box : null) });
+    assert.equal(box.removed, true);
+    ctx.uiDismissFlash({ closest: () => null });  // a button outside a message must not throw
 });
