@@ -218,9 +218,56 @@ def autoregulate(readiness):
             "message": "Low readiness — cut volume ~40%, drop load ~15%, defer high-CNS work or do active recovery."},
     }
     out = dict(table[band])
+    if band == 2 and isinstance(w, (int, float)):
+        # WHOOP recovery is not validated for strength training: it may veto (low band) but never add. A green WHOOP day
+        # trains the program exactly as written; the +10% / +3% push below is for non-WHOOP evidence only.
+        out.update({"volume_pct": 0, "intensity_pct": 0, "rir_min": 1, "session": "as_planned",
+                    "message": "Recovery looks good — train the program as written. WHOOP recovery is a soft veto "
+                               "(not validated for strength training): a high score never adds volume or load."})
+        overrides.append("WHOOP is a soft veto only: a high score does not raise volume or intensity above the program")
     out["band"] = _BAND_NAME[band]
     out["signals"] = notes
     out["overrides"] = overrides
+    return out
+
+
+def apply_readiness(program, auto):
+    """Today's readiness applied to a generated program as a REDUCE-ONLY overlay: the program is the ceiling. A low band
+    trims sets and load and adds reps in reserve; a high band changes nothing (it never adds). Returns a copy of `program`
+    whose days carry the adjusted numbers, plus `readiness_applied` listing every change (day, exercise, field, from, to).
+    The metadata sits at program level because apply_program rejects unknown keys on an exercise."""
+    import copy
+    auto = auto or {}
+    vol = min(0, auto.get("volume_pct") or 0)
+    inten = min(0, auto.get("intensity_pct") or 0)
+    rir_min = auto.get("rir_min") or 0
+    out = copy.deepcopy(program)
+    changes = []
+    weekly = {}
+    for di, day in enumerate(out.get("days", [])):
+        for ex in day.get("exercises", []):
+            if vol < 0 and isinstance(ex.get("sets"), int):
+                new = max(1, round(ex["sets"] * (1 + vol / 100.0)))
+                if new < ex["sets"]:
+                    changes.append({"day": di, "exercise": ex["name"], "field": "sets", "from": ex["sets"], "to": new})
+                    ex["sets"] = new
+            if inten < 0 and isinstance(ex.get("load"), (int, float)) and ex["load"] > 0:
+                new = round(ex["load"] * (1 + inten / 100.0), 1)
+                if new < ex["load"]:
+                    changes.append({"day": di, "exercise": ex["name"], "field": "load", "from": ex["load"], "to": new})
+                    ex["load"] = new
+            if isinstance(ex.get("rir"), (int, float)) and ex["rir"] < rir_min:
+                changes.append({"day": di, "exercise": ex["name"], "field": "rir", "from": ex["rir"], "to": rir_min})
+                ex["rir"] = rir_min
+            weekly[ex["primary"]] = weekly.get(ex["primary"], 0) + ex["sets"]
+    if "weekly_sets_per_muscle" in out:
+        out["weekly_sets_per_muscle"] = weekly
+    note = None
+    if auto.get("session") == "reduce_or_recover":
+        note = "Low readiness: defer the heaviest compound lifts or swap this session for active recovery."
+    out["readiness_applied"] = {"band": auto.get("band"), "volume_pct": vol, "intensity_pct": inten, "rir_min": rir_min,
+                                "session": auto.get("session"), "adjustments": changes, "note": note,
+                                "rule": "reduce only: readiness never raises the program"}
     return out
 
 
@@ -696,7 +743,7 @@ def principles(topic=None):
         "balance": "Bias pulling ≥ pushing (~1:1 to 1:2); train antagonists; don't skip hamstrings/rear delts.",
         "modes": "Standard for main lifts; Chain for lockout/power; Eccentric for hypertrophy (<=25% volume); Constant for rehab; Spotter to fail safely.",
         "ordering": "Compounds first; cluster by accessory + belt height to minimise Speediance setup swaps.",
-        "recovery": "Autoregulate from Whoop/HRV/sleep/subjective: green→push, yellow→hold, red→cut volume ~40% / load ~15%.",
+        "recovery": "Autoregulate from Whoop/HRV/sleep/subjective, most conservative signal wins: red→cut volume ~40% / load ~15%, yellow→hold. WHOOP is a soft veto only (not validated for strength training): a green score never adds volume or load.",
         "fatloss": "Diet drives the deficit; keep training load/volume HIGH to retain muscle; add conditioning, don't 'tone'.",
     }
     if topic:

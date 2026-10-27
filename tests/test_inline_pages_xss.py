@@ -52,11 +52,12 @@ def inspect(markup):
 
 
 def page_script(path):
+    """Every inline script of the page, in order: pages that extend layout.html get esc()/jsq() from the layout's script."""
     resp = gym_app.app.test_client().get(path, headers=BASIC)
     assert resp.status_code == 200, (path, resp.status_code)
-    m = re.search(r"<script>(.*?)</script>", resp.get_data(as_text=True), re.S)
-    assert m, path
-    return m.group(1)
+    found = re.findall(r"<script>(.*?)</script>", resp.get_data(as_text=True), re.S)
+    assert found, path
+    return "\n".join(found)
 
 
 HARNESS = r"""
@@ -129,44 +130,110 @@ class InsightsPage(unittest.TestCase):
             self.assertIn(py_esc(payload), captured["rec"])
 
 
+COACH_HANDLERS = [r"refreshWhoop\(true\)", r"connectWhoop\(\)", r"previewDay\(\d+\)", r"confirmDay\(\d+\)",
+                  r"removeAvoid\(\d+\)", r"gen\(\)"]
+
+
 @unittest.skipUnless(NODE, "node is required")
 class CoachPage(unittest.TestCase):
+    """templates/coach.html runs in node with hostile data in every field the server can send it."""
+
     def program(self, payload):
-        ex = {"name": payload, "unilateral": True, "sets": payload, "reps": payload, "load": payload,
-              "pct1rm": payload, "rir": payload, "rest_sec": payload, "mode": payload, "mode_note": payload,
+        ex = {"name": payload, "unilateral": True, "sets": payload, "reps": payload, "load": 50, "primary": "chest",
+              "pct1rm": 0.7, "rir": payload, "rest_sec": payload, "mode": payload, "mode_note": payload,
               "accessory": payload, "belt": payload}
         return {"review": {"score": payload, "warnings": [payload]}, "goal_label": payload,
                 "days_per_week": payload, "experience": payload,
                 "autoregulation": {"band": payload, "message": payload},
-                "weekly_sets_per_muscle": {payload: payload},
+                "readiness_applied": {"band": payload, "note": payload,
+                                      "adjustments": [{"day": 0, "exercise": payload, "field": payload, "from": payload, "to": payload}]},
+                "weekly_sets_per_muscle": {payload: payload}, "avoid_unmatched": [payload],
+                "readiness_error": payload, "feedback_error": payload,
                 "days": [{"name": payload, "warmup": payload, "setup_swaps": payload, "conditioning": payload,
                           "exercises": [ex]}],
                 "disclaimer": payload}
 
-    def test_program_render_is_inert(self):
+    def cards(self, payload):
+        return {
+            "/api/coach/status": {"authenticated": True, "writes_enabled": True, "unit_confirmed": True},
+            "/api/coach/readiness": {
+                "signals": [{"key": payload, "value": payload, "source": payload, "age_hours": payload, "stale": True},
+                            {"key": "hrv_vs_baseline", "value": payload, "source": "whoop", "age_hours": 2, "stale": False}],
+                "adjustment": {"band": payload, "signals": [payload], "overrides": [payload], "volume_pct": payload},
+                "max_age_hours": payload},
+            "/api/coach/whoop": {"whoop": {"state": "refreshing_failed", "message": payload, "notes": [payload],
+                                           "last_pull": payload, "next_pull": payload, "can_connect": True}},
+            "/api/coach/feedback": {"profile": {"avoid": [payload], "unreadable": payload, "avg_rpe": payload},
+                                    "next_program_adjustment": {"action": payload}},
+            "/api/coach/preferences": {"preferences": {}, "error": payload},
+        }
+
+    def test_cards_are_inert(self):
         script = page_script("/coach")
         for payload in PAYLOADS:
-            captured = run_page(script, {}, driver=f"render({json.dumps(self.program(payload))});")
-            self.assertIn("out", captured)
-            assert_inert(self, captured, allowed_handlers=[r"saveDay\(\d+\)"])
+            captured = run_page(script, self.cards(payload))
+            assert_inert(self, captured, allowed_handlers=COACH_HANDLERS)
+            for card in ("readiness-body", "whoop-body", "avoid-body"):
+                self.assertIn(py_esc(payload), captured[card], card)
+
+    def test_whoop_states_are_inert(self):
+        script = page_script("/coach")
+        for payload in PAYLOADS:
+            for state in ("not_configured", "needs_reconsent", "connected", "bogus"):
+                data = {"/api/coach/whoop": {"whoop": {"state": state, "message": payload, "notes": [payload], "can_connect": True}}}
+                captured = run_page(script, data)
+                assert_inert(self, captured, allowed_handlers=COACH_HANDLERS)
+
+    def test_program_and_preview_are_inert(self):
+        script = page_script("/coach")
+        for payload in PAYLOADS:
+            preview = {"name": payload + "PV", "exercise_count": payload, "notes": [payload + "PN"],
+                       "resolved": [{"coach_name": payload + "RC", "matched_name": payload + "RM", "confidence": payload + "RF"}],
+                       "unresolved": [{"name": payload + "PU", "reason": payload + "PR"}]}
+            driver = (f"S.status = {{authenticated: true, writes_enabled: true, unit_confirmed: true}}; S.loadUnit = {json.dumps(payload)};"
+                      f"S.program = {json.dumps(self.program(payload))}; S.previews[0] = {json.dumps(preview)}; renderProgram();")
+            captured = run_page(script, {}, driver=driver)
+            assert_inert(self, captured, allowed_handlers=COACH_HANDLERS)
             self.assertIn(py_esc(payload), captured["out"])
+            for tag in ("PV", "PN", "PU", "PR", "RC", "RM", "RF"):  # the preview's own fields, not only the program's
+                self.assertIn(py_esc(payload + tag), captured["out"])
 
     def test_save_result_is_inert(self):
         script = page_script("/coach")
         for payload in PAYLOADS:
             data = {"/api/coach/apply": {"results": [{"created": True, "name": payload, "exercise_count": payload,
-                                                      "unresolved": [{"name": payload}]}]}}
-            captured = run_page(script, data, driver="await saveDay(0);")
-            assert_inert(self, captured)
-            self.assertEqual(captured["save0"].count(py_esc(payload)), 3)  # name, exercise_count, unresolved
+                                                      "unresolved": [{"name": payload, "reason": payload}]}],
+                                         "feedback_error": payload}}
+            driver = (f"S.status = {{authenticated: true, writes_enabled: true, unit_confirmed: true}};"
+                      f"S.program = {json.dumps(self.program('x'))}; S.previews[0] = {{name: 'n', exercise_count: 1, resolved: [], unresolved: [], notes: []}};"
+                      "await confirmDay(0);")
+            captured = run_page(script, data, driver=driver)
+            assert_inert(self, captured, allowed_handlers=COACH_HANDLERS)
+            self.assertIn(py_esc(payload), captured["apply0"])
 
     def test_save_error_is_inert(self):
         script = page_script("/coach")
         for payload in PAYLOADS:
-            data = {"/api/coach/apply": {"results": [{"error": payload}], "message": payload}}
-            captured = run_page(script, data, driver="await saveDay(0);")
-            assert_inert(self, captured)
-            self.assertIn(py_esc(payload), captured["save0"])
+            data = {"/api/coach/apply": {"results": [{"error": payload, "message": payload}], "message": payload}}
+            driver = (f"S.status = {{authenticated: true, writes_enabled: true, unit_confirmed: true}};"
+                      f"S.program = {json.dumps(self.program('x'))}; S.previews[0] = {{name: 'n', exercise_count: 1, resolved: [], unresolved: [], notes: []}};"
+                      "await confirmDay(0);")
+            captured = run_page(script, data, driver=driver)
+            assert_inert(self, captured, allowed_handlers=COACH_HANDLERS)
+            self.assertIn(py_esc(payload), captured["saveMsg0"])
+
+    def test_form_messages_are_inert(self):
+        script = page_script("/coach")
+        for payload in PAYLOADS:
+            data = {"/api/coach/readiness": {"error": "invalid_readiness", "message": payload},
+                    "/api/coach/feedback": {"error": "invalid_feedback", "message": payload},
+                    "/api/coach/preferences": {"error": "invalid_preferences", "message": payload}}
+            driver = ("document.getElementById('m-whoop').value = '50'; document.getElementById('a-name').value = 'x';"
+                      "await submitManual(); await submitAvoid(); await rememberPrefs();")
+            captured = run_page(script, {**data, "__status": 400}, driver=driver)
+            assert_inert(self, captured, allowed_handlers=COACH_HANDLERS)
+            self.assertIn(py_esc(payload), captured["m-msg"])
+            self.assertIn(py_esc(payload), captured["a-msg"])
 
 
 if __name__ == "__main__":

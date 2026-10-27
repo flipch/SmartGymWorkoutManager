@@ -242,16 +242,25 @@ const vm = require('vm');
 const els = {};
 const el = id => (els[id] ??= {textContent: '', innerHTML: '', value: ''});
 globalThis.document = {getElementById: el};
-globalThis.window = {__P: {days: [{name: 'd', exercises: []}]}};
+globalThis.window = {};
 let sent = null;
-globalThis.fetch = async (u, o) => { sent = {url: u, body: JSON.parse(o.body)}; return {status: 200, json: async () => ({results: [{created: true, name: 'n', exercise_count: 1}]})}; };
+globalThis.fetch = async (u, o) => {
+  if (o && o.method === 'POST' && u === '/api/coach/apply') sent = {url: u, body: JSON.parse(o.body)};
+  return {status: 200, ok: true, json: async () => ({results: [{created: true, name: 'n', exercise_count: 1}]})};
+};
 vm.runInThisContext(%(script)s);
-(async () => { await saveDay(0); console.log(JSON.stringify(sent)); })();
+(async () => {
+  S.status = {authenticated: true, writes_enabled: true, unit_confirmed: true};
+  S.program = {days: [{name: 'd', exercises: []}]};
+  S.previews[0] = {name: 'n', exercise_count: 1, resolved: [], unresolved: [], notes: []};
+  await confirmDay(0);
+  console.log(JSON.stringify(sent));
+})();
 """
 
     def test_the_button_sends_an_explicit_real_save(self):
         resp = gym_app.app.test_client().get("/coach", headers=BASIC)
-        script = re.search(r"<script>(.*?)</script>", resp.get_data(as_text=True), re.S).group(1)
+        script = "\n".join(re.findall(r"<script>(.*?)</script>", resp.get_data(as_text=True), re.S))
         out = subprocess.run([NODE, "-e", self.HARNESS % {"script": json.dumps(script)}], capture_output=True, text=True, timeout=30)
         self.assertEqual(out.returncode, 0, out.stderr)
         sent = json.loads(out.stdout.strip().splitlines()[-1])

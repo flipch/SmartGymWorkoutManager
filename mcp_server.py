@@ -26,6 +26,7 @@ ArgModelBase.model_config = {**ArgModelBase.model_config, "extra": "forbid"}
 
 import coach
 import state_io
+import whoop_sync
 from auth import BearerAuthASGI, load_access, load_token, writes_enabled
 from api_client import SpeedianceClient, UpstreamError, _check_template_id, unit_is_confirmed
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize, valid_iso_date, valid_record_id
@@ -364,6 +365,7 @@ def generate_program(goal: str = "general", days_per_week: StrictInt = 4,
         # works offline as a PT; auto-applies any persisted readiness + feedback so the
         # program adapts to what the user/agent has reported (real-time, stateful loop).
         c = _client()
+        _pull_whoop_if_due(c.data_dir)  # throttled; a WHOOP outage changes nothing here
         r = state_io.require_readiness(readiness) if readiness is not None else None
         readiness_error = _readiness_read_error(c.data_dir)
         if r is not None:
@@ -447,6 +449,7 @@ def autoregulate(whoop_recovery: Number | None = None, hrv_vs_baseline: str = No
         got = state_io.require_readiness(r)  # out-of-range numbers are refused
         if use_stored_readiness:  # a partial reading must not hide a fresh stored red one
             data_dir = _client().data_dir
+            _pull_whoop_if_due(data_dir)
             unreadable = _readiness_read_error(data_dir)
             if unreadable:
                 raise RuntimeError(f"the stored readiness could not be read ({unreadable}): post a new reading, or pass use_stored_readiness=false")
@@ -488,6 +491,52 @@ def get_feedback() -> dict:
         prof = _feedback_profile(_client().data_dir)
         return {"profile": prof, "next_program_adjustment": coach.feedback_adjustment(prof)}
     return _safe(run)
+
+
+def _pull_whoop_if_due(data_dir, force=False):
+    """Pull WHOOP when it is due (throttled, short timeouts). A WHOOP problem is a status, never an exception."""
+    try:
+        return whoop_sync.sync(data_dir, force=force)
+    except Exception as e:  # noqa: BLE001 - the readiness tools must work without WHOOP
+        return {"outcome": "failed", "status": whoop_sync.status(data_dir), "error": type(e).__name__}
+
+
+def _whoop_hint(st):
+    """One line for an agent: what to do when WHOOP needs attention."""
+    if st["state"] in ("not_configured", "needs_reconsent"):
+        return "WHOOP is not feeding readiness. Call whoop_connect to get a one-time link for the owner to open."
+    return None
+
+
+@mcp.tool()
+def get_readiness(refresh: StrictBool = True) -> dict:
+    """Today's stored readiness signals (value, source whoop|manual, age, stale flag), the training adjustment they give,
+    and the WHOOP link status: not_configured | connected | refreshing_failed | needs_reconsent plus the last pull time.
+    refresh=true pulls WHOOP first when a pull is due (at most every 15 minutes; a failure keeps the last readings).
+    WHOOP is a soft veto: a low score can cut volume and load, a high one never adds any. Signals older than 36 h are ignored."""
+    def run():
+        from datetime import datetime, timezone
+        from features import _load_readiness, readiness_signals
+        data_dir = _client().data_dir
+        pulled = _pull_whoop_if_due(data_dir) if refresh else None
+        unreadable = _readiness_read_error(data_dir)
+        if unreadable:
+            raise RuntimeError(f"the stored readiness could not be read ({unreadable}): post a new reading")
+        stored = _load_readiness(data_dir)
+        usable = _fresh_readiness(data_dir)
+        st = whoop_sync.status(data_dir)
+        return {"signals": readiness_signals(stored, datetime.now(timezone.utc)), "max_age_hours": state_io.READINESS_MAX_AGE_H,
+                "adjustment": coach.autoregulate(usable), "whoop": st, "whoop_hint": _whoop_hint(st),
+                "pull": pulled["outcome"] if pulled else None}
+    return _safe(run)
+
+
+@mcp.tool()
+def whoop_connect(force: StrictBool = False) -> dict:
+    """WHOOP link status, and, only when WHOOP is not connected or needs re-consent (or force=true), a ONE-TIME authorization
+    link for the owner to open in a browser on the home network or Tailscale and approve. The link works once and expires
+    in 10 minutes. When WHOOP is healthy no link is created unless force=true. This changes no workout data."""
+    return _safe(lambda: whoop_sync.connect_info(_client().data_dir, force=force))
 
 
 @mcp.tool()

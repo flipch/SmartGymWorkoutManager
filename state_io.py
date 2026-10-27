@@ -152,6 +152,91 @@ def require_readiness(payload) -> dict:
     return out
 
 
+# Where a stored signal came from. A small closed set: a new source is one more entry here and in READINESS_SOURCE_FIELDS.
+READINESS_SOURCES = ("whoop", "manual")
+# what each source can actually supply (WHOOP gives no HRV/resting-HR baseline, no subjective score, no ACWR)
+READINESS_SOURCE_FIELDS = {"whoop": ("whoop_recovery", "sleep_hours"),
+                           "manual": READINESS_SIGNALS}
+
+
+def split_source(payload):
+    """(payload without `source`, source or None) for a reading being SAVED. A source that is not one of READINESS_SOURCES,
+    or that names a field its source cannot supply, is an error: provenance must be as trustworthy as the value."""
+    if not isinstance(payload, dict) or "source" not in payload:
+        return payload, None
+    rest = {k: v for k, v in payload.items() if k != "source"}
+    source = payload["source"]
+    if not isinstance(source, str) or source not in READINESS_SOURCES:
+        raise ValueError(f"invalid source: must be one of {', '.join(READINESS_SOURCES)}")
+    bad = sorted(k for k in rest if k in READINESS_SIGNALS and k not in READINESS_SOURCE_FIELDS[source])
+    if bad:
+        raise ValueError(f"invalid source: {source} cannot supply {', '.join(bad)}")
+    return rest, source
+
+
+def clean_sources(stored_sources, keys):
+    """The per-field sources of a stored reading, trusted only for known fields and known sources (the file can be hand-edited)."""
+    if not isinstance(stored_sources, dict):
+        return {}
+    return {k: v for k, v in stored_sources.items()
+            if k in keys and isinstance(v, str) and v in READINESS_SOURCES and k in READINESS_SOURCE_FIELDS[v]}
+
+
+# ------------------------------------------------------------------------------------------------ coach preferences
+PREF_GOALS = ("muscle", "strength", "fatloss", "general")  # keep equal to coach.GOALS (a test pins it)
+PREF_EXPERIENCE = ("beginner", "intermediate", "advanced")
+PREF_FIELDS = ("goal", "days_per_week", "experience", "one_rm", "load_unit")
+MAX_ONE_RM_ENTRIES = 30
+MAX_ONE_RM = 1000  # kg or lb: a 1RM above this is a typo
+
+
+def validate_preferences(payload) -> dict:
+    """The coach page's remembered choices. Unknown fields, bad values and junk 1RMs are errors, never silently dropped
+    (a typo'd goal would otherwise become a different program). Every field is optional; an empty object is valid (= nothing remembered)."""
+    if not isinstance(payload, dict):
+        raise ValueError("preferences must be a JSON object")
+    unknown = sorted(str(k)[:40] for k in payload if k not in PREF_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown preference field(s): {', '.join(unknown)}; use {', '.join(PREF_FIELDS)}")
+    out = {}
+    if "goal" in payload:
+        if not isinstance(payload["goal"], str) or payload["goal"] not in PREF_GOALS:
+            raise ValueError(f"invalid goal: must be one of {', '.join(PREF_GOALS)}")
+        out["goal"] = payload["goal"]
+    if "experience" in payload:
+        if not isinstance(payload["experience"], str) or payload["experience"] not in PREF_EXPERIENCE:
+            raise ValueError(f"invalid experience: must be one of {', '.join(PREF_EXPERIENCE)}")
+        out["experience"] = payload["experience"]
+    if "days_per_week" in payload:
+        d = payload["days_per_week"]
+        if isinstance(d, bool) or not isinstance(d, int) or not 1 <= d <= 5:
+            raise ValueError("invalid days_per_week: must be a whole number from 1 to 5")
+        out["days_per_week"] = d
+    if "load_unit" in payload:
+        if payload["load_unit"] not in ("kg", "lb"):
+            raise ValueError("invalid load_unit: must be kg or lb")
+        out["load_unit"] = payload["load_unit"]
+    if "one_rm" in payload:
+        rms = payload["one_rm"]
+        if not isinstance(rms, dict):
+            raise ValueError("invalid one_rm: must be an object of exercise or muscle name to a number")
+        if len(rms) > MAX_ONE_RM_ENTRIES:
+            raise ValueError(f"invalid one_rm: at most {MAX_ONE_RM_ENTRIES} entries")
+        clean = {}
+        for name, value in rms.items():
+            key = _text({"name": name}, "name", MAX_NAME) if isinstance(name, str) else None
+            if key is None or not re.search(r"[^\W_]", key):
+                raise ValueError("invalid one_rm: each name must be text with letters or digits")
+            try:
+                clean[key] = _number({"v": value}, "v", 0.1, MAX_ONE_RM)
+            except ValueError:
+                raise ValueError(f"invalid one_rm: each value must be a number from 0.1 to {MAX_ONE_RM}") from None
+        if clean and out.get("load_unit") is None:
+            raise ValueError("invalid load_unit: say kg or lb when you give 1RMs")
+        out["one_rm"] = clean
+    return out
+
+
 DIFFICULTY = ("too_easy", "ok", "too_hard")
 
 

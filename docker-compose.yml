@@ -25,6 +25,13 @@ services:
       - GYM_ALLOWED_ORIGINS=${GYM_ALLOWED_ORIGINS:-}
       # signs flash cookies; random per start when empty
       - GYM_SECRET_KEY=${GYM_SECRET_KEY:-}
+      # WHOOP (the app pulls recovery + sleep itself; see docs/ai-coach.md). All empty = WHOOP off, the coach works without it.
+      # Both services need the SAME values: the web app receives the consent callback, the MCP can mint the link and pull.
+      - WHOOP_CLIENT_ID=${WHOOP_CLIENT_ID:-}
+      - WHOOP_CLIENT_SECRET=${WHOOP_CLIENT_SECRET:-}
+      - WHOOP_REDIRECT_URI=${WHOOP_REDIRECT_URI:-}   # https://gym.lan.doghous.cloud/whoop/callback, registered in the WHOOP dashboard
+      - WHOOP_TOKEN_FILE=${WHOOP_TOKEN_FILE:-}       # default /data/whoop.token.json (mode 600, on the shared volume)
+      - WHOOP_PULL_MIN_INTERVAL_S=${WHOOP_PULL_MIN_INTERVAL_S:-900}
     volumes:
       - gym-data:/data
     command: ["gunicorn", "-w", "1", "-b", "0.0.0.0:5001", "--timeout", "120", "app:app"]
@@ -52,6 +59,13 @@ services:
       - GYM_ACCESS_TEAM=${GYM_ACCESS_TEAM:-}
       - GYM_ACCESS_AUD=${GYM_ACCESS_AUD:-}
       - GYM_ACCESS_EMAILS=${GYM_ACCESS_EMAILS:-}
+      # WHOOP (the app pulls recovery + sleep itself; see docs/ai-coach.md). All empty = WHOOP off, the coach works without it.
+      # Both services need the SAME values: the web app receives the consent callback, the MCP can mint the link and pull.
+      - WHOOP_CLIENT_ID=${WHOOP_CLIENT_ID:-}
+      - WHOOP_CLIENT_SECRET=${WHOOP_CLIENT_SECRET:-}
+      - WHOOP_REDIRECT_URI=${WHOOP_REDIRECT_URI:-}   # https://gym.lan.doghous.cloud/whoop/callback, registered in the WHOOP dashboard
+      - WHOOP_TOKEN_FILE=${WHOOP_TOKEN_FILE:-}       # default /data/whoop.token.json (mode 600, on the shared volume)
+      - WHOOP_PULL_MIN_INTERVAL_S=${WHOOP_PULL_MIN_INTERVAL_S:-900}
     volumes:
       - gym-data:/data
     depends_on:
