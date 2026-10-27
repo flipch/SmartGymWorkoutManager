@@ -333,9 +333,18 @@
     }
 
     let templateLoading = false;  // adding or saving while the existing template is still loading would overwrite it with a partial plan
+    let templateLoadFailed = false;  // a template that could not be loaded must never be saved over: the plan on screen is not the saved one
+    function editorBlocker() {
+        if (templateLoading) return 'The workout is still loading: wait a moment, then try again.';
+        if (templateLoadFailed) return 'This workout could not be loaded, so editing is disabled: reload the page to try again.';
+        return null;
+    }
     async function loadExistingWorkout(data) {
         templateLoading = true;
-        try { await loadExistingWorkoutInner(data); } finally { templateLoading = false; }
+        templateLoadFailed = false;
+        try { await loadExistingWorkoutInner(data); }
+        catch (e) { templateLoadFailed = true; throw e; }
+        finally { templateLoading = false; }
     }
     async function loadExistingWorkoutInner(data) {
         document.getElementById('plan-name').value = data.name;
@@ -344,6 +353,7 @@
         const metadataPromises = groupIds.map(id => fetchExerciseMetadata(id));
         const allMetadata = await Promise.all(metadataPromises);
         if (allMetadata.some(m => m.failed)) {  // saving this later would flatten Vita levels and one-sided exercises
+            templateLoadFailed = true;
             alert('Could not load the exercise details from Speediance, so this workout was not opened. Reload the page to try again.');
             return;
         }
@@ -430,7 +440,8 @@
 
     // --- ADD EXERCISE ---
     async function addExerciseToPlan(groupId, title, img) {
-        if (templateLoading) { alert('The workout is still loading: wait a moment, then add exercises.'); return; }
+        const blocked = editorBlocker();
+        if (blocked) { alert(blocked); return; }
         if (workoutData.length >= 50) {
             alert('Speediance limits custom workouts to 50 exercises. Remove one before adding another.');
             return;
@@ -448,7 +459,9 @@
 
             // Use recommendedWeight from API if available, otherwise fall back to rules default
             let defaultWeight = rules.defW;
-            if (meta.recommendedWeight) {
+            if (meta.dataStatType === 6) {
+                defaultWeight = 5;  // a Vita level (1-10): the cable-weight rules and recommendation do not apply
+            } else if (meta.recommendedWeight) {
                 // recommendedWeight from API is in KG; convert if imperial
                 defaultWeight = userUnit === 1
                     ? WorkoutLogic.kgToLbs(meta.recommendedWeight)
@@ -1245,6 +1258,8 @@ You must output a JSON object with the following structure:
 
     window.processImport = async () => {
         const jsonStr = document.getElementById('import-json').value;
+        const blocked = editorBlocker();
+        if (blocked) { alert(blocked); return; }
         try {
             const data = JSON.parse(jsonStr);
 
@@ -1259,7 +1274,12 @@ You must output a JSON object with the following structure:
                 return;
             }
 
+            if (data.exercises && Array.isArray(data.exercises) && data.exercises.length === 0) {
+                alert('Nothing was imported: the file has no exercises.');
+                return;
+            }
             if (data.exercises && Array.isArray(data.exercises)) {
+                let adjusted = 0;
                 // Build the whole plan first: a failure part-way must leave the current plan (and the screen) as they were
                 const imported = [];
 
@@ -1280,9 +1300,15 @@ You must output a JSON object with the following structure:
                     const title = libEx ? libEx.title : (ex.title || "Unknown Exercise");
 
                     // Map sets — normalize comma decimal separator for weight (e.g. "11,5" → 11.5)
-                    const setsParsed = ex.sets.map(s => ({
+                    const setsParsed = ex.sets.map((s, si) => ({
                         reps: parseInt(s.reps),
-                        weight: parseFloat(String(s.weight ?? 0).replace(',', '.')),
+                        weight: (() => {
+                            const w = parseFloat(String(s.weight ?? '').replace(',', '.'));
+                            if (!Number.isFinite(w) || w < 0 || (w === 0 && String(s.unit || '').toLowerCase() !== 'sec')) {
+                                throw new Error(`exercise ${imported.length + 1} set ${si + 1} needs a weight above 0`);
+                            }
+                            return w;
+                        })(),
                         mode: parseInt(s.mode || 1),
                         rest: (s.rest === undefined || s.rest === null || Number.isNaN(parseInt(s.rest))) ? 60 : parseInt(s.rest),  // 0 s is a real rest
                         unit: String(s.unit || '').toLowerCase() === 'sec' ? 'sec' : 'reps'  // an exported timed set stays timed
@@ -1300,6 +1326,21 @@ You must output a JSON object with the following structure:
                         ? parseInt(presetField)
                         : -1;
 
+                    // a preset this exercise does not offer would be saved while the screen shows "Customize"
+                    const offered = (meta.presets || []).map(p => p.id ?? p.templatePresetId ?? p.presetId).filter(x => x != null);
+                    const allowed = new Set([-1, ...(offered.length ? offered.map(Number) : [1, 3, 5])]);
+                    if (!allowed.has(importedPresetId)) {
+                        throw new Error(`exercise ${imported.length + 1}: preset ${importedPresetId} is not available for this exercise`);
+                    }
+                    // hold every weight to the machine's limits, as the editor's own fields do
+                    const limits = WorkoutLogic.getRules({ selectedPresetId: importedPresetId, isUnilateral: meta.isUnilateral, isBarbell: meta.isBarbell }, userUnit);
+                    finalSets.forEach(set => {
+                        if (set.weight === 0) return;  // a timed set may carry no load
+                        const bounded = meta.dataStatType === 6
+                            ? Math.min(10, Math.max(1, Math.round(set.weight)))
+                            : WorkoutLogic.validateAndClamp(set.weight, limits.minW, limits.maxW, limits.step);
+                        if (bounded !== set.weight) { adjusted++; set.weight = bounded; }
+                    });
                     imported.push({
                         internalId: Date.now() + Math.random(),
                         groupId: parseInt(groupId),
@@ -1327,7 +1368,7 @@ You must output a JSON object with the following structure:
                 workoutData = imported;
                 renderBuilder();
                 closeImportModal();
-                alert("Workout imported successfully!");
+                alert(adjusted ? `Workout imported. ${adjusted} weight value(s) were outside the machine's limits and were adjusted: check them before saving.` : "Workout imported successfully!");
             } else {
                 alert("Invalid JSON format: Missing 'exercises' array.");
             }
@@ -1349,9 +1390,10 @@ You must output a JSON object with the following structure:
         // Wenn Preset geändert wird -> Alle Sets auf neue Defaults setzen!
         if(field === 'selectedPresetId') {
             const rules = getRules(workoutData[exIdx]);
+            const isVita = workoutData[exIdx].dataStatType === 6;
             workoutData[exIdx].sets.forEach(set => {
-                set.weight = rules.defW;
-                set.reps = rules.defR;
+                if (!isVita) set.weight = rules.defW;  // a level is not a load
+                if (set.unit !== 'sec') set.reps = rules.defR;  // a 60 s hold is not 10 reps
                 set.rest = rules.defRest;
             });
             renderBuilder();
@@ -1427,7 +1469,8 @@ You must output a JSON object with the following structure:
 
     let saveInFlight = false;
     window.saveWorkout = async () => {
-        if (templateLoading) return alert('The workout is still loading: wait a moment, then save.');
+        const blocked = editorBlocker();
+        if (blocked) return alert(blocked);
         if (saveInFlight) return;  // a double click must not create two templates
         saveInFlight = true;
         try { await saveWorkoutOnce(); } finally { saveInFlight = false; }
@@ -1450,18 +1493,23 @@ You must output a JSON object with the following structure:
             })
         }));
 
-        const res = await fetch('/create', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                id: currentTemplateId, 
-                unit: userUnit,  // the unit these numbers were typed in: the server refuses if the account has changed since
-                name: name, 
-                exercises: payloadExercises
-            })
-        });
-        
-        const json = await res.json();
+        let json;
+        try {
+            const res = await fetch('/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    id: currentTemplateId, 
+                    unit: userUnit,  // the unit these numbers were typed in: the server refuses if the account has changed since
+                    name: name, 
+                    exercises: payloadExercises
+                })
+            });
+            json = await res.json();
+        } catch (e) {
+            alert('Could not save: no valid answer from the server (' + e.message + '). Check My Workouts before saving again.');
+            return;
+        }
         if(json.status === 'success') {
             window.location.href = '/';
         } else {

@@ -153,10 +153,15 @@
         return Number.isInteger(val) ? val : val.toFixed(1);
     }
 
+    let historySeq = 0;
+    let loadedRange = null;  // the range historyData was actually loaded for: exports are named from it, never from the inputs
     async function fetchHistory() {
         const start = document.getElementById('startDate').value;
         const end = document.getElementById('endDate').value;
         if (!start || !end) return alert('Please select a date range.');
+        const seq = ++historySeq;
+        historyData = null;
+        loadedRange = null;  // a failed or superseded load must not leave an older range exportable
 
         document.getElementById('emptyState').classList.add('hidden');
         document.getElementById('recordsTable').classList.add('hidden');
@@ -167,6 +172,7 @@
             const resp = await fetch(`/api/history?start=${start}&end=${end}`);
             if (resp.status === 401) { window.location.href = '/settings'; return; }
             const data = await resp.json();
+            if (seq !== historySeq) return;  // a newer range was asked for: this answer is stale
             if (!resp.ok) {  // an outage must not read as "No workouts found"
                 document.getElementById('loadingState').classList.add('hidden');
                 document.getElementById('emptyState').classList.remove('hidden');
@@ -174,8 +180,10 @@
                 return;
             }
             historyData = data;
+            loadedRange = { start, end };
             renderHistory(data);
         } catch (err) {
+            if (seq !== historySeq) return;
             console.error('Error fetching history:', err);
             document.getElementById('loadingState').classList.add('hidden');
             document.getElementById('emptyState').classList.remove('hidden');
@@ -346,7 +354,7 @@
                             <div class="col-span-11">Duration</div>
                         </div>`;
                     sets.forEach((s, i) => {
-                        const dur = s.targetCount || s.time || 0;
+                        const dur = s.time || s.targetCount || 0;  // what was held, not what was prescribed
                         setsHtml += `
                             <div class="grid grid-cols-12 gap-1 items-center bg-gray-800/50 rounded px-1 py-0.5 text-xs">
                                 <div class="col-span-1 text-center text-gray-500 font-mono">${i + 1}</div>
@@ -480,6 +488,7 @@
     async function deepExportHistory() {
         if (!historyData || !historyData.records || historyData.records.length === 0)
             return alert('No data to export.');
+        const range = loadedRange || { start: '', end: '' };
         const eligible = historyData.records.filter(r => (TYPE_MAP[r.type] || {}).detailType !== null);
         if (!confirm(`This will fetch full detail for ${eligible.length} workout(s). Continue?`)) return;
 
@@ -505,17 +514,14 @@
 
         const exportObj = {
             exportDate: new Date().toISOString(),
-            dateRange: {
-                start: document.getElementById('startDate').value,
-                end: document.getElementById('endDate').value
-            },
+            dateRange: { start: range.start, end: range.end },
             records: fullDataset
         };
         const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `workout_history_deep_${document.getElementById('startDate').value}_${document.getElementById('endDate').value}.json`;
+        a.download = `workout_history_deep_${range.start}_${range.end}.json`;
         a.click();
         URL.revokeObjectURL(url);
     }
@@ -524,12 +530,10 @@
         if (!historyData || !historyData.records || historyData.records.length === 0) {
             return alert('No data to export.');
         }
+        const range = loadedRange || { start: '', end: '' };
         const exportObj = {
             exportDate: new Date().toISOString(),
-            dateRange: {
-                start: document.getElementById('startDate').value,
-                end: document.getElementById('endDate').value
-            },
+            dateRange: { start: range.start, end: range.end },
             stats: historyData.stats,
             records: historyData.records
         };
@@ -538,7 +542,7 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `workout_history_${document.getElementById('startDate').value}_${document.getElementById('endDate').value}.json`;
+        a.download = `workout_history_${range.start}_${range.end}.json`;
         a.click();
         URL.revokeObjectURL(url);
     }

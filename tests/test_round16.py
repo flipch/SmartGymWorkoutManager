@@ -1330,6 +1330,65 @@ class Round22(unittest.TestCase):
             self.assertNotEqual(self.mcp("autoregulate")(subjective=5, use_stored_readiness=False)["band"], "low")
 
 
+class Round23(unittest.TestCase):
+    def test_classification_reads_words_not_substrings(self):
+        import coach
+        for name, muscle in (("Triceps Kickback", "triceps"), ("Cable Glute Kickback", "glutes"), ("Narrow Grip Push-Up", "chest"),
+                             ("Upright Row", "shoulders"), ("Seated Cable Row", "back"), ("Bent-Over Rows", "back")):
+            self.assertEqual(coach.classify_exercise(name)[0], muscle, name)
+        for name in ("Medicine Ball Throw", "Rowing Machine"):
+            self.assertNotEqual(coach.classify_exercise(name)[0], "back", name)
+        library = [{"id": 1, "title": "Cable Glute Kickback", "mainMuscleGroupName": "Glutes", "isLeftRight": 0},
+                   {"id": 2, "title": "Triceps Kickback", "mainMuscleGroupName": "Triceps", "isLeftRight": 0}]
+        self.assertEqual(features.resolve_exercise(library, "Triceps Kickback")["groupId"], 2)
+
+    def test_a_drop_set_gives_no_e1rm_but_still_counts_for_the_pr(self):
+        drop = lambda day: {"date": day, "exercises": [{"name": "Bench Press", "sets": [
+            {"reps": 10, "weight": [100, 20], "weight_note": "1x100, 9x20", "weight_max": 100}]}]}
+        steady = lambda day: {"date": day, "exercises": [{"name": "Bench Press", "sets": [{"reps": 10, "weight": 50}]}]}
+        def run(*sessions):
+            with mock.patch.object(features, "_detailed_records", return_value=[{"trainingId": i} for i, _ in enumerate(sessions)]), \
+                    mock.patch.object(features, "fetch_session_detail", side_effect=list(sessions)), mock.patch.object(features, "_history", return_value=[]):
+                return features._deep_insights()
+        out = run(drop("2026-10-20"), drop("2026-10-21"))
+        self.assertEqual(out["lifts"], [])
+        self.assertEqual(out["prs"][0]["weight"], 100)
+        self.assertEqual(len(run(steady("2026-10-20"), steady("2026-10-21"))["lifts"]), 1)  # a plain set still gives an e1RM
+
+    def test_the_validator_and_the_builder_agree_on_odd_values(self):
+        client = client_with(1, True)
+        for key, value in (("rest", []), ("rest", {}), ("rest", float("inf"))):
+            broken = ex(10)
+            broken["sets"] = [{"reps": 10, "weight": 5, key: value}]
+            with self.assertRaises(ValueError, msg=repr(value)):
+                client.prepare_workout("n", [broken])
+        with self.assertRaises(ValueError):
+            client.prepare_workout("n", [ex(10, preset_id=float("inf"))])
+
+    def test_pages_cannot_be_framed(self):
+        resp = gym_app.app.test_client().get("/api/insights", headers=BASIC)
+        self.assertEqual(resp.headers.get("X-Frame-Options"), "DENY")
+        self.assertIn("frame-ancestors 'none'", resp.headers.get("Content-Security-Policy", ""))
+
+    def test_a_detail_outage_is_a_502_and_a_variantless_exercise_is_a_message(self):
+        with mock.patch.object(features, "_authed", return_value=True), mock.patch.object(features, "_detailed_records", return_value=[{"trainingId": 1}]), \
+                mock.patch.object(features, "fetch_session_detail", side_effect=api_client.UpstreamError("down")):
+            resp = gym_app.app.test_client().get("/api/last_workout", headers=BASIC)
+        self.assertEqual((resp.status_code, resp.get_json()["error"]), (502, "fetch_failed"))
+        creds = {"token": "x", "user_id": "42", "unit": 1, "unit_confirmed": True, "region": "Global", "device_type": 1}
+        with mock.patch.object(gym_app.client, "credentials", creds), mock.patch.object(gym_app.client, "load_config", return_value=creds), \
+                mock.patch.object(gym_app.client, "get_exercise_detail", return_value={"id": 5, "actionLibraryList": []}):
+            resp = gym_app.app.test_client().get("/exercise/5", headers=BASIC)
+        self.assertEqual(resp.status_code, 302)
+
+    def test_a_failed_deep_load_is_named_in_the_note(self):
+        with mock.patch.object(features, "_authed", return_value=True), mock.patch.object(features, "_history", return_value=[]), \
+                mock.patch.object(features, "_deep_insights", side_effect=RuntimeError("x")):
+            out = gym_app.app.test_client().get("/api/insights", headers=BASIC).get_json()
+        self.assertEqual(out["deep_error"], "RuntimeError")
+        self.assertIn("could not be loaded", out["data_note"])
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

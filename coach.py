@@ -448,6 +448,7 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
 # Real Speediance names ("Barbell Romanian Deadlift", "Seated Dual-Handle Row") don't match
 # the CATALOG, so critique + insights classify by keyword. Order matters: most specific first.
 CLASSIFY_RULES = [
+    (("triceps kickback", "tricep kickback", "triceps kick-back"), ("triceps", "v_push")),
     (("face pull", "rear delt", "rear-delt", "reverse fly", "reverse cable fly", "rear fly",
       "reverse pec", "bent-over fly", "bent over fly"), ("rear_delts", "h_pull")),
     (("romanian deadlift", "rdl", "stiff-leg", "stiff leg", "good morning", "pull-through",
@@ -459,10 +460,11 @@ CLASSIFY_RULES = [
     (("calf", "calve", "soleus", "gastroc", "toe raise"), ("calves", "knee")),
     (("lat pulldown", "pulldown", "pull-down", "pull-up", "pull up", "pullup", "chin-up",
       "chin up", "straight arm", "straight-arm", "pullover"), ("back", "v_pull")),
-    (("row", "t-bar", "t bar"), ("back", "h_pull")),
     (("lateral raise", "lat raise", "side raise", "side delt", "y-raise"), ("shoulders", "v_push")),
     (("overhead press", "shoulder press", "military press", "arnold", "ohp", "upright row",
       "delt", "shoulder"), ("shoulders", "v_push")),
+    # after the shoulder rules: "Upright Row" trains the shoulders
+    (("row", "t-bar", "t bar"), ("back", "h_pull")),
     (("shrug", "trap raise", "trapezius"), ("traps", "v_pull")),
     (("preacher", "hammer curl", "concentration curl", "ez curl", "bicep", "biceps", "curl"), ("biceps", "h_pull")),
     (("triceps pushdown", "tricep pushdown", "pushdown", "triceps extension", "tricep extension",
@@ -501,7 +503,7 @@ def classify_exercise(name, api_muscle=None):
     muscle = _MUSCLE_TAG_MAP.get((api_muscle or "").lower().strip()) if api_muscle else None
     pattern = None
     for keys, (mus, pat) in CLASSIFY_RULES:
-        if any(k in n for k in keys):
+        if any((re.search(r"\brows?\b", n) if k == "row" else k in n) for k in keys):  # not "narrow" or "throw"
             if muscle is None:
                 muscle = mus
             pattern = pat

@@ -532,9 +532,14 @@
         document.getElementById('scheduleBtn').classList.remove('hidden');
     }
 
+    let scheduleInFlight = false;
     async function confirmSchedule() {
         const date = document.getElementById('scheduleDate').value;
-        if (!date || !currentCourseId) return;
+        if (!date || !currentCourseId || scheduleInFlight) return;  // a double click must not book twice
+        scheduleInFlight = true;
+        try { await confirmScheduleOnce(date); } finally { scheduleInFlight = false; }
+    }
+    async function confirmScheduleOnce(date) {
 
         const resultEl = document.getElementById('scheduleResult');
         resultEl.classList.remove('hidden');

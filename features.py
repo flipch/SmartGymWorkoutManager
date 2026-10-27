@@ -213,7 +213,7 @@ def _deep_insights(days=90, max_sessions=24):
             for s in ex.get("sets", []):
                 w, reps = _set_weight(s), (s.get("reps") or 0)
                 mw = max(mw, w)
-                if w > 0 and reps > 0:
+                if w > 0 and reps > 0 and not s.get("weight_note"):  # a drop set's reps were not all at the peak: no e1RM from it
                     e = _epley(w, reps)
                     if best is None or e > best:
                         best = e
@@ -313,6 +313,7 @@ def api_insights():
             out.update(_deep_insights(90))
         except Exception as e:
             out["deep_error"] = type(e).__name__
+            out["data_note"] = f"Detailed analytics could not be loaded ({type(e).__name__}); the session counts above are from the history list only."
     return jsonify(out)
 
 
@@ -485,6 +486,7 @@ function spark(series){const v=series.map(p=>p.e1rm),w=130,h=30,n=v.length;if(n<
  document.getElementById('rec').innerHTML=`<span class="pill ${esc(cls)}">${esc(cls.replace('_',' '))}</span><b>${esc(r.unavailable?('Recovery could not be loaded ('+r.unavailable+')'):(r.message||''))}</b>`;
  if(!i.authenticated)return;
  let h='';
+ if(i.deep_error)h+='<div class=warn style="margin:10px 0">⚠ Detailed analytics could not be loaded ('+esc(i.deep_error)+'). The sections below are incomplete, not empty: reload to retry.</div>';
  // 1) volume vs landmarks
  if((i.muscle_volume||[]).length){
   h+='<h2>🎯 Weekly volume vs landmarks <span class=muted>(sets/muscle/wk)</span></h2><div class=panel>';
@@ -1451,4 +1453,7 @@ def api_last_workout():
     if len(recs) < n:
         return jsonify({"error": "not_found",
                         "message": f"Fewer than {n} detailed workouts in the last {days} days."}), 404
-    return jsonify(fetch_session_detail(_client, recs[n - 1]))
+    try:
+        return jsonify(fetch_session_detail(_client, recs[n - 1]))
+    except Exception as e:
+        return jsonify({"error": "fetch_failed", "message": type(e).__name__}), 502

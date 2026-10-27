@@ -121,6 +121,13 @@ _UNIT_BANNER = (b'<div style="background:#92400e;color:#fff;padding:8px 14px;fon
 
 
 @app.after_request
+def no_framing(response):
+    response.headers.setdefault("X-Frame-Options", "DENY")  # the UI deletes workouts and changes the unit: no other site may frame it
+    response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+    return response
+
+
+@app.after_request
 def warn_when_the_unit_is_unset(response):
     """Pages label weights from a default of kg: say so, once, on every page, until a person has chosen the unit."""
     try:
@@ -480,6 +487,10 @@ def exercise_detail(ex_id):
         flash(f"Could not load this exercise ({type(e).__name__}).", "error")
         return redirect(url_for('library'))
     
+    if not detail.get('actionLibraryList'):
+        flash("This exercise has no variants to show.", "error")
+        return redirect(url_for('library'))
+
     # 2. Resolve accessories (IDs -> Objects with Image/Name)
     all_accessories = client.get_accessories()
     required_ids = detail.get('accessories', '').split(',')

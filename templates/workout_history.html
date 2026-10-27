@@ -240,7 +240,9 @@
     document.getElementById('start-date').value = formatDateInput(firstDay);
     document.getElementById('end-date').value = formatDateInput(today);
 
+    let historySeq = 0;
     async function fetchHistory() {
+        const seq = ++historySeq;
         const start = document.getElementById('start-date').value;
         const end = document.getElementById('end-date').value;
         const tbody = document.getElementById('history-table-body');
@@ -250,6 +252,7 @@
         try {
             const res = await fetch(`/api/workout_history?start=${start}&end=${end}`);
             const data = await res.json();
+            if (seq !== historySeq) return;  // a newer search was started: this answer is stale
             
             if(data.error) {
                 alert("Error: " + data.error);
@@ -383,8 +386,9 @@
     // 3. Deep Export (The Data Analyst Feature)
     async function deepExport() {
         if (!currentHistoryData.length) return alert("No records to export.");
+        const records = currentHistoryData.slice();  // a new search during the export must not mix two ranges into one file
         
-        if(!confirm(`This will perform ${currentHistoryData.length} API calls. Continue?`)) return;
+        if(!confirm(`This will perform ${records.length} API calls. Continue?`)) return;
 
         const btn = document.getElementById('deep-export-btn');
         const originalText = btn.innerHTML;
@@ -398,12 +402,12 @@
 
         document.getElementById('export-container').classList.add('hidden');
 
-        for (let i = 0; i < currentHistoryData.length; i++) {
-            const summary = currentHistoryData[i];
+        for (let i = 0; i < records.length; i++) {
+            const summary = records[i];
             const targetId = summary.trainingId;
             const type = summary.type; // Capture Type
 
-            btn.innerHTML = `<span class="animate-pulse">Fetching ${i + 1}/${currentHistoryData.length}...</span>`;
+            btn.innerHTML = `<span class="animate-pulse">Fetching ${i + 1}/${records.length}...</span>`;
             
             if (targetId) {
                 try {
@@ -430,6 +434,12 @@
             await new Promise(r => setTimeout(r, 50));
         }
         
+        if (successCount === 0) {  // nothing but error entries is not an export
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            btn.classList.remove('opacity-50', 'cursor-not-allowed');
+            return alert('Export failed: no workout detail could be fetched (' + failCount + ' of ' + records.length + ' failed). Try again.');
+        }
         const exportBox = document.getElementById('export-textarea');
         exportBox.value = JSON.stringify(fullDataset, null, 2);
 

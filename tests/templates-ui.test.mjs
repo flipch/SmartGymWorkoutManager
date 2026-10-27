@@ -133,7 +133,7 @@ function browse(fetchImpl, now) {
     vm.createContext(ctx);
     vm.runInContext('let currentCourseId = null;', ctx);
     const code = between(src, 'function openCourseDetailById', '    function cancelSchedule()')
-        + between(src, 'async function confirmSchedule', '    // ── Modal helpers');
+        + between(src, 'let scheduleInFlight', '    // ── Modal helpers');
     vm.runInContext(code + '\nglobalThis.api = { openCourseDetailById, showScheduleDate, confirmSchedule, current: () => currentCourseId };', ctx);
     return { ctx, doc };
 }
@@ -523,23 +523,47 @@ test('workout history: a failed detail is a message, never a copied or downloade
 
 test('workout history: the deep export marks a failed record instead of storing the error as its detail', async () => {
     const { ctx, doc } = historyActions('workout_history.html', 'async function deepExport', '    function copyExportArea', {
-        currentHistoryData: [{ trainingId: 5, type: 5 }],
-        fetch: async () => ({ ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }),
+        currentHistoryData: [{ trainingId: 5, type: 5 }, { trainingId: 6, type: 5 }],
+        fetch: async (url) => (url.includes('/6?') ? { ok: true, status: 200, json: async () => ({ code: 0 }) }
+                                                    : { ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }),
     });
     await ctx.deepExport();
     const rows = JSON.parse(doc.getElementById('export-textarea').value);
     assert.equal(rows[0].detail, undefined);
     assert.match(rows[0].error, /Failed/);
+    assert.deepEqual(plain(rows[1].detail), { code: 0 });
+});
+
+test('workout history: an export in which every detail failed is not offered as ready', async () => {
+    const { ctx, doc, calls } = historyActions('workout_history.html', 'async function deepExport', '    function copyExportArea', {
+        currentHistoryData: [{ trainingId: 5, type: 5 }],
+        fetch: async () => ({ ok: false, status: 401, json: async () => ({ error: 'Unauthorized' }) }),
+    });
+    await ctx.deepExport();
+    assert.equal(doc.getElementById('export-textarea').value, '');
+    assert.ok(calls.some((c) => c[0] === 'alert' && /Export failed/.test(c[1])));
+});
+
+test('workout history: a search during the export cannot mix two ranges into one file', async () => {
+    const seen = [];
+    const { ctx, doc } = historyActions('workout_history.html', 'async function deepExport', '    function copyExportArea', {
+        currentHistoryData: [{ trainingId: 1, type: 5 }, { trainingId: 2, type: 5 }],
+        fetch: async (url) => { seen.push(url); ctx.currentHistoryData = [{ trainingId: 99, type: 5 }]; return { ok: true, status: 200, json: async () => ({}) }; },
+    });
+    await ctx.deepExport();
+    assert.deepEqual(seen.map((u) => /detail\/(\d+)/.exec(u)[1]), ['1', '2']);
+    assert.deepEqual(JSON.parse(doc.getElementById('export-textarea').value).map((r) => r.summary.trainingId), [1, 2]);
 });
 
 test('history: the deep export marks a failed record instead of storing the error as its detail', async () => {
     const { ctx, calls } = historyActions('history.html', 'async function deepExportHistory', '    function exportHistory', {
-        historyData: { records: [{ trainingId: 5, type: 5 }], start: 'a', end: 'b' },
+        historyData: { records: [{ trainingId: 5, type: 5 }], start: 'a', end: 'b' }, loadedRange: { start: '2026-09-01', end: '2026-09-30' },
         fetch: async () => ({ ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }),
     });
     await ctx.deepExportHistory();
     const blob = calls.find((c) => c[0] === 'blob');
     const rows = JSON.parse(blob[1]).records;
+    assert.deepEqual(plain(JSON.parse(blob[1]).dateRange), { start: '2026-09-01', end: '2026-09-30' });  // the range LOADED, not what the inputs say now
     assert.equal(rows[0].detail, null);
     assert.match(rows[0].error, /history_unavailable/);
 });
@@ -790,4 +814,190 @@ test('an older calendar failure does not replace the newer calendar', async () =
     answers[0].reject(new Error('network')); await first;
     assert.equal(doc.getElementById('calendarGrid').innerHTML, 'NEWER');
     assert.equal(drawn.length, 1);
+});
+
+// ----------------------------------------------------------------------------------------------- round 23
+const aSet = (over = {}) => ({ reps: 10, weight: 40, rest: 60, ...over });
+
+test('an editor whose template failed to load refuses to save, add or import', async () => {
+    const { ctx, doc, calls } = editor(() => ({ ...metaOf(), failed: true }));
+    const src = read('create.html');
+    vm.runInContext(between(src, 'async function addExerciseToPlan', '    // --- ').replace('async function addExerciseToPlan', 'globalThis.addExerciseToPlan = async function addExerciseToPlan'), ctx);
+    await ctx.loadExistingWorkout({ name: 'n', actionLibraryList: [apiExercise()] });
+    assert.equal(ctx.workoutData.length, 0);
+    await ctx.window.saveWorkout();
+    await ctx.addExerciseToPlan(7, 'Press', '');
+    await importJson(ctx, doc, { name: 'x', exercises: [{ id: 5, sets: [aSet()] }] });
+    assert.equal(calls.filter((c) => c[0] === 'fetch').length, 0);
+    assert.equal(ctx.workoutData.length, 0);
+    assert.equal(calls.filter((c) => c[0] === 'alert' && /could not be loaded, so editing is disabled/.test(c[1])).length, 3);
+});
+
+test('an import cannot run while the existing template is still loading', async () => {
+    let release;
+    const slow = new Promise((r) => { release = r; });
+    const { ctx, doc, calls } = editor(() => slow.then(() => metaOf()));
+    const loading = ctx.loadExistingWorkout({ name: 'n', actionLibraryList: [apiExercise()] });
+    await importJson(ctx, doc, { name: 'x', exercises: [{ id: 5, sets: [aSet()] }] });
+    assert.ok(calls.some((c) => c[0] === 'alert' && /still loading/.test(c[1])));
+    release(); await loading;
+    assert.equal(ctx.workoutData.length, 1);
+    assert.equal(ctx.workoutData[0].title, 'T');  // the loaded template, not the import
+});
+
+test('an import refuses missing weights, unknown presets and empty plans, and holds weights to the machine', async () => {
+    const run = async (exercises, meta = metaOf()) => {
+        const e = editor(() => meta);
+        e.ctx.userUnit = 0;
+        e.ctx.workoutData = planWith(1);
+        await importJson(e.ctx, e.doc, { name: 'x', exercises });
+        return e;
+    };
+    for (const weight of ['bodyweight', '', null, undefined, -5, 0]) {
+        const e = await run([{ id: 5, sets: [aSet({ weight })] }]);
+        assert.equal(e.ctx.workoutData[0].title, 'old0', String(weight));
+        assert.ok(e.calls.some((c) => c[0] === 'alert' && /needs a weight above 0/.test(c[1])), String(weight));
+    }
+    let e = await run([{ id: 5, presetId: 99, sets: [aSet()] }]);
+    assert.ok(e.calls.some((c) => c[0] === 'alert' && /preset 99 is not available/.test(c[1])));
+    e = await run([]);
+    assert.ok(e.calls.some((c) => c[0] === 'alert' && /no exercises/.test(c[1])));
+    assert.equal(e.ctx.workoutData[0].title, 'old0');
+    e = await run([{ id: 5, sets: [aSet({ weight: 2 }), aSet({ weight: 500 }), aSet({ weight: 40 })] }]);
+    same(e.ctx.workoutData[0].sets.map((s) => s.weight), [3.5, 100, 40]);
+    assert.ok(e.calls.some((c) => c[0] === 'alert' && /2 weight value\(s\)/.test(c[1])));
+    e = await run([{ id: 5, sets: [aSet({ weight: 0, unit: 'sec', reps: 60 })] }]);
+    assert.equal(e.ctx.workoutData[0].sets[0].weight, 0);  // a timed set may carry no load
+    e = await run([{ id: 5, sets: [aSet({ weight: 50 })] }], metaOf({ dataStatType: 6 }));
+    assert.equal(e.ctx.workoutData[0].sets[0].weight, 10);  // a Vita level tops out at 10
+    e = await run([{ id: 5, presetId: 1, sets: [aSet({ weight: 11 })] }], metaOf({ presets: [{ id: 1 }, { id: 3 }] }));
+    assert.equal(e.ctx.workoutData[0].selectedPresetId, 1);
+});
+
+test('adding a Vita exercise starts at a mid level, whatever the recommended cable weight', async () => {
+    const { ctx } = editor(() => metaOf({ dataStatType: 6, recommendedWeight: 25 }));
+    const src = read('create.html');
+    vm.runInContext(between(src, 'async function addExerciseToPlan', '    // --- ').replace('async function addExerciseToPlan', 'globalThis.addExerciseToPlan = async function addExerciseToPlan'), ctx);
+    await ctx.addExerciseToPlan(7, 'Vita', '');
+    assert.equal(ctx.workoutData[0].sets[0].weight, 5);
+});
+
+test('changing the preset keeps a timed hold and a Vita level', () => {
+    const src = read('create.html');
+    const ctx = { workoutData: [], getRules: (ex) => WorkoutLogic.getRules(ex, 0), renderBuilder() {}, window: {} };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'window.updateEx = ', '    window.updateSet') + '\n', ctx);
+    ctx.workoutData = [{ selectedPresetId: -1, dataStatType: 6, sets: [{ reps: 8, weight: 3, rest: 30, unit: 'reps' }] },
+                       { selectedPresetId: -1, dataStatType: null, sets: [{ reps: 60, weight: 20, rest: 30, unit: 'sec' }, { reps: 8, weight: 20, rest: 30, unit: 'reps' }] }];
+    ctx.window.updateEx(0, 'selectedPresetId', '1');
+    ctx.window.updateEx(1, 'selectedPresetId', '1');
+    assert.equal(ctx.workoutData[0].sets[0].weight, 3);
+    assert.equal(ctx.workoutData[1].sets[0].reps, 60);
+    assert.notEqual(ctx.workoutData[1].sets[1].reps, 8);
+    assert.notEqual(ctx.workoutData[1].sets[0].weight, 20);
+});
+
+test('a save that gets no valid answer says so', async () => {
+    const { ctx, calls } = editor(() => metaOf());
+    ctx.workoutData = [{ groupId: 5, selectedVariantId: null, selectedPresetId: -1, dataStatType: null, completionMethod: null, selectCompletionMethod: null,
+                         sets: [{ reps: 10, weight: 40, unit: 'reps', rest: 60 }] }];
+    ctx.fetch = async () => { throw new Error('offline'); };
+    await ctx.window.saveWorkout();
+    assert.ok(calls.some((c) => c[0] === 'alert' && /Could not save/.test(c[1])));
+});
+
+test('history: only the newest range loads, and an export is named for the range that was loaded', async () => {
+    const src = read('history.html');
+    const doc = makeDocument();
+    const waiting = [];
+    const ctx = { document: doc, console, alert() {}, window: { location: {} }, JSON, historyData: 'old',
+                  fetch: () => new Promise((resolve) => waiting.push(resolve)), renderHistory: (d) => { ctx.drawn = d; } };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'let historySeq', '    function renderHistory') + '\nglobalThis.fetchHistory = fetchHistory; globalThis.range = () => loadedRange;', ctx);
+    doc.getElementById('startDate').value = '2026-09-01'; doc.getElementById('endDate').value = '2026-09-30';
+    const a = ctx.fetchHistory();
+    doc.getElementById('startDate').value = '2026-10-01'; doc.getElementById('endDate').value = '2026-10-31';
+    const b = ctx.fetchHistory();
+    assert.equal(ctx.historyData, null);  // nothing stale stays exportable while a load is in flight
+    waiting[1]({ ok: true, status: 200, json: async () => ({ records: ['oct'] }) }); await b;
+    waiting[0]({ ok: true, status: 200, json: async () => ({ records: ['sep'] }) }); await a;
+    same(ctx.historyData, { records: ['oct'] });
+    same(ctx.range(), { start: '2026-10-01', end: '2026-10-31' });
+});
+
+test('history detail shows the time that was held, not the time that was prescribed', () => {
+    assert.match(read('history.html'), /const dur = s\.time \|\| s\.targetCount \|\| 0;/);
+});
+
+test('a double click on Schedule books once', async () => {
+    const posts = [];
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const { ctx, doc } = browse((url, opts) => { if (opts) posts.push(opts.body); return gate.then(() => ({ ok: true, status: 200, json: async () => ({ success: true }) })); });
+    ctx.api.openCourseDetailById(101, 'A', 10);
+    doc.getElementById('scheduleDate').value = '2026-11-01';
+    const one = ctx.api.confirmSchedule();
+    const two = ctx.api.confirmSchedule();
+    release(); await Promise.all([one, two]);
+    assert.equal(posts.length, 1);
+});
+
+test('the workout history page ignores a stale search', async () => {
+    const src = read('workout_history.html');
+    const doc = makeDocument();
+    const waiting = [];
+    const ctx = { document: doc, console, alert() {}, JSON, currentHistoryData: [], renderTable: (d) => { ctx.drawn = d; },
+                  fetch: () => new Promise((resolve) => waiting.push(resolve)) };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'let historySeq', '    function renderTable') + '\nglobalThis.fetchHistory = fetchHistory;', ctx);
+    const a = ctx.fetchHistory();
+    const b = ctx.fetchHistory();
+    waiting[1]({ ok: true, json: async () => [{ id: 'new' }] }); await b;
+    waiting[0]({ ok: true, json: async () => [{ id: 'stale' }] }); await a;
+    same(ctx.currentHistoryData, [{ id: 'new' }]);
+});
+
+test('the insights page says when the deep analytics could not be loaded', async () => {
+    const py = fs.readFileSync(path.join(__dirname, '..', 'features.py'), 'utf8');
+    const html = between(py, '_INSIGHTS_HTML = """', '"""\n');
+    const script = between(html, '<script>', '</script>').slice('<script>'.length);
+    const doc = makeDocument();
+    const answers = { '/api/insights': { authenticated: true, deep_error: 'RuntimeError', data_note: 'Detailed analytics could not be loaded (RuntimeError)', unit: 'kg' },
+                      '/api/recovery': { recommendation: 'train', message: 'ok' } };
+    const ctx = { document: doc, console, JSON, Number, Object, Math, Array, fetch: async (u) => ({ ok: true, status: 200, json: async () => answers[u.split('?')[0]] }) };
+    vm.createContext(ctx);
+    vm.runInContext(script, ctx);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.match(doc.getElementById('deep').innerHTML, /Detailed analytics could not be loaded \(RuntimeError\)/);
+});
+
+test('history: an older range that fails after a newer one loaded does not replace it', async () => {
+    const src = read('history.html');
+    const doc = makeDocument();
+    const waiting = [];
+    const ctx = { document: doc, console, alert() {}, window: { location: {} }, JSON, historyData: null,
+                  fetch: () => new Promise((resolve, reject) => waiting.push({ resolve, reject })), renderHistory() {} };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'let historySeq', '    function renderHistory') + '\nglobalThis.fetchHistory = fetchHistory;', ctx);
+    doc.getElementById('startDate').value = '2026-09-01'; doc.getElementById('endDate').value = '2026-09-30';
+    const a = ctx.fetchHistory();
+    const b = ctx.fetchHistory();
+    waiting[1].resolve({ ok: true, status: 200, json: async () => ({ records: ['oct'] }) }); await b;
+    doc.getElementById('emptyState').textContent = 'untouched';
+    waiting[0].reject(new Error('network')); await a;
+    assert.equal(doc.getElementById('emptyState').textContent, 'untouched');
+});
+
+test('the single-range export is named for the range that was loaded', () => {
+    const src = read('history.html');
+    const doc = makeDocument();
+    const anchors = [];
+    doc.createElement = () => { const a = { click() {} }; anchors.push(a); return a; };
+    doc.getElementById('startDate').value = '2026-10-01'; doc.getElementById('endDate').value = '2026-10-31';  // what the inputs say NOW
+    const ctx = { document: doc, console, JSON, alert() {}, Blob: class {}, URL: { createObjectURL: () => 'blob:x', revokeObjectURL() {} },
+                  historyData: { records: [{ id: 1 }], stats: {} }, loadedRange: { start: '2026-09-01', end: '2026-09-30' } };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'function exportHistory', '    // Keyboard shortcuts') + '\nglobalThis.exportHistory = exportHistory;', ctx);
+    ctx.exportHistory();
+    assert.equal(anchors[0].download, 'workout_history_2026-09-01_2026-09-30.json');
 });

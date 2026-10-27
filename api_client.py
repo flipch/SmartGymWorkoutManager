@@ -142,7 +142,7 @@ def validate_workout(name, exercises, imperial=False):
                 number = float(preset)
             except (TypeError, ValueError):
                 number = float("nan")
-            if isinstance(preset, bool) or number != number or number != int(number) or not (number == -1 or 0 <= number <= 1000):
+            if isinstance(preset, bool) or not math.isfinite(number) or number != int(number) or not (number == -1 or 0 <= number <= 1000):
                 raise ValueError(f"exercise {n}: preset_id must be -1 (custom load) or a preset number")
         variant = ex.get('variant_id')
         if variant not in (None, "") and not (str(variant).isdigit() and int(variant) > 0):
@@ -166,7 +166,8 @@ def validate_workout(name, exercises, imperial=False):
                 raise ValueError(f"{where}: reps (or seconds) must be a whole number")
             if int(float(st.get('reps'))) < 1:
                 raise ValueError(f"{where}: reps (or seconds) is required")
-            if _bounded(st.get('rest') or 0, f"{where}: rest", MAX_REST_S) != int(float(st.get('rest') or 0)):
+            raw_rest = st.get('rest')
+            if _bounded(0 if raw_rest in (None, "") else raw_rest, f"{where}: rest", MAX_REST_S) != int(float(0 if raw_rest in (None, "") else raw_rest)):
                 raise ValueError(f"{where}: rest must be a whole number of seconds")
             if st.get('mode') not in (None, ""):
                 mode = _bounded(st['mode'], f"{where}: mode", MAX_MODE)
