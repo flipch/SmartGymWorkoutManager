@@ -216,7 +216,11 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
     for name, rows in _by_exercise(template.sets).items():
         performed = [r for r in rows if r.reps]
         targets = [r.target for r in rows if r.target]
-        reps = Counter(targets).most_common(1)[0][0] if targets else None
+        row_loads = [r.load for r in performed if r.load]
+        mid = float(median(row_loads)) if row_loads else None
+        # a ramp (12 x 20 lb, 10 x 40, 6 x 80) has no one rep target: take the one set(s) at the working load, not the first
+        near = [r.target for r in rows if r.target and r.load and mid and abs(r.load - mid) <= 0.1 * mid]
+        reps = Counter(near or targets).most_common(1)[0][0] if targets else None
         n_sets = len(targets) or len(rows)
         if auto["volume_pct"] < 0:
             pair = 2 if any(r.side for r in rows) else 1  # a one-sided lift is saved in left/right pairs

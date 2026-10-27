@@ -40,7 +40,10 @@ def set_load(set_row: dict) -> float | None:
     chains/eccentric mid-set changes); else capacity/reps; else None. Unit is NOT inferred here."""
     weights = [w for w in _first_nonzero_weights(set_row) if w > 0 and math.isfinite(w)]
     if weights:
-        return float(median(weights))
+        mid = float(median(weights))
+        if min(weights) < 0.5 * mid:  # a drop set: no single load was lifted for the counted reps, so none is an anchor
+            return None
+        return float(mid)
     reps, capacity = _count(set_row.get("finishedCount")) or 0, set_row.get("capacity") or 0
     if isinstance(reps, (int, float)) and isinstance(capacity, (int, float)) and reps > 0 and capacity > 0 and math.isfinite(capacity):
         return round(capacity / reps, 2)

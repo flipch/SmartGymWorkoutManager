@@ -1419,3 +1419,15 @@ test('cancelling the import dialog stops an import that is still fetching', asyn
     same(ctx.workoutData, [{ sentinel: true, edited: true }]);
     assert.equal(doc.getElementById('plan-name').value, 'mine');
 });
+
+test('an unloaded set of a timed exercise imports without a unit in the file', async () => {
+    const tryImport = async (meta, sets) => {
+        const { ctx, doc } = editor(() => meta);
+        ctx.workoutData = [{ sentinel: true }];
+        await importJson(ctx, doc, { name: 'N', exercises: [{ id: 5, sets }] });
+        return ctx.workoutData.length === 1 && ctx.workoutData[0].sentinel ? 'refused' : 'imported';
+    };
+    assert.equal(await tryImport(metaOf({ completionMethod: 2 }), [{ reps: 60, weight: 0, rest: 0 }]), 'imported');
+    assert.equal(await tryImport(metaOf({ completionMethod: 1 }), [{ reps: 10, weight: 0 }]), 'refused');  // a rep exercise still needs a load
+    assert.equal(await tryImport(metaOf({ completionMethod: 1 }), [{ reps: 10, weight: 0, unit: 'sec' }]), 'refused');
+});

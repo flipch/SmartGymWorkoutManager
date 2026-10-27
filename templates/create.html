@@ -1337,7 +1337,7 @@ You must output a JSON object with the following structure:
                                 throw new Error(`exercise ${imported.length + 1} set ${si + 1}: weight must be a plain number`);
                             }
                             const w = parseFloat(String(s.weight ?? '').replace(',', '.'));
-                            if (!Number.isFinite(w) || w < 0 || (w === 0 && String(s.unit || '').toLowerCase() !== 'sec')) {
+                            if (!Number.isFinite(w) || w < 0 || (w === 0 && !/^(sec|)$/i.test(String(s.unit || '').trim()))) {
                                 throw new Error(`exercise ${imported.length + 1} set ${si + 1} needs a weight above 0`);
                             }
                             return w;

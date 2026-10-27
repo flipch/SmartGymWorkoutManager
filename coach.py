@@ -467,6 +467,8 @@ CLASSIFY_RULES = [
     (("leg extension", "leg press", "hack squat", "front squat", "back squat", "goblet squat",
       "split squat", "bulgarian", "lunge", "step-up", "step up", "sissy", "squat", "quad"), ("quads", "squat")),
     (("calf", "calve", "soleus", "gastroc", "toe raise"), ("calves", "knee")),
+    # before the back and triceps rules: "Straight Arm Crunch" and "Tricep Rope Woodchop" are ab work
+    (("crunch", "woodchop", "wood chop", "pallof", "russian twist", "ab wheel"), ("abs", "core")),
     (("lat pulldown", "pulldown", "pull-down", "pull-up", "pull up", "pullup", "chin-up",
       "chin up", "straight arm", "straight-arm", "pullover"), ("back", "v_pull")),
     (("lateral raise", "lat raise", "side raise", "side delt", "y-raise"), ("shoulders", "v_push")),

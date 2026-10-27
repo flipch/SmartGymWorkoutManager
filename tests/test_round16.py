@@ -2227,3 +2227,32 @@ class Round37(unittest.TestCase):
         finally:
             os.chmod(path, 0o600)
         self.assertIn("Cable curl", features._feedback_profile(d)["avoid"])
+
+
+class Round38(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def test_a_drop_set_has_no_single_load_to_anchor_on(self):
+        from harness.normalize import set_load
+        row = lambda w: {"finishedCount": len(w), "capacity": sum(w), "trainingInfoDetail": {"weights": w}}
+        self.assertEqual(set_load(row([60.0] * 10)), 60.0)  # the controls
+        self.assertEqual(set_load(row([40.0, 40.0, 40.0, 20.0, 60.0])), 40.0)  # chains/eccentric swings keep the median
+        self.assertIsNone(set_load(row([60.0] * 6 + [20.0] * 4)))  # six reps at 60 then four at 20 is not ten reps at 60
+
+    def test_a_ramp_is_planned_from_the_set_at_the_working_load(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        ramp = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=(
+            SetResult("Cable Row", reps=12, load=20.0, target=12), SetResult("Cable Row", reps=10, load=40.0, target=10),
+            SetResult("Cable Row", reps=6, load=80.0, target=6)))
+        out = planner._from_template(ramp, self.AUTO, 5.0, date(2026, 10, 26))[0]
+        self.assertEqual(out.reps, 10)  # the 40 lb set's target, not the first set's 12
+
+    def test_ab_work_with_a_straight_arm_or_tricep_rope_in_its_name_is_ab_work(self):
+        import coach
+        for title in ("Straight Arm Barbell Crunch", "Dual-Handle Straight-Arm Reverse Crunch", "Kneeling Tricep Rope Crunch",
+                      "Standing Tricep Rope High-to-Low Woodchops", "Seated Tricep Rope Cross-Body Crunch"):
+            self.assertEqual(coach.classify_exercise(title)[:2], ("abs", "core"), title)
+        self.assertEqual(coach.classify_exercise("Straight Arm Pulldown")[0], "back")  # the control
+        self.assertEqual(coach.classify_exercise("Tricep Rope Pushdown")[0], "triceps")
