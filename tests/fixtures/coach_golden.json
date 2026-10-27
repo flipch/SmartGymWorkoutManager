@@ -21,15 +21,17 @@
    },
    {
     "band": "high",
-    "intensity_pct": 3,
-    "message": "Well recovered \u2014 proceed or push; high-CNS lifts OK.",
-    "overrides": [],
+    "intensity_pct": 0,
+    "message": "Recovery looks good \u2014 train the program as written. WHOOP recovery is a soft veto (not validated for strength training): a high score never adds volume or load.",
+    "overrides": [
+     "WHOOP is a soft veto only: a high score does not raise volume or intensity above the program"
+    ],
     "rir_min": 1,
-    "session": "push",
+    "session": "as_planned",
     "signals": [
      "Whoop recovery 90%"
     ],
-    "volume_pct": 10
+    "volume_pct": 0
    }
   ],
   [
@@ -38,15 +40,17 @@
    },
    {
     "band": "high",
-    "intensity_pct": 3,
-    "message": "Well recovered \u2014 proceed or push; high-CNS lifts OK.",
-    "overrides": [],
+    "intensity_pct": 0,
+    "message": "Recovery looks good \u2014 train the program as written. WHOOP recovery is a soft veto (not validated for strength training): a high score never adds volume or load.",
+    "overrides": [
+     "WHOOP is a soft veto only: a high score does not raise volume or intensity above the program"
+    ],
     "rir_min": 1,
-    "session": "push",
+    "session": "as_planned",
     "signals": [
      "Whoop recovery 67%"
     ],
-    "volume_pct": 10
+    "volume_pct": 0
    }
   ],
   [

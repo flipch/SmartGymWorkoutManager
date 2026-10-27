@@ -605,14 +605,40 @@ READINESS_KEYS = ("whoop_recovery", "hrv_vs_baseline", "rhr_delta_bpm",
                   "sleep_hours", "subjective", "acwr")
 
 
-def save_readiness(payload, data_dir=None):
-    """Persist a validated readiness payload (Whoop/Apple Health/subjective). Raises ValueError (field name only)
-    for a bad value, so a typo can never reach the autoregulator."""
+def save_readiness(payload, data_dir=None, *, measured_at=None):
+    """Persist a validated readiness payload (Whoop/subjective/manual). Raises ValueError (field name only)
+    for a bad value, so a typo can never reach the autoregulator.
+
+    `payload` may carry `source` ("whoop" or "manual"), stored beside the per-field timestamp. `measured_at` ({field: datetime},
+    in-process callers only: the WHOOP pull) stamps a field with when it was MEASURED, not when it was posted, so a repeated
+    pull cannot keep a day-old score "fresh"; a field whose measurement is older than the one already stored (or older than
+    the freshness window) is skipped, so a later manual entry is never overwritten by an older WHOOP reading."""
+    return save_readiness_report(payload, data_dir, measured_at=measured_at)[0]
+
+
+def save_readiness_report(payload, data_dir=None, *, measured_at=None):
+    """save_readiness, returning (stored, skipped) where skipped maps field -> why it was not written."""
+    payload, source = state_io.split_source(payload)
     keep = state_io.require_readiness(payload)  # a typo beside a valid field would otherwise drop the intended signal
+    measured = _check_measured(measured_at, keep)
     path = _readiness_path(data_dir)
     with state_io.file_lock(path + ".lock"):  # the web app and the MCP server both write: read-merge-write is one step
         _settle_unreadable_readiness(path)
-        return _merge_readiness(keep, path, data_dir)
+        return _merge_readiness(keep, path, data_dir, source, measured)
+
+
+def _check_measured(measured_at, keep):
+    if measured_at is None:
+        return {}
+    out = {}
+    now = datetime.now(timezone.utc)
+    for k, when in dict(measured_at).items():
+        if k not in keep or not isinstance(when, datetime) or when.tzinfo is None:
+            raise ValueError("invalid measured_at: a timezone-aware time for a field being saved")
+        if when > now + timedelta(minutes=5):
+            raise ValueError(f"invalid measured_at: {k} is in the future")
+        out[k] = when.astimezone(timezone.utc)
+    return out
 
 
 def _settle_unreadable_readiness(path):
@@ -631,19 +657,76 @@ def _settle_unreadable_readiness(path):
     state_io.quarantine(path)
 
 
-def _merge_readiness(keep, path, data_dir):
-    now = state_io.utc_stamp()
-    # "any subset" is the documented use (separate WHOOP and Apple Health shortcuts): a later partial post must not erase
+def _merge_readiness(keep, path, data_dir, source=None, measured=None):
+    now_dt = datetime.now(timezone.utc)
+    now = state_io.utc_stamp(now_dt)
+    stored = _load_readiness(data_dir)
+    # "any subset" is the documented use (separate WHOOP and manual posts): a later partial post must not erase
     # an earlier red signal, so recent fields from earlier posts are kept, each with its own age
-    carried = _fresh_fields(_load_readiness(data_dir))
+    carried = _fresh_fields(stored)
     merged = {k: v for k, v in carried.items() if not k.endswith("__ts")}
     stamps = {k: carried[f"{k}__ts"] for k in merged}
-    merged.update(keep)
-    stamps.update({k: now for k in keep})
+    sources = state_io.clean_sources(stored.get("field_source"), merged)
+    skipped, written = {}, 0
+    for k, v in keep.items():
+        stamp = now
+        when = (measured or {}).get(k)
+        if when is not None:
+            if (now_dt - when).total_seconds() / 3600 > state_io.READINESS_MAX_AGE_H:
+                skipped[k] = "older than the freshness window"
+                continue
+            have = state_io.parse_stamp(stamps.get(k))
+            if have is not None and have > when:
+                skipped[k] = "a newer reading is already stored"
+                continue
+            stamp = state_io.utc_stamp(when)
+        merged[k] = v
+        stamps[k] = stamp
+        written += 1
+        if source:
+            sources[k] = source
+        else:
+            sources.pop(k, None)  # a value posted without a source must not keep the old value's source
+    if not written:
+        return (_load_readiness(data_dir) or merged), skipped  # nothing was written: the file stays as it was
     merged["updated"] = now
     merged["field_updated"] = {k: stamps[k] for k in READINESS_KEYS if k in merged and k in stamps}
+    kept_sources = {k: sources[k] for k in READINESS_KEYS if k in merged and k in sources}
+    if kept_sources:
+        merged["field_source"] = kept_sources  # absent when no field has a known source: the file stays what older versions wrote
+    else:
+        merged.pop("field_source", None)
     state_io.atomic_write_json(path, merged)
-    return merged
+    return merged, skipped
+
+
+def _signal_values(stored):
+    return {k: stored[k] for k in state_io.READINESS_SIGNALS if isinstance(stored, dict) and k in stored}
+
+
+def readiness_signals(stored, now=None):
+    """Every signal in a stored reading as the Coach page shows it: value, source (whoop|manual|None for a reading stored
+    before provenance existed), when it was stamped, its age, and whether that age is past the freshness window (a stale
+    signal is ignored by the coach). A hand-edited file cannot inject a bad value or an unknown source."""
+    stored = stored if isinstance(stored, dict) else {}
+    now = now or datetime.now(timezone.utc)
+    stamps = stored.get("field_updated") if isinstance(stored.get("field_updated"), dict) else {}
+    sources = state_io.clean_sources(stored.get("field_source"), READINESS_KEYS)
+    out = []
+    for k in READINESS_KEYS:
+        if k not in stored:
+            continue
+        try:
+            value = state_io.validate_readiness({k: stored[k]})[k]
+        except ValueError:
+            continue
+        stamp = stamps.get(k) or stored.get("updated")
+        when = state_io.parse_stamp(stamp)
+        age = None if when is None else (now - when).total_seconds() / 3600
+        out.append({"key": k, "value": value, "source": sources.get(k),
+                    "updated": stamp if when else None, "age_hours": None if age is None else round(age, 1),
+                    "stale": age is None or age > state_io.READINESS_MAX_AGE_H or age < -1})
+    return out
 
 
 def readiness_age_hours(stored, now=None):
@@ -738,7 +821,8 @@ def coach_readiness():
             return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
         except Exception as e:
             return jsonify({"error": "could_not_store", "message": type(e).__name__}), 500
-        return jsonify({"stored": keep, "adjustment": coach.autoregulate(keep)})
+        return jsonify({"stored": keep, "adjustment": coach.autoregulate(_signal_values(keep)),
+                        "signals": readiness_signals(keep), "max_age_hours": state_io.READINESS_MAX_AGE_H})
     unreadable = _readiness_read_error()
     if unreadable:  # a corrupt file is not "no reading": "Train as planned" could hide a red score
         return jsonify({"error": "readiness_unreadable", "message": f"The stored readiness could not be read ({unreadable}); "
@@ -748,7 +832,8 @@ def coach_readiness():
     usable = _fresh_readiness()  # per-field freshness, the same rule program generation uses
     stale = bool(stored) and not usable
     return jsonify({"stored": stored, "age_hours": None if age is None else round(age, 1), "stale": stale,
-                    "adjustment": coach.autoregulate(usable)})
+                    "adjustment": coach.autoregulate(usable), "signals": readiness_signals(stored),
+                    "max_age_hours": state_io.READINESS_MAX_AGE_H})
 
 
 @features_bp.route('/api/coach/autoregulate', methods=['POST'])
@@ -831,6 +916,8 @@ def coach_program():
         )
     except (TypeError, ValueError, AttributeError, KeyError, OverflowError):
         return jsonify({"error": "bad_request", "message": "Invalid program parameters."}), 400
+    if body.get("apply_readiness") is True and prog.get("autoregulation"):
+        prog = coach.apply_readiness(prog, prog["autoregulation"])  # reduce-only: the program stays the ceiling
     if feedback_error:  # the stored pain/avoid list could not be read: say so instead of silently dropping it
         prog["feedback_error"] = feedback_error
     if readiness_error:
@@ -1217,7 +1304,7 @@ def program_day_to_payload(library, day, load_unit=None, imperial=False, avoid=f
     for e in todo:
         r = resolve_exercise(library, e.get("name", ""), e.get("primary"), e.get("unilateral"))
         if not r:
-            unresolved.append({"name": e.get("name"), "muscle": e.get("primary")})
+            unresolved.append({"name": e.get("name"), "muscle": e.get("primary"), "reason": "not found in your exercise library"})
             continue
         if r.get("confidence") == "low":  # a wrong exercise is worse than a missing one: report it, do not save it
             unresolved.append({"name": e.get("name"), "muscle": e.get("primary"),
