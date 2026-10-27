@@ -250,6 +250,8 @@ def _stem(token):
     """Plural and hyphen insensitive: 'lunges' = 'lunge', 'split-squats' = 'split squat'."""
     if token in ("flye", "flyes", "flys"):  # fly, flye, flyes, flies: one movement
         return "fly"
+    if token == "calves":
+        return "calf"
     if len(token) > 3 or token == "ups":  # push-ups, pull-ups, chin-ups; "abs" and "lats" stay as they are
         if token.endswith("sses"):
             return token[:-2]
@@ -280,7 +282,12 @@ def _is_avoided(name, avoid):
         w = a.split()
         return bool(w) and any(words[i:i + len(w)] == w for i in range(len(words) - len(w) + 1))
     compact = n.replace(" ", "")  # "Lat Pull-Down" and "Lat Pulldown" are one exercise
-    return any(a == n or (len(a) >= 4 and a in n) or as_words(a) or a.replace(" ", "") == compact
+    have = set(words)
+
+    def every_word(a):  # "Seated Row" rules out "Seated Cable Row": the words need not be next to each other
+        w = a.split()
+        return len(w) >= 2 and all(x in have for x in w)
+    return any(a == n or (len(a) >= 4 and a in n) or as_words(a) or every_word(a) or a.replace(" ", "") == compact
                or (len(a.replace(" ", "")) >= 5 and a.replace(" ", "") in compact) for a in avoid)
 
 

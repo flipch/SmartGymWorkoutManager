@@ -2766,3 +2766,14 @@ class Round48(unittest.TestCase):
             ok = c.post("/settings/custom_instruction", headers=BASIC, json={"instruction": ""})  # clearing it on purpose still works
         self.assertEqual(ok.status_code, 200)
         saver.assert_called_once()
+
+
+class Round49(unittest.TestCase):
+    def test_an_avoid_entry_matches_when_all_its_words_are_in_the_name_and_calves_are_calf(self):
+        import coach
+        for entry, title in (("Seated Row", "Seated Cable Row"), ("chest press", "Incline Cable Chest Press"), ("cable curl", "Cable Hammer Curl"),
+                             ("calves", "Standing Calf Raise"), ("Calf Raise", "Seated Calves Raise")):
+            self.assertTrue(coach._is_avoided(title, {coach._norm_name(entry)}), (entry, title))
+        for entry, title in (("Seated Row", "Seated Leg Curl"), ("leg press", "Leg Extension"), ("row", "Arrow Press"), ("chest press", "Chest Fly")):
+            self.assertFalse(coach._is_avoided(title, {coach._norm_name(entry)}), (entry, title))
+        self.assertEqual(coach._stem("calves"), "calf")
