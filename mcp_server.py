@@ -25,7 +25,7 @@ ArgModelBase.model_config = {**ArgModelBase.model_config, "extra": "forbid"}
 import coach
 import state_io
 from auth import BearerAuthASGI, load_token, writes_enabled
-from api_client import SpeedianceClient, UpstreamError, unit_is_confirmed
+from api_client import SpeedianceClient, UpstreamError, _check_template_id, unit_is_confirmed
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize, valid_iso_date, valid_record_id
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
@@ -167,8 +167,9 @@ def schedule_workout(day: str, template_code: str, add: bool = True) -> dict:
     `day` is 'YYYY-MM-DD'; `template_code` comes from list_workouts."""
     def run():
         _require_writes()
-        if not (valid_iso_date(day) and valid_record_id(str(template_code))):
+        if not valid_iso_date(day):
             raise ValueError("day must be YYYY-MM-DD and template_code a single id")
+        _check_template_id(template_code)  # one real id: not 0, a negative, a list or a path
         c = _client(); _require_auth(c)
         ok = c.schedule_workout(day, template_code, 1 if add else 0)
         return {"day": day, "template_code": template_code,

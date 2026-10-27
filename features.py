@@ -772,15 +772,19 @@ def coach_program():
         return jsonify({"error": "bad_request", "message": "Numbers must be finite."}), 400
     feedback = body.get("feedback")
     feedback_error = None
+    if feedback is not None:
+        avoid_given = feedback.get("avoid") if isinstance(feedback, dict) else None
+        avoid_given = [] if avoid_given is None else [avoid_given] if isinstance(avoid_given, str) else avoid_given
+        if not isinstance(feedback, dict) or not (isinstance(avoid_given, (list, tuple)) and all(isinstance(a, str) for a in avoid_given)):
+            return jsonify({"error": "bad_request", "message": "feedback must be an object whose avoid is a name or a list of names."}), 400
+        feedback = {**feedback, "avoid": list(avoid_given)}
     if feedback is None and body.get("use_stored_feedback", True):
         prof = _feedback_profile()
         feedback = prof if prof.get("events") else None
         feedback_error = prof.get("unreadable")
     elif isinstance(feedback, dict) and body.get("use_stored_feedback", True):
         prof = _feedback_profile()  # the caller's numbers apply, but a reported pain or avoid stays excluded
-        given = feedback.get("avoid")
-        given = [given] if isinstance(given, str) else (given if isinstance(given, (list, tuple, set)) else [])
-        feedback = {**feedback, "avoid": sorted(set(given) | set(prof.get("avoid") or []))}
+        feedback = {**feedback, "avoid": sorted(set(feedback["avoid"]) | set(prof.get("avoid") or []))}
         feedback_error = prof.get("unreadable")
     try:
         prog = coach.generate_program(

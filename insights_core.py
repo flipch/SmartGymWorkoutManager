@@ -79,7 +79,7 @@ def recovery_advice(dates, today: date, records_seen: int = 0) -> dict:
     return {"recommendation": rec, "message": msg, "days_since_last": days_since, "sessions_last_7d": last7}
 
 
-_RECORD_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_RECORD_ID = re.compile(r"(?=.*[A-Za-z0-9])[A-Za-z0-9_-]{1,64}")  # at least one letter or digit: "-" and "_" name nothing
 
 
 def valid_record_id(value) -> bool:

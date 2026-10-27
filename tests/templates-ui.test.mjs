@@ -1345,3 +1345,16 @@ test('an import is held to the limits the server enforces, for the unit the exer
     await importJson(ctx, doc, { name: 'N', exercises: Array.from({ length: 51 }, (_, i) => ({ id: i + 1, sets: [{ reps: 8, weight: 20 }] })) });
     same(ctx.workoutData, [{ sentinel: true }]);
 });
+
+// ----------------------------------------------------------------------------------------------- round 34
+test('an imported preset with digits must be a whole number', async () => {
+    for (const bad of ['5.9', '1e2', '3oops', 2.5]) {
+        const { ctx, doc } = editor(() => metaOf({ presets: [{ id: 1 }, { id: 3 }, { id: 5 }] }));
+        ctx.workoutData = [{ sentinel: true }];
+        await importJson(ctx, doc, { name: 'n', exercises: [{ id: 5, presetId: bad, sets: [{ reps: 8, weight: 5 }] }] });
+        same(ctx.workoutData, [{ sentinel: true }]);
+    }
+    const { ctx, doc } = editor(() => metaOf({ presets: [{ id: 1 }, { id: 3 }, { id: 5 }] }));
+    await importJson(ctx, doc, { name: 'n', exercises: [{ id: 5, presetId: ' 5 ', sets: [{ reps: 8, weight: 5 }] }, { id: 6, presetId: 'abc', sets: [{ reps: 8, weight: 20 }] }] });
+    same(ctx.workoutData.map((e) => e.selectedPresetId), [5, -1]);
+});

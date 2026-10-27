@@ -19,3 +19,5 @@ __pycache__/
 .pytest_cache/
 coach_feedback.json*
 *.lock
+static/media_cache/
+library_cache*.json

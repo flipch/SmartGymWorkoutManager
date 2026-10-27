@@ -1357,6 +1357,9 @@ You must output a JSON object with the following structure:
 
                     // Determine the preset: use the exported preset field if present, else default to Custom (-1).
                     const presetField = (ex.preset !== undefined && ex.preset !== null) ? ex.preset : ex.presetId;  // the AI prompt asks for presetId
+                    if (presetField !== undefined && presetField !== null && /\d/.test(String(presetField)) && !/^-?\d+$/.test(String(presetField).trim())) {
+                        throw new Error(`exercise ${imported.length + 1}: preset must be a whole number`);  // "5.9" is not preset 5
+                    }
                     const importedPresetId = (presetField !== undefined && presetField !== null && !Number.isNaN(parseInt(presetField)))
                         ? parseInt(presetField)
                         : -1;

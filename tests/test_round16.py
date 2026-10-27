@@ -2027,6 +2027,47 @@ class Round33(unittest.TestCase):
             self.assertIn("timed", e.load_basis)
 
 
+class Round34(unittest.TestCase):
+    PROFILE = {"events": 1, "avoid": ["Cable chest press"], "unreadable": None, "avg_rpe": None}
+
+    def program(self, body):
+        with mock.patch.object(features, "_feedback_profile", return_value=self.PROFILE):
+            resp = gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json=body)
+        names = {e["name"].lower() for d in (resp.get_json().get("days") or []) for e in d["exercises"]} if resp.status_code == 200 else set()
+        return resp.status_code, names
+
+    def test_a_callers_feedback_has_one_checked_shape(self):
+        for bad in ([], False, "x", 5, {"avoid": [{"a": 1}]}, {"avoid": [["x"]]}, {"avoid": [1, "a"]}, {"avoid": 7}, {"avoid": {"a": 1}}):
+            self.assertEqual(self.program({"feedback": bad})[0], 400, repr(bad))
+        status, names = self.program({"feedback": {}})
+        self.assertEqual(status, 200)
+        self.assertNotIn("cable chest press", names)  # the stored exclusion still applies
+
+    def test_a_string_avoid_is_one_name_even_without_stored_feedback(self):
+        status, names = self.program({"feedback": {"avoid": "Cable fly"}, "use_stored_feedback": False})
+        self.assertEqual(status, 200)
+        self.assertNotIn("cable fly", names)
+        status, names = self.program({"feedback": {"avoid": ["Cable fly"]}, "use_stored_feedback": False})
+        self.assertNotIn("cable fly", names)
+
+    def test_mcp_schedule_refuses_zero_and_negative_codes(self):
+        client = mock.Mock()
+        client.schedule_workout.return_value = True
+        fn = getattr(mcp_server.schedule_workout, "fn", mcp_server.schedule_workout)
+        with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), mock.patch.object(mcp_server, "_client", return_value=client), mock.patch.object(mcp_server, "_require_auth"):
+            for bad in ("0", "-7", "-", "_", "1,2", "../x", ""):
+                out = fn("2026-11-01", bad)
+                self.assertIn("error", out, repr(bad))
+            client.schedule_workout.assert_not_called()
+            self.assertTrue(fn("2026-11-01", "abc_12")["ok"])
+            self.assertTrue(fn("2026-11-01", "12345")["ok"])
+
+    def test_docker_does_not_bake_in_caches(self):
+        docker = open(os.path.join(os.path.dirname(__file__), "..", ".dockerignore")).read().split()
+        for pattern in ("static/media_cache/", "library_cache*.json"):
+            self.assertIn(pattern, docker)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):
