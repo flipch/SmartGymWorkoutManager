@@ -231,10 +231,11 @@ def recent_workouts(days: int = 30) -> dict:
 
 
 @mcp.tool()
-def workout_session(training_id: int, training_type: str = "custom") -> dict:
+def workout_session(training_id: StrictInt, training_type: str = "custom") -> dict:  # true must not become session 1
     """Full per-set detail for a specific completed session by training_id (from
     recent_workouts). training_type: 'custom' or 'course'."""
     def run():
+        _check_template_id(training_id)  # a real id: not 0 or a negative
         c = _client(); _require_auth(c)
         kind = str(training_type).strip().lower()
         if kind not in ("custom", "course"):

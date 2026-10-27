@@ -700,6 +700,8 @@ class SpeedianceClient:
         Fetches calendar data for a specific month.
         date_str: 'YYYY-MM'
         """
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", str(date_str)):  # a typo'd month would read as "nothing scheduled"
+            raise ValueError("month must be YYYY-MM")
         url = f"{self.base_url}/api/app/v5/trainingCalendar/monthNew?date={_q(date_str)}&selectedDeviceType={self.device_type}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())

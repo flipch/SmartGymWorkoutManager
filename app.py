@@ -35,6 +35,13 @@ else:
 # Signs the flash-message cookie only. Not a constant (it was a published string): env, else random per process.
 app.secret_key = os.environ.get("GYM_SECRET_KEY") or secrets.token_hex(32)
 client = SpeedianceClient()
+
+
+@app.errorhandler(RecursionError)
+def _too_deep(_e):  # a body of 200000 '[' overflows the JSON parser: that is a bad request, not a server fault
+    return jsonify({"error": "bad_request", "message": "The request body is nested too deeply."}), 400
+
+
 install_flask_auth(app, load_token())
 install_flask_write_gate(app)
 app.register_blueprint(init_features(client))
@@ -564,6 +571,8 @@ def api_calendar():
     try:
         data = client.get_calendar_month(date_str)
         return jsonify(data)
+    except ValueError as e:
+        return jsonify({"error": "bad_request", "message": str(e)}), 400
     except Exception as e:
         if str(e) == "Unauthorized":
             return jsonify({"error": "Unauthorized"}), 401

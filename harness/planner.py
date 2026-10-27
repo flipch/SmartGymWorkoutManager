@@ -134,13 +134,17 @@ def asymmetry_note(sets) -> str | None:
     return f"left {left:g} vs right {right:g}: anchored on the lower side"
 
 
+def _performed(s) -> bool:
+    return bool(s.load or s.reps or getattr(s, "seconds", None))
+
+
 def _newest_logged(name: str, sessions: list[SessionResult], since: date | None = None):
     """(sets, day) of the newest session that logged this exercise with a load, whatever its quality."""
     for s in sorted(sessions, key=lambda x: x.started_at_ms, reverse=True):
         if since is not None and s.local_day < since:
             continue
         sets = [x for x in s.sets if _same_exercise(x.exercise, name)]
-        if any(x.load for x in sets):
+        if any(_performed(x) for x in sets):  # a session whose load was not usable (a drop set) is still the latest word
             return sets, s.local_day
     return None
 
@@ -154,8 +158,7 @@ def last_logged(name: str, sessions: list[SessionResult], *, since: date | None 
         if since is not None and s.local_day < since:
             continue
         sets = [x for x in s.sets if _same_exercise(x.exercise, name)]
-        loads = [x.load for x in sets if x.load]
-        if loads:
+        if any(_performed(x) for x in sets):
             anchor = anchor_load(sets)
             if anchor is None:
                 return None  # loads but no completed set (or a missing side): the latest word is "not done", not an older session's success

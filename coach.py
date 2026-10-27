@@ -17,6 +17,7 @@ the numbers are the engine's, the judgement/conversation is the agent's.
 """
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from collections import Counter
@@ -556,8 +557,14 @@ def _classify_items(exercises):
         name = ex.get("name") or ex.get("exercise") or ""
         api_m = ex.get("muscle") or ex.get("api_muscle") or ex.get("mainMuscleGroupName")
         muscle, pattern, uni = classify_exercise(name, api_m)
+        sets = _number_or_none(ex.get("sets") or 0)  # a negative or fractional count would cancel or invent real volume
+        if sets is None or not math.isfinite(sets) or sets < 0 or sets != int(sets) or sets > 100:
+            raise ValueError(f"{name or 'exercise'}: sets must be a whole number from 0 to 100")
+        reps = _number_or_none(ex.get("reps"))
+        if reps is not None and (not math.isfinite(reps) or reps < 0):
+            raise ValueError(f"{name or 'exercise'}: reps must not be negative")
         items.append({"name": name, "muscle": muscle, "pattern": pattern,
-                      "sets": int(ex.get("sets") or 0), "reps": _number_or_none(ex.get("reps")),
+                      "sets": int(sets), "reps": reps,
                       "mode": _mode_name(ex.get("mode")), "unilateral": uni,
                       "rank": _movement_rank(name)})
     return items

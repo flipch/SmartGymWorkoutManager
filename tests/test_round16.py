@@ -2256,3 +2256,51 @@ class Round38(unittest.TestCase):
             self.assertEqual(coach.classify_exercise(title)[:2], ("abs", "core"), title)
         self.assertEqual(coach.classify_exercise("Straight Arm Pulldown")[0], "back")  # the control
         self.assertEqual(coach.classify_exercise("Tricep Rope Pushdown")[0], "triceps")
+
+
+class Round39(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def drop_sessions(self):
+        from datetime import date
+        from harness.model import SessionResult, SetResult
+        old = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T", sets=tuple(SetResult("Cable Row", reps=10, load=80.0, target=10) for _ in range(3)))
+        drop = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Cable Row", reps=10, load=None, target=10) for _ in range(3)))
+        return old, drop
+
+    def test_a_newer_session_without_a_usable_load_withholds_the_old_progression(self):
+        from datetime import date
+        from harness import planner
+        old, drop = self.drop_sessions()
+        out = planner._from_template(old, self.AUTO, 5.0, date(2026, 10, 26), [old, drop])
+        self.assertIsNone(out[0].load)
+        self.assertIsNone(planner.last_logged("Cable Row", [old, drop]))  # the catalog path agrees
+        skipped = drop.__class__(drop.source_id, drop.local_day, drop.started_at_ms, drop.title,
+                                 sets=tuple(s.__class__(s.exercise, reps=None, load=None) for s in drop.sets))
+        self.assertIsNotNone(planner.last_logged("Cable Row", [old, skipped]))  # an exercise that was not done does not count
+
+    def test_negative_or_fractional_set_counts_cannot_cancel_real_volume(self):
+        import coach
+        for sets in (-12, 2.5, "x", float("inf"), 101):
+            with self.assertRaises(ValueError, msg=sets):
+                coach.critique_workout([{"name": "Cable Bench Press", "sets": 12}, {"name": "Chest Fly", "sets": sets}])
+        with self.assertRaises(ValueError):
+            coach.critique_workout([{"name": "Bench Press", "sets": 3, "reps": -5}])
+        self.assertTrue(coach.critique_workout([{"name": "Bench Press", "sets": "3", "reps": "8"}]))  # a client that sends strings still works
+
+    def test_a_bad_month_deep_json_and_a_boolean_session_id_are_refused(self):
+        import asyncio
+        client = api_client.SpeedianceClient()
+        for bad in ("2026-13", "../../x?y=1", "", "2026-1"):
+            with self.assertRaises(ValueError, msg=bad):
+                client.get_calendar_month(bad)
+        resp = gym_app.app.test_client().post("/api/coach/critique", headers=BASIC, data="[" * 200000, content_type="application/json")
+        self.assertEqual(resp.status_code, 400)
+        spy = mock.Mock()
+        with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), mock.patch.object(mcp_server, "_client", return_value=spy), mock.patch.object(mcp_server, "_require_auth"):
+            for bad in (True, 0, -5, "7"):
+                try:
+                    asyncio.run(mcp_server.mcp.call_tool("workout_session", {"training_id": bad}))
+                except Exception:
+                    pass
+        spy.get_training_detail.assert_not_called()
