@@ -19,6 +19,8 @@ services:
       - GYM_API_TOKEN=${GYM_API_TOKEN:?set GYM_API_TOKEN in .env}
       # account-changing browser actions (create/edit/schedule/delete/unit/logout) need this; also set on the MCP below
       - GYM_ALLOW_WRITES=${GYM_ALLOW_WRITES:-0}
+      # who this app logs in as: SOFTWARE (default) signs the phone out; NANO leaves the phone and machine sessions alone
+      - GYM_APP_TYPE=${GYM_APP_TYPE:-SOFTWARE}
       # extra browser origins allowed to POST (comma separated); empty = same host only
       - GYM_ALLOWED_ORIGINS=${GYM_ALLOWED_ORIGINS:-}
       # signs flash cookies; random per start when empty
@@ -44,6 +46,7 @@ services:
       # bearer token required on every MCP request; write tools stay off unless GYM_ALLOW_WRITES=1
       - GYM_API_TOKEN=${GYM_API_TOKEN:?set GYM_API_TOKEN in .env}
       - GYM_ALLOW_WRITES=${GYM_ALLOW_WRITES:-0}
+      - GYM_APP_TYPE=${GYM_APP_TYPE:-SOFTWARE}
       # Cloudflare Access (ChatGPT over the tunnel): all three or none. The origin verifies the Access assertion itself;
       # the AUD tag is the Access application's. Empty = the Cf-Access-Jwt-Assertion header is ignored.
       - GYM_ACCESS_TEAM=${GYM_ACCESS_TEAM:-}

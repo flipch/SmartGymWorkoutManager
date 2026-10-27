@@ -60,6 +60,16 @@ def _ack_data(resp):
     return body.get('data', False)
 
 
+def _app_identity() -> tuple[str, str]:
+    """(App_type, Versioncode) this client presents to the vendor. SOFTWARE (the default, what the phone app is) signs the
+    phone out of its session when this app logs in; NANO leaves the phone and the machine alone (the read-only harness
+    logs in that way, verified live). HARDWARE is refused: it would sign the machine out."""
+    app = (os.environ.get("GYM_APP_TYPE") or "SOFTWARE").strip().upper()
+    if app not in ("SOFTWARE", "NANO"):
+        raise RuntimeError("GYM_APP_TYPE must be SOFTWARE or NANO")
+    return app, ("1" if app == "NANO" else "40304")
+
+
 def _acknowledged(data):
     """A write's `data` as a yes/no: only an explicit true counts ("false", {"success": false}, [] and a missing value do not)."""
     if isinstance(data, bool):
@@ -403,6 +413,7 @@ class SpeedianceClient:
             return False, str(e)
 
     def login(self, email, password):
+        app_type, version_code = _app_identity()
         # Common headers for login requests
         headers = {
             "Host": self.host,
@@ -410,10 +421,10 @@ class SpeedianceClient:
             "Content-Type": "application/json",
             "Timestamp": str(int(time.time() * 1000)),
             **self._get_tz_headers(),
-            "Versioncode": "40304",
+            "Versioncode": version_code,
             "Mobiledevices": '{"brand":"google","device":"emulator64_x86_64_arm64","deviceType":"sdk_gphone64_x86_64","os":"","os_version":"31","manufacturer":"Google"}',
             "Accept-Language": "en",
-            "App_type": "SOFTWARE",
+            "App_type": app_type,
             "Connection": "keep-alive",
             "Accept-Encoding": "gzip, deflate, br"
         }
@@ -467,11 +478,12 @@ class SpeedianceClient:
     def logout(self):
         url = f"{self.base_url}/api/app/login/logout"
         headers = self._get_headers()
-        
-        try:
-            self._request('POST', url, headers=headers)
-        except Exception as e:
-            print(f"Logout error: {e}")
+
+        if _app_identity()[0] != "NANO":  # a NANO logout is unproven against the phone/machine sessions: forget the token locally only
+            try:
+                self._request('POST', url, headers=headers)
+            except Exception as e:
+                print(f"Logout error: {e}")
         
         # Clear credentials but keep region/unit/instructions
         self.save_config(
@@ -488,14 +500,15 @@ class SpeedianceClient:
         return True
 
     def _get_headers(self):
+        app_type, version_code = _app_identity()
         return {
             "Host": self.host,
             "App_user_id": self.credentials.get("user_id", ""),
             "Token": self.credentials.get("token", ""),
             "Timestamp": str(int(time.time() * 1000)),
             **self._get_tz_headers(),
-            "Versioncode": "40304",
-            "App_type": "SOFTWARE",
+            "Versioncode": version_code,
+            "App_type": app_type,
             "Mobiledevices": '{"brand":"google","device":"emulator64_x86_64_arm64","deviceType":"sdk_gphone64_x86_64","os":"","os_version":"31","manufacturer":"Google"}',
             "Content-Type": "application/json",
             "User-Agent": "Dart/3.9 (dart:io)"
