@@ -270,7 +270,9 @@ def _is_avoided(name, avoid):
     def as_words(a):  # "row" rules out "Seated Cable Row", never "Arrow"
         w = a.split()
         return bool(w) and any(words[i:i + len(w)] == w for i in range(len(words) - len(w) + 1))
-    return any(a == n or (len(a) >= 4 and a in n) or as_words(a) for a in avoid)
+    compact = n.replace(" ", "")  # "Lat Pull-Down" and "Lat Pulldown" are one exercise
+    return any(a == n or (len(a) >= 4 and a in n) or as_words(a) or a.replace(" ", "") == compact
+               or (len(a.replace(" ", "")) >= 5 and a.replace(" ", "") in compact) for a in avoid)
 
 
 def _pick_for_day(focus, goal, experience, allow_eccentric, exclude=frozenset()):
@@ -461,7 +463,7 @@ CLASSIFY_RULES = [
     (("lat pulldown", "pulldown", "pull-down", "pull-up", "pull up", "pullup", "chin-up",
       "chin up", "straight arm", "straight-arm", "pullover"), ("back", "v_pull")),
     (("lateral raise", "lat raise", "side raise", "side delt", "y-raise"), ("shoulders", "v_push")),
-    (("overhead press", "shoulder press", "military press", "arnold", "ohp", "upright row",
+    (("overhead press", "shoulder press", "military press", "arnold", "ohp", "upright row", "front raise", "bradford press",
       "delt", "shoulder"), ("shoulders", "v_push")),
     # after the shoulder rules: "Upright Row" trains the shoulders
     (("row", "t-bar", "t bar"), ("back", "h_pull")),
@@ -469,7 +471,7 @@ CLASSIFY_RULES = [
     (("preacher", "hammer curl", "concentration curl", "ez curl", "bicep", "biceps", "curl"), ("biceps", "h_pull")),
     (("triceps pushdown", "tricep pushdown", "pushdown", "triceps extension", "tricep extension",
       "overhead extension", "skull", "skullcrusher", "dip", "triceps", "tricep"), ("triceps", "v_push")),
-    (("bench press", "chest press", "incline press", "decline press", "incline fly", "chest fly",
+    (("bench press", "chest press", "incline press", "decline press", "incline cable press", "decline cable press", "cable chest press", "incline fly", "chest fly",
       "pec fly", "pec deck", "fly", "push-up", "push up", "pushup", "chest", "pec "), ("chest", "h_push")),
     (("crunch", "plank", "sit-up", "sit up", "leg raise", "knee raise", "dead bug", "dead-bug",
       "woodchop", "wood chop", "pallof", "russian twist", "ab wheel", "rollout", "hollow",

@@ -1458,6 +1458,82 @@ class Round24(unittest.TestCase):
         self.assertEqual(features._working_sets({"name": "Single-arm Row", "sets": sets}), 2.0)  # no flag: the name guess
 
 
+class Round25(unittest.TestCase):
+    def test_real_library_ids_above_a_trillion_are_accepted(self):
+        for gid in (451_234_567_890_123, 2 ** 53 - 1, "451234567890123"):
+            self.assertEqual(api_client._group_id(gid, "x"), int(gid))
+        for gid in (2 ** 53, 10 ** 17, -5):
+            with self.assertRaises(ValueError):
+                api_client._group_id(gid, "x")
+
+    def test_a_different_angle_is_never_a_confident_match(self):
+        lib = [{"id": 1, "title": "Incline Cable Press", "mainMuscleGroupName": "chest", "isLeftRight": 0}]
+        self.assertEqual(features.resolve_exercise(lib, "Decline Cable Press", "chest")["confidence"], "low")
+        self.assertNotEqual(features.resolve_exercise(lib, "Incline Cable Press", "chest")["confidence"], "low")
+
+    def test_more_press_and_raise_names_classify(self):
+        import coach
+        for name, muscle in (("Incline Cable Press", "chest"), ("Cable Chest Press", "chest"), ("Front Raise", "shoulders"),
+                             ("Bradford Press", "shoulders")):
+            self.assertEqual(coach.classify_exercise(name)[0], muscle, name)
+
+    def test_the_avoid_list_ignores_spacing_and_hyphens(self):
+        import coach
+        self.assertTrue(coach._is_avoided("Lat Pull-Down", {coach._norm_name("lat pulldown")}))
+        self.assertTrue(coach._is_avoided("Lat Pulldown", {coach._norm_name("lat pull down")}))
+        self.assertTrue(coach._is_avoided("Wide Lat Pull-Down Machine", {coach._norm_name("lat pulldown")}))
+        self.assertFalse(coach._is_avoided("Hip Thrust", {coach._norm_name("dip")}))
+
+    def test_feedback_with_an_unknown_field_is_refused_and_named(self):
+        import state_io
+        with self.assertRaises(ValueError) as ctx:
+            state_io.validate_feedback({"rpe": 7, "Pain": True})
+        self.assertIn("Pain", str(ctx.exception))
+        self.assertEqual(state_io.validate_feedback({"rpe": 7})["rpe"], 7)
+
+    def test_an_unwritable_volume_is_not_reported_as_logged_out(self):
+        self.assertTrue(issubclass(mcp_server.NotAuthenticated, PermissionError))
+        def boom():
+            raise PermissionError("read-only volume")
+        def logged_out():
+            raise mcp_server.NotAuthenticated("log in")
+        self.assertNotEqual(mcp_server._safe(boom).get("error"), "not_authenticated")
+        self.assertEqual(mcp_server._safe(logged_out)["error"], "not_authenticated")
+
+    def test_the_planner_never_borrows_the_other_sides_load(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        one_side = [SetResult("Split Squat", reps=8, load=40.0, side="right"), SetResult("Split Squat", reps=0, load=20.0, side="left")] * 3
+        self.assertIsNone(planner.anchor_load(one_side))
+        self.assertTrue(planner.side_missing(one_side))
+        both = [SetResult("Split Squat", reps=8, load=40.0, side="right"), SetResult("Split Squat", reps=8, load=20.0, side="left")]
+        self.assertEqual(planner.anchor_load(both), 20.0)
+        warm = [SetResult("Split Squat", reps=8, load=40.0, side="right"), SetResult("Split Squat", reps=0, load=10.0, side="right"),
+                SetResult("Split Squat", reps=8, load=40.0, side="left")]
+        self.assertEqual(planner.anchor_load(warm), 40.0)  # a set with no reps is not a performed load
+        old = SessionResult("1", date(2026, 10, 20), 1_791_000_000_000, "T", sets=tuple(both * 3))
+        new = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "T", sets=tuple(one_side))
+        self.assertIsNone(planner.last_logged("Split Squat", [old, new]))  # fail closed, not the older session
+        auto = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+        out = planner._from_template(new, auto, 5.0, date(2026, 10, 26))
+        self.assertIsNone(out[0].load)
+        self.assertIn("one side", out[0].load_basis)
+
+    def test_a_lighter_newer_session_lowers_the_template_anchor(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        heavy = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T", sets=tuple(SetResult("Cable Row", reps=10, load=60.0, target=10) for _ in range(3)))
+        light = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Cable Row", reps=10, load=40.0, target=10) for _ in range(3)))
+        auto = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+        out = planner._from_template(heavy, auto, 5.0, date(2026, 10, 26), [heavy, light])
+        self.assertLessEqual(out[0].load, 45.0)
+        self.assertIn("newer session", out[0].load_basis)
+        same = planner._from_template(heavy, auto, 5.0, date(2026, 10, 26), [heavy])
+        self.assertGreaterEqual(same[0].load, 60.0)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

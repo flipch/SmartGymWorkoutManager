@@ -102,7 +102,7 @@ def _group_id(value, where):
     if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().isdigit():
         raise ValueError(f"{where}: groupId must be a positive whole number")
     n = int(str(value).strip())
-    if not 0 < n < 10**12:
+    if not 0 < n < 2 ** 53:  # the library's real ids reach 4.5e14; anything a JS client could not hold exactly is refused
         raise ValueError(f"{where}: groupId must be a positive whole number")
     return n
 

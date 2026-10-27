@@ -225,7 +225,7 @@
 
             // Convert API format to the same JSON export format used in create.html
             const exportArr = results.map(detail => {
-                if (!detail) return null;
+                if (!detail || !Array.isArray(detail.actionLibraryList) || detail.actionLibraryList.length === 0) return null;  // a deleted template is not an empty workout
                 return {
                     name: detail.name || 'Unknown',
                     weightUnit: accountUnit === 1 ? 'lb' : 'kg',  // the account's unit: the template API stores weights in it
@@ -265,7 +265,8 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `workouts_export_${new Date().toISOString().split('T')[0]}.json`;
+            const today = new Date();  // the LOCAL date, not the UTC one
+            a.download = `workouts_export_${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}.json`;
             a.click();
             URL.revokeObjectURL(url);
 
@@ -496,6 +497,7 @@
             if (data.originalDate === targetDate) return; // Dropped on same day
 
             // 1. Add to the new date FIRST: whatever fails afterwards, the workout is still booked somewhere
+            let added = false;
             try {
                 const addResp = await fetch('/api/schedule', {
                     method: 'POST',
@@ -511,6 +513,8 @@
                     alert('Failed to move workout (could not add it to the new date; it is still on the old one): ' + (addResult.error || 'Unknown error'));
                     return;
                 }
+
+                added = true;
 
                 // 2. Remove from the old date
                 const delResp = await fetch('/api/schedule', {
@@ -530,7 +534,12 @@
 
             } catch (error) {
                 console.error('Error moving workout:', error);
-                alert('Error moving workout');
+                if (added) {
+                    alert('The workout was added to the new date, but the old date could not be cleared: check the calendar, it may show on both.');
+                    fetchCalendarData();  // show what is really booked
+                } else {
+                    alert('Error moving workout');
+                }
             }
 
         } else {

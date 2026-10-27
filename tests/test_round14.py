@@ -227,7 +227,7 @@ class SavingNeverDropsOrFakesAnything(unittest.TestCase):
         self.assertEqual(calls[-1][2]["json"]["actionLibraryList"][0]["groupId"], 5)
 
     def test_group_ids_cannot_inject_query_parameters_or_be_junk(self):
-        for gid in ("1&ids=2", "1,2", -1, 0, 1.5, True, None, "", "abc", [1], 10**13):
+        for gid in ("1&ids=2", "1,2", -1, 0, 1.5, True, None, "", "abc", [1], 2**53, 10**17):
             with self.assertRaises(ValueError, msg=repr(gid)):
                 api_client.validate_workout("n", [ex(10, group=gid)])
 

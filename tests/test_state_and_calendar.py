@@ -66,9 +66,8 @@ class FeedbackValidation(unittest.TestCase):
     def test_accepts_every_documented_field(self):
         got = state_io.validate_feedback({"rpe": 8, "difficulty": "too_hard", "completion": "missed", "soreness": 3,
                                           "pain": True, "avoid": " Lunge ", "exercise": "Squat", "note": "knee",
-                                          "workout_code": "ab-12_C", "extra": 1})
+                                          "workout_code": "ab-12_C"})
         self.assertEqual(got["avoid"], "Lunge")
-        self.assertNotIn("extra", got)
         self.assertEqual(set(got), {"rpe", "difficulty", "completion", "soreness", "pain", "avoid", "exercise",
                                     "note", "workout_code"})
 
@@ -166,7 +165,7 @@ class FeedbackStore(unittest.TestCase):
         self.assertEqual(features._load_feedback_events(d), [])
 
     def test_nothing_to_log_returns_none(self):
-        self.assertIsNone(features.log_feedback({"nonsense": 1}, fresh_dir()))
+        self.assertIsNone(features.log_feedback({}, fresh_dir()))
 
     def test_concurrent_appends_lose_nothing(self):
         d = fresh_dir()
@@ -211,8 +210,11 @@ class FeedbackStore(unittest.TestCase):
             bad = c.post("/api/coach/feedback", headers=BASIC, json={"rpe": 70})
             self.assertEqual((bad.status_code, bad.get_json()["error"]), (400, "invalid_feedback"))
             self.assertNotIn("70", bad.get_json()["message"])
-            empty = c.post("/api/coach/feedback", headers=BASIC, json={"nonsense": 1})
+            empty = c.post("/api/coach/feedback", headers=BASIC, json={})
             self.assertEqual((empty.status_code, empty.get_json()["error"]), (400, "empty"))
+            typo = c.post("/api/coach/feedback", headers=BASIC, json={"Pain": True})
+            self.assertEqual((typo.status_code, typo.get_json()["error"]), (400, "invalid_feedback"))
+            self.assertIn("Pain", typo.get_json()["message"])
             with mock.patch.object(state_io, "atomic_write_json", side_effect=OSError("/secret/path")):
                 lost = c.post("/api/coach/feedback", headers=BASIC, json={"rpe": 7})
             self.assertEqual((lost.status_code, lost.get_json()["error"]), (503, "feedback_not_saved"))

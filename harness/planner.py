@@ -99,13 +99,22 @@ def newest_with_title(sessions: list[SessionResult], title: str) -> SessionResul
 
 
 # ── helpers over logged sets ────────────────────────────────────────────────
+def side_missing(sets) -> bool:
+    """A one-sided exercise where one side logged no completed set."""
+    sides = {s.side for s in sets if s.side}
+    done = {s.side for s in sets if s.side and s.load and (s.reps or getattr(s, "seconds", None))}
+    return bool(sides) and sides != done
+
+
 def anchor_load(sets) -> float | None:
     """The load a progression is built on. One-sided sets keep their side: the WEAKER side's median is the anchor, so an
     asymmetric 20/40 history never prescribes a load the weaker side has not done (averaging would give 30)."""
+    counted = [s for s in sets if s.load and (s.reps or getattr(s, "seconds", None))]
+    if side_missing(sets):  # a side that never completed a set has no anchor: the other side's load must not stand in for it
+        return None
     by_side: dict = {}
-    for s in sets:
-        if s.load:
-            by_side.setdefault(s.side, []).append(s.load)
+    for s in counted:
+        by_side.setdefault(s.side, []).append(s.load)
     if not by_side:
         return None
     medians = [float(median(v)) for v in by_side.values()]
@@ -136,7 +145,12 @@ def last_logged(name: str, sessions: list[SessionResult], *, since: date | None 
         sets = [x for x in s.sets if _same_exercise(x.exercise, name)]
         loads = [x.load for x in sets if x.load]
         if loads:
-            return anchor_load(sets), sets, s.local_day
+            anchor = anchor_load(sets)
+            if anchor is None:
+                if side_missing(sets):
+                    return None  # one side has no completed sets: no anchor, not an older session's
+                continue
+            return anchor, sets, s.local_day
     return None
 
 
@@ -185,7 +199,8 @@ def _progress(last: float, hit_all: bool, band: str, intensity_pct: float, max_j
 
 
 # ── plan builders ───────────────────────────────────────────────────────────
-def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day: date) -> list[ProposedExercise]:
+def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day: date,
+                   sessions: list[SessionResult] | None = None) -> list[ProposedExercise]:
     age = (day - template.local_day).days
     too_old = age > ANCHOR_MAX_AGE_DAYS
     out = []
@@ -202,6 +217,10 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                                         f"last logged {age} days ago (over {ANCHOR_MAX_AGE_DAYS}): too old to anchor, "
                                         "choose a load that leaves the target RIR"))
             continue
+        if loads and side_missing(rows):
+            out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
+                                        "one side has no completed sets last time: choose a load that leaves the target RIR"))
+            continue
         if not loads:
             note = ("timed exercise (planned by duration, not reps): use your template's targets"
                     if any(getattr(r, "seconds", None) for r in rows)
@@ -209,12 +228,17 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
             out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None, note))
             continue
         last = anchor_load(performed)
+        newer_note = ""
+        newer = last_logged(name, [x for x in (sessions or []) if x.started_at_ms > template.started_at_ms and x.local_day <= day],
+                            since=day - timedelta(days=ANCHOR_MAX_AGE_DAYS))
+        if newer is not None and newer[0] < last:  # a lighter session since this template: that is where the athlete is now
+            last, newer_note = newer[0], f"; a newer session ({newer[2].isoformat()}) logged less"
         hit_all = bool(targets) and all((r.reps or 0) >= r.target for r in rows if r.target)
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
                                 allow_increase=age < LAYOFF_DAYS, step=_grid(performed))
         uneven = asymmetry_note(performed)
         out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", load,
-                                    f"{basis} (last {last:g}{'; ' + uneven if uneven else ''})", last_load=last))
+                                    f"{basis} (last {last:g}{'; ' + uneven if uneven else ''}{newer_note})", last_load=last))
     return out
 
 
@@ -305,7 +329,7 @@ def todays_plan(*, sessions: list[SessionResult] | None, readings: list[Reading]
         chosen = newest_with_title(sessions, title)
         if chosen is not None and chosen.sets:
             source, day_name = "user_template", title
-            exercises = _from_template(chosen, auto, max_jump_pct, day)
+            exercises = _from_template(chosen, auto, max_jump_pct, day, sessions)
         else:
             warnings.append(f"no per-set detail loaded for your template {title!r}; fell back to the generic program")
     if source == "coach_catalog":

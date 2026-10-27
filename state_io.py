@@ -151,9 +151,15 @@ def require_readiness(payload) -> dict:
 DIFFICULTY = ("too_easy", "ok", "too_hard")
 
 
+FEEDBACK_FIELDS = ("rpe", "difficulty", "completion", "soreness", "pain", "exercise", "avoid", "prefer", "note", "workout_code")
+
+
 def validate_feedback(payload) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("feedback must be a JSON object")
+    unknown = sorted(str(k)[:40] for k in payload if k not in FEEDBACK_FIELDS)
+    if unknown:  # a typo'd "Pain" would otherwise be logged as a session without the pain
+        raise ValueError(f"unknown feedback field(s): {', '.join(unknown)}; use {', '.join(FEEDBACK_FIELDS)}")
     out = {}
     if "rpe" in payload:
         out["rpe"] = _number(payload, "rpe", 1, 10)

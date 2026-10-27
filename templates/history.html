@@ -148,7 +148,8 @@
     }
 
     function fmtWeight(val) {
-        if (!val || val === 0) return '-';
+        val = Number(val);
+        if (!Number.isFinite(val) || val === 0) return '-';
         // Round nicely
         return Number.isInteger(val) ? val : val.toFixed(1);
     }

@@ -1433,7 +1433,7 @@ You must output a JSON object with the following structure:
         // Neue Sets bekommen IMMER die Defaults des aktuellen Presets
         const newSetTemplate = {
             reps: rules.defR, 
-            weight: rules.defW, 
+            weight: ex.dataStatType === 6 ? (ex.sets.length ? ex.sets[ex.sets.length - 1].weight : 5) : rules.defW,  // a Vita level repeats, never jumps to the cable default 
             mode: 1, 
             rest: rules.defRest, 
             unit: 'reps'

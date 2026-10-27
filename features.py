@@ -968,6 +968,13 @@ _MUSCLE_ANCHOR = {
 }
 
 
+_VARIANT = {"incline", "decline", "reverse", "overhead", "front", "rear", "lateral"}  # change the movement, not just the gear
+
+
+def _variant_tokens(s):
+    return _VARIANT & set(re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split())
+
+
 def _norm_tokens(s):
     toks = re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split()
     toks = [t for t in toks if t not in _EQUIP_STOP]
@@ -980,6 +987,7 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
     coach_tokens = set(_norm_tokens(name))
     if not coach_tokens:
         return None
+    coach_variant = _variant_tokens(name)
     anchor = _MUSCLE_ANCHOR.get((goal_muscle or "").lower(), set())
     if not anchor:  # no muscle given: what the NAME itself says ("Leg extension" is quads) must still match the library entry
         anchor = _MUSCLE_ANCHOR.get((coach.classify_exercise(name)[0] or "").lower(), set())
@@ -1006,7 +1014,7 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
             score -= 0.10
         key = (score, -len(lib_tokens))
         if best is None or key > best[0]:
-            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1)
+            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1, _variant_tokens(title) != coach_variant)
     if best is None:
         cands = sorted((len(_norm_tokens(ex.get("title") or "")), ex.get("id"), ex.get("title"))
                        for ex in library if isinstance(ex, dict) and ex.get("id")
@@ -1018,6 +1026,8 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
         return None
     score = best[4]
     conf = "high" if score >= 1.0 else "med" if score >= 0.55 else "low"
+    if best[6]:  # "Decline press" must not be saved as "Incline press" (or any other angle or direction)
+        conf = "low"
     if anchor:  # the movement must train the muscle the coach named: "Leg extension" is not "Triceps extension"
         if best[3] and best[3] not in anchor:
             conf = "low"

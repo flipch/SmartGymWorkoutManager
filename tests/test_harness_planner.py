@@ -314,5 +314,22 @@ class Interlocks(unittest.TestCase):
         self.assertEqual(interlocks.clamp_to_jump(41, 40, 10), 41)
 
 
+class ANewerLighterSessionBeatsTheTemplate(unittest.TestCase):
+    def bench(self, result):
+        return next(e for e in result.exercises if e.name == "Synthetic Bench Press")
+
+    def test_the_template_anchor_follows_the_athlete_to_a_lighter_load(self):
+        d = date(2026, 10, 26)
+        push = session(d - timedelta(days=9), "Push", push_day(weights=(60, 60, 60)))
+        lighter = session(d - timedelta(days=3), "Pull", [synth.exercise("Synthetic Bench Press", [(8, 40, 8)] * 3)])
+        older_light = session(d - timedelta(days=12), "Pull", [synth.exercise("Synthetic Bench Press", [(8, 20, 8)] * 3)])
+        r = plan([push, lighter], readings(("subjective", 3)), template="Push")
+        self.assertLessEqual(self.bench(r).load, 45)
+        self.assertIn("newer session", self.bench(r).load_basis)
+        r = plan([push, older_light], readings(("subjective", 3)), template="Push")  # an OLDER light session says nothing
+        self.assertGreaterEqual(self.bench(r).load, 60)
+        self.assertNotIn("newer session", self.bench(r).load_basis)
+
+
 if __name__ == "__main__":
     unittest.main()

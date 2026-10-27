@@ -49,9 +49,13 @@ def _require_writes():
         )
 
 
+class NotAuthenticated(PermissionError):
+    """Raised only for 'no Speediance session': an unwritable data volume is a PermissionError too and must not say 'log in'."""
+
+
 def _require_auth(c):
     if not c.credentials.get("token"):
-        raise PermissionError(
+        raise NotAuthenticated(
             "Not authenticated. Log in to the Smart Gym web UI (/settings) "
             "with your Speediance account first; the MCP shares that session."
         )
@@ -63,7 +67,7 @@ def _safe(fn):
         return fn()
     except WritesDisabled as e:
         return {"error": "writes_disabled", "message": str(e)}
-    except PermissionError as e:
+    except NotAuthenticated as e:
         return {"error": "not_authenticated", "message": str(e)}
     except Exception as e:  # noqa: BLE001 — surface anything as a clean payload
         msg = str(e)

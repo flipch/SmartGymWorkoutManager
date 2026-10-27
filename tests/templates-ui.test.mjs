@@ -1037,3 +1037,80 @@ test('a measured zero is not replaced by the prescribed duration, and vendor num
     assert.match(read('browse.html'), /esc\(Number\(c\.trainedUserCount\)\.toLocaleString\(\)\)/);
     assert.doesNotMatch(read('browse.html'), /\$\{c\.trainedUserCount\.toLocaleString\(\)\}/);
 });
+
+// ----------------------------------------------------------------------------------------------- round 25
+test('adding a set to a Vita exercise repeats the current level, not the cable default', () => {
+    const src = read('create.html');
+    const ctx = { workoutData: [], getRules: (ex) => WorkoutLogic.getRules(ex, 1), renderBuilder() {}, window: {} };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'window.addSet = ', '    window.removeSet') + '\n', ctx);
+    ctx.workoutData = [{ selectedPresetId: -1, dataStatType: 6, sets: [{ reps: 8, weight: 3, rest: 30, unit: 'reps' }] },
+                       { selectedPresetId: -1, dataStatType: 6, sets: [] },
+                       { selectedPresetId: -1, dataStatType: null, sets: [{ reps: 8, weight: 20, rest: 30, unit: 'reps' }] }];
+    ctx.window.addSet(0); ctx.window.addSet(1); ctx.window.addSet(2);
+    assert.equal(ctx.workoutData[0].sets[1].weight, 3);
+    assert.equal(ctx.workoutData[1].sets[0].weight, 5);
+    assert.equal(ctx.workoutData[2].sets[1].weight, WorkoutLogic.getRules({ selectedPresetId: -1 }, 1).defW);
+});
+
+test('a bulk export skips a template whose detail is empty', () => {
+    same(bulkExport({}), []);
+    same(bulkExport({ name: 'n', actionLibraryList: [] }), []);
+});
+
+test('the workout history page clears an old table when a search fails', async () => {
+    const src = read('workout_history.html');
+    const doc = makeDocument();
+    const alerts = [];
+    const ctx = { document: doc, console, alert: (m) => alerts.push(m), JSON, currentHistoryData: [{ id: 'old' }], renderTable() {},
+                  esc: (s) => String(s), fetch: async () => ({ ok: true, json: async () => ({ error: 'history_unavailable' }) }) };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'let historySeq', '    function renderTable') + '\nglobalThis.fetchHistory = fetchHistory;', ctx);
+    await ctx.fetchHistory();
+    same(ctx.currentHistoryData, []);
+    assert.match(doc.getElementById('history-table-body').innerHTML, /history_unavailable/);
+});
+
+test('history: a weight that arrives as text still renders', () => {
+    const src = read('history.html');
+    const ctx = {};
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'function fmtWeight', '    let historySeq') + '\nglobalThis.f = fmtWeight;', ctx);
+    assert.equal(ctx.f('20'), 20);
+    assert.equal(ctx.f('12.34'), '12.3');
+    assert.equal(ctx.f(null), '-');
+    assert.equal(ctx.f('abc'), '-');
+});
+
+test('a removal that throws after a good add refreshes the calendar and warns about both dates', async () => {
+    const { ctx, calls, alerts } = calendar([{ success: true }, 'throw']);
+    await move(ctx);
+    same(calls, ['add:2099-01-02', 'remove:2099-01-01', 'refresh']);
+    assert.match(alerts[0], /may show on both|both/);
+});
+
+test('the workout history page: an older failure does not replace a newer table', async () => {
+    const src = read('workout_history.html');
+    const doc = makeDocument();
+    const waiting = [];
+    const ctx = { document: doc, console: { error() {} }, alert() {}, JSON, currentHistoryData: [], renderTable: (d) => { doc.getElementById('history-table-body').innerHTML = 'rows:' + d.length; },
+                  esc: (s) => String(s), fetch: () => new Promise((resolve, reject) => waiting.push({ resolve, reject })) };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'let historySeq', '    function renderTable') + '\nglobalThis.fetchHistory = fetchHistory;', ctx);
+    const a = ctx.fetchHistory();
+    const b = ctx.fetchHistory();
+    waiting[1].resolve({ ok: true, json: async () => [{ id: 'new' }] }); await b;
+    waiting[0].reject(new Error('offline')); await a;
+    assert.equal(doc.getElementById('history-table-body').innerHTML, 'rows:1');
+});
+
+test('a bulk export is named for the local date, not the UTC one', () => {
+    const src = read('index.html');
+    const made = [];
+    class FakeDate { getFullYear() { return 2026; } getMonth() { return 0; } getDate() { return 5; } toISOString() { return '2026-01-06T03:00:00.000Z'; } }
+    const ctx = { Date: FakeDate, Blob: class {}, JSON, exportArr: [], URL: { createObjectURL: () => 'blob:x', revokeObjectURL() {} },
+                  document: { createElement: () => { const a = { click() {} }; made.push(a); return a; } } };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'const jsonStr = JSON.stringify(exportArr', '            URL.revokeObjectURL(url);'), ctx);
+    assert.equal(made[0].download, 'workouts_export_2026-01-05.json');
+});

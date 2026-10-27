@@ -255,6 +255,9 @@
             if (seq !== historySeq) return;  // a newer search was started: this answer is stale
             
             if(data.error) {
+                currentHistoryData = [];  // nothing from the previous search stays exportable
+                document.getElementById('results-toolbar').classList.add('hidden');
+                tbody.innerHTML = '<tr><td colspan="6" class="px-6 py-12 text-center text-red-500">Could not load history (' + esc(data.error) + ').</td></tr>';
                 alert("Error: " + data.error);
                 return;
             }
@@ -266,6 +269,7 @@
             document.getElementById('record-count').innerText = `Found ${data.length} records`;
 
         } catch (e) {
+            if (seq !== historySeq) return;  // an older failure must not replace a newer table
             console.error(e);
             tbody.innerHTML = '<tr><td colspan="6" class="px-6 py-12 text-center text-red-500">Error fetching data. Check console.</td></tr>';
         }
