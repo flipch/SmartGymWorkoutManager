@@ -1486,3 +1486,345 @@ test('the same workout booked on two days can be moved from both at once', async
     release({ success: true });
     await first;
 });
+
+// ----------------------------------------------------------------------------------------------- the coach page (templates/coach.html)
+const sig = (key, value, extra = {}) => ({ key, value, source: 'whoop', age_hours: 2, stale: false, ...extra });
+const html = (doc, id) => doc.getElementById(id).innerHTML;
+const noFetch = () => { throw new Error('unexpected request'); };
+
+test('coach readiness card: value, source, age, stale badge and the reasons', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    ctx.api.renderReadiness({ max_age_hours: 36, signals: [sig('whoop_recovery', 25), sig('sleep_hours', 6, { source: 'manual', age_hours: 40, stale: true }), sig('subjective', 4, { source: null })],
+        adjustment: { band: 'low', volume_pct: -40, intensity_pct: -15, rir_min: 3, signals: ['Whoop recovery 25%'], overrides: ['capped'] } });
+    const h = html(doc, 'readiness-body');
+    assert.match(h, /WHOOP recovery<\/span><span>25%/);
+    assert.match(h, />WHOOP</);
+    assert.match(h, />Manual</);
+    assert.match(h, /Source not recorded/);
+    assert.match(h, /2 h ago/);
+    assert.match(h, /Stale: older than 36 h, ignored/);
+    assert.match(h, /1 signal is older than 36 hours and ignored/);
+    assert.match(h, /Whoop recovery 25%/);
+    assert.match(h, /capped/);
+    assert.match(h, /about 40% fewer sets, about 15% lighter loads/);
+});
+
+test('coach readiness card: empty, unreadable and only-stale states', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    ctx.api.renderReadiness({ signals: [], adjustment: { band: 'moderate' } });
+    assert.match(html(doc, 'readiness-body'), /No readiness data yet/);
+    ctx.api.renderReadiness({ error: 'readiness_unreadable', message: 'could not be read (ValueError)' });
+    assert.match(html(doc, 'readiness-body'), /could not be used/);
+    ctx.api.renderReadiness({ signals: [sig('whoop_recovery', 25, { stale: true, age_hours: 50 })], adjustment: { band: 'moderate' } });
+    assert.match(html(doc, 'readiness-body'), /no fresh signal/);
+    assert.match(html(doc, 'readiness-body'), /2 days ago/);
+});
+
+test('a high band says it never adds volume or load', () => {
+    const { ctx } = coachPage(noFetch);
+    assert.match(ctx.api.effectText({ band: 'high', volume_pct: 10, intensity_pct: 3, rir_min: 1 }), /never adds volume or load/);  // even if the server said +10
+    assert.match(ctx.api.effectText({ band: 'high', volume_pct: 0, intensity_pct: 0, rir_min: 1 }), /as written/);
+    assert.doesNotMatch(ctx.api.effectText({ band: 'high', volume_pct: 10, intensity_pct: 3 }), /10|more/);
+});
+
+test('manual override: only filled fields are sent, with source manual, and out-of-range input is stopped before the request', async () => {
+    const sent = [];
+    const { ctx, doc } = coachPage(async (u, o) => { sent.push([u, o.method, o.body && JSON.parse(o.body)]); return { ok: true, status: 200, json: async () => ({ signals: [], adjustment: {} }) }; });
+    doc.getElementById('m-whoop').value = '101';
+    await ctx.api.submitManual();
+    assert.equal(sent.length, 0);
+    assert.match(html(doc, 'm-msg'), /whoop_recovery is out of range/);
+    doc.getElementById('m-whoop').value = ' 42 ';
+    doc.getElementById('m-sleep').value = '';
+    doc.getElementById('m-subj').value = '2';
+    await ctx.api.submitManual();
+    same(sent[0], ['/api/coach/readiness', 'POST', { whoop_recovery: 42, subjective: 2, source: 'manual' }]);
+    assert.ok(sent.some((c) => c[0] === '/api/coach/readiness' && c[1] === 'GET'));  // the card reloads
+    doc.getElementById('m-whoop').value = ''; doc.getElementById('m-subj').value = '';
+    sent.length = 0;
+    await ctx.api.submitManual();
+    assert.equal(sent.length, 0);
+    assert.match(html(doc, 'm-msg'), /Fill in at least one field/);
+});
+
+test('manual override shows the server\'s refusal', async () => {
+    const { ctx, doc } = coachPage(okJson({ error: 'invalid_readiness', message: 'invalid sleep_hours: must be between 0 and 24' }, 400));
+    doc.getElementById('m-sleep').value = '7';
+    await ctx.api.submitManual();
+    assert.match(html(doc, 'm-msg'), /invalid sleep_hours/);
+});
+
+test('WHOOP card: not configured is calm, with a how-to and no scary colour', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    ctx.api.renderWhoop({ state: 'not_configured', message: 'WHOOP is not connected. Set WHOOP_CLIENT_ID', can_connect: false });
+    const h = html(doc, 'whoop-body');
+    assert.match(h, /Not connected/);
+    assert.match(h, /Set WHOOP_CLIENT_ID/);
+    assert.doesNotMatch(h, /text-red|Connect WHOOP<|Refresh from WHOOP/);
+    ctx.api.renderWhoop({ state: 'not_configured', message: 'm', can_connect: true });
+    assert.match(html(doc, 'whoop-body'), /Connect WHOOP</);
+});
+
+test('WHOOP card: connected, refreshing_failed and needs_reconsent each look different and keep the last readings', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    ctx.api.renderWhoop({ state: 'connected', last_pull: '2026-10-27T08:00:00Z', next_pull: '2026-10-27T08:15:00Z', can_connect: true, notes: ['latest recovery is PENDING_SCORE'] });
+    let h = html(doc, 'whoop-body');
+    assert.match(h, />Connected</);
+    assert.match(h, /Last pull/);
+    assert.match(h, /Refresh from WHOOP/);
+    assert.match(h, /Reconnect WHOOP/);
+    assert.match(h, /PENDING_SCORE/);
+    ctx.api.renderWhoop({ state: 'refreshing_failed', message: 'WHOOP unavailable: whoop: /v2/recovery failed (HTTP 503)', last_pull: '2026-10-27T08:00:00Z', next_pull: '2026-10-27T09:00:00Z' });
+    h = html(doc, 'whoop-body');
+    assert.match(h, /WHOOP unavailable: whoop: \/v2\/recovery failed \(HTTP 503\)/);
+    assert.match(h, /last readings stay in use/);
+    assert.match(h, /retries by itself/);
+    ctx.api.renderWhoop({ state: 'needs_reconsent', message: 'WHOOP rejected the saved sign-in.', can_connect: true });
+    h = html(doc, 'whoop-body');
+    assert.match(h, /WHOOP needs re-consent/);
+    assert.match(h, /stopped retrying/);
+    assert.match(h, /Reconnect WHOOP/);
+    assert.doesNotMatch(h, /Refresh from WHOOP/);  // no button that would retry a dead token
+});
+
+test('WHOOP refresh: one request per click, the outcome is shown, and a pull reloads readiness', async () => {
+    const sent = [];
+    const { ctx } = coachPage(async (u, o) => {
+        sent.push(u + ' ' + o.method);
+        const body = u.endsWith('/refresh') ? { outcome: 'pulled', saved: ['whoop_recovery'], whoop: { state: 'connected', last_pull: '2026-10-27T08:00:00Z' } } : { signals: [], adjustment: {} };
+        return { ok: true, status: 200, json: async () => body };
+    });
+    ctx.api.renderWhoop({ state: 'connected' });
+    await Promise.all([ctx.api.refreshWhoop(true), ctx.api.refreshWhoop(true)]);
+    assert.equal(sent.filter((x) => x.endsWith('/refresh POST')).length, 1);
+    assert.ok(sent.includes('/api/coach/readiness GET'));
+});
+
+test('WHOOP refresh: a failed request is a message on the card, never an exception', async () => {
+    const { ctx, doc } = coachPage(() => Promise.reject(new Error('offline')));
+    ctx.api.renderWhoop({ state: 'connected' });
+    await ctx.api.refreshWhoop(true);
+    assert.match(html(doc, 'w-msg'), /Could not reach the server/);
+});
+
+test('WHOOP connect only follows a WHOOP address', async () => {
+    for (const [url, ok] of [['https://api.prod.whoop.com/oauth/oauth2/auth?x=1', true], ['https://evil.example/oauth', false], ['javascript:alert(1)', false], [undefined, false]]) {
+        const location = { href: '' };
+        const { ctx, doc } = coachPage(okJson({ url }), { location });
+        ctx.api.renderWhoop({ state: 'needs_reconsent', can_connect: true });
+        await ctx.api.connectWhoop();
+        assert.equal(location.href === url, ok, String(url));
+        if (!ok) assert.match(html(doc, 'w-msg'), /gave no sign-in address/);
+    }
+});
+
+test('1RM text: names with spaces, separators and decimal commas; bad lines are reported', () => {
+    const { ctx } = coachPage(noFetch);
+    same(ctx.api.parseOneRm('Cable chest press 80\nback: 90.5\nquads=100 kg\n\nlats 82,5 lb').out, { 'Cable chest press': 80, back: 90.5, quads: 100, lats: 82.5 });
+    same(ctx.api.parseOneRm('chest\n80\nok 5').errors, ['line 1', 'line 2']);
+});
+
+test('preferences: 1RMs need a unit, and the form is read exactly', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    doc.getElementById('p-goal').value = 'strength'; doc.getElementById('p-days').value = '3'; doc.getElementById('p-exp').value = 'beginner';
+    doc.getElementById('p-1rm').value = 'chest 80';
+    assert.match(ctx.api.prefsFromForm().error, /kg or lb/);
+    doc.getElementById('p-unit').value = 'kg';
+    same(ctx.api.prefsFromForm().prefs, { goal: 'strength', days_per_week: 3, experience: 'beginner', one_rm: { chest: 80 }, load_unit: 'kg' });
+    doc.getElementById('p-1rm').value = 'garbage';
+    assert.match(ctx.api.prefsFromForm().error, /Could not read the 1RM line 1/);
+});
+
+test('preferences: remember posts the validated body, reset deletes and restores defaults', async () => {
+    const sent = [];
+    const { ctx, doc } = coachPage(async (u, o) => { sent.push([u, o.method, o.body && JSON.parse(o.body)]); return { ok: true, status: 200, json: async () => ({}) }; });
+    doc.getElementById('p-goal').value = 'muscle'; doc.getElementById('p-days').value = '5'; doc.getElementById('p-exp').value = 'advanced';
+    await ctx.api.rememberPrefs();
+    same(sent[0], ['/api/coach/preferences', 'POST', { goal: 'muscle', days_per_week: 5, experience: 'advanced' }]);
+    assert.match(html(doc, 'p-msg'), /Remembered/);
+    await ctx.api.resetPrefs();
+    assert.equal(sent[1][1], 'DELETE');
+    assert.equal(doc.getElementById('p-goal').value, 'general');
+    assert.equal(doc.getElementById('p-days').value, '4');
+    assert.match(html(doc, 'p-msg'), /Forgotten/);
+    doc.getElementById('p-1rm').value = 'nonsense';
+    sent.length = 0;
+    await ctx.api.rememberPrefs();
+    assert.equal(sent.length, 0);  // a bad form is never sent
+});
+
+const exercise = (over = {}) => ({ name: 'Cable chest press', primary: 'chest', muscles: ['chest'], sets: 4, reps: 8, load: 60, pct1rm: 0.75, rir: 2, rest_sec: 90,
+    mode: 'standard', mode_note: 'n', accessory: 'handles', belt: 'mid', unilateral: false, ...over });
+const day = (exs) => ({ name: 'Upper', warmup: 'RAMP', setup_swaps: 1, exercises: exs });
+
+test('program cards: sets x reps @ load, mode, belt, accessories, rest and what readiness changed', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    ctx.api.S.loadUnit = 'kg';
+    ctx.api.render(aProgram({ days: [day([exercise({ sets: 2, rir: 3 }), exercise({ name: 'Face pull', accessory: 'rope', load: 0 })])],
+        readiness_applied: { band: 'low', note: 'Low readiness: defer the heaviest lifts.', adjustments: [
+            { day: 0, exercise: 'Cable chest press', field: 'sets', from: 4, to: 2 }, { day: 0, exercise: 'Cable chest press', field: 'rir', from: 2, to: 3 }] } }));
+    const h = html(doc, 'out');
+    assert.match(h, /2 × 8 @ 60 kg/);
+    assert.match(h, /75% of 1RM/);
+    assert.match(h, /belt mid · handles/);
+    assert.match(h, /Needs: handles, rope/);
+    assert.match(h, /rest 90 s/);
+    assert.match(h, /readiness: sets 4 to 2/);
+    assert.match(h, /readiness: rir 2 to 3/);
+    assert.match(h, /2 changes made to this program because of today/);
+    assert.match(h, /defer the heaviest lifts/);
+});
+
+test('program with no readiness changes says the program is as written, and none at all says so too', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    ctx.api.render(aProgram({ readiness_applied: { band: 'high', adjustments: [] }, autoregulation: { band: 'high' } }));
+    assert.match(html(doc, 'out'), /No changes: this is the program as written\. Readiness can only reduce/);
+    ctx.api.render(aProgram());
+    assert.match(html(doc, 'out'), /No fresh readiness: the program is shown as written/);
+});
+
+test('apply is blocked, with the reason, when signed out or when loads need an unconfirmed unit', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    ctx.api.render(aProgram({ days: [day([exercise()])] }));
+    assert.match(html(doc, 'out'), /Log in on the Settings page/);
+    Object.assign(ctx.api.S.status, { authenticated: true, writes_enabled: true, unit_confirmed: false });
+    ctx.api.renderProgram();
+    assert.match(html(doc, 'out'), /unit \(kg or lb\) is not confirmed/);
+    ctx.api.render(aProgram({ days: [day([exercise({ load: 0 })])] }));  // no loads: the unit does not matter
+    assert.match(html(doc, 'out'), /Preview save/);
+});
+
+test('apply: preview is a dry run for the whole program, then the card offers an explicit confirm', async () => {
+    const sent = [];
+    const answer = { results: [
+        { day_index: 0, name: 'W0', exercise_count: 1, resolved: [{}], unresolved: [{ name: 'Face pull', reason: 'not found in your exercise library' }], notes: ['coach modes (eccentric) are not applied'] },
+        { day_index: 1, name: 'W1', error: 'AvoidListChanged', message: 'an exercise on your avoid list was added' }] };
+    const { ctx, doc } = coachPage(async (u, o) => { sent.push([u, o.method, JSON.parse(o.body)]); return { ok: true, status: 200, json: async () => answer }; });
+    ctx.api.S.loadUnit = 'kg';
+    ctx.api.render(aProgram({ days: [day([exercise(), exercise({ name: 'Face pull' })]), day([exercise()])] }));
+    Object.assign(ctx.api.S.status, SIGNED_IN);
+    await ctx.api.previewAll();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0][2].dry_run, true);
+    assert.equal(sent[0][2].load_unit, 'kg');
+    assert.equal('day_index' in sent[0][2], false);
+    const d0 = html(doc, 'apply0');
+    assert.match(d0, /Nothing has been saved yet/);
+    assert.match(d0, /Face pull: not found in your exercise library/);
+    assert.match(d0, /coach modes \(eccentric\)/);
+    assert.match(d0, /Confirm and save to my workouts/);
+    assert.match(html(doc, 'apply1'), /an exercise on your avoid list was added/);
+    assert.doesNotMatch(html(doc, 'apply1'), /Confirm and save/);
+});
+
+test('apply: confirm sends the SAME program, a literal dry_run false, the day and the unit', async () => {
+    const sent = [];
+    const { ctx, doc } = coachPage(async (u, o) => { sent.push(JSON.parse(o.body)); return { ok: true, status: 200, json: async () => ({ results: [{ created: true, name: 'W', exercise_count: 2 }] }) }; });
+    ctx.api.S.loadUnit = 'lb';
+    const program = aProgram({ days: [day([exercise()]), day([exercise()])] });
+    ctx.api.render(program);
+    Object.assign(ctx.api.S.status, SIGNED_IN);
+    ctx.api.S.previews[1] = { name: 'W', exercise_count: 2, resolved: [], unresolved: [], notes: [] };
+    await ctx.api.confirmDay(1);
+    assert.equal(sent[0].dry_run, false);
+    assert.equal(sent[0].day_index, 1);
+    assert.equal(sent[0].load_unit, 'lb');
+    same(sent[0].program, program);
+    assert.match(html(doc, 'apply1'), /Saved as "W"/);
+});
+
+test('apply: confirm needs a preview first and never sends without one or after an error preview', async () => {
+    const sent = [];
+    const { ctx } = coachPage(async () => { sent.push(1); return { ok: true, status: 200, json: async () => ({}) }; });
+    ctx.api.render(aProgram({ days: [day([exercise()])] }));
+    Object.assign(ctx.api.S.status, SIGNED_IN);
+    await ctx.api.confirmDay(0);
+    ctx.api.S.previews[0] = { error: 'boom' };
+    await ctx.api.confirmDay(0);
+    assert.equal(sent.length, 0);
+});
+
+test('apply: with writes off the preview works but there is no confirm button', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    ctx.api.render(aProgram({ days: [day([exercise({ load: 0 })])] }));
+    Object.assign(ctx.api.S.status, { authenticated: true, writes_enabled: false, unit_confirmed: true });
+    ctx.api.S.previews[0] = { name: 'W', exercise_count: 1, resolved: [], unresolved: [], notes: [] };
+    ctx.api.renderAllApply();
+    const h = html(doc, 'apply0');
+    assert.match(h, /Saving is turned off on this server \(GYM_ALLOW_WRITES is not 1\)/);
+    assert.doesNotMatch(h, /Confirm and save/);
+});
+
+test('apply: a refused save (writes turned off meanwhile, or an upstream error) says so and can be retried', async () => {
+    const { ctx, doc } = coachPage(okJson({ error: 'writes_disabled', message: 'Set GYM_ALLOW_WRITES=1' }, 403));
+    ctx.api.render(aProgram({ days: [day([exercise({ load: 0 })])] }));
+    Object.assign(ctx.api.S.status, SIGNED_IN);
+    ctx.api.S.previews[0] = { name: 'W', exercise_count: 1, resolved: [], unresolved: [], notes: [] };
+    await ctx.api.confirmDay(0);
+    assert.match(html(doc, 'apply0'), /Saving is turned off/);
+    const second = coachPage(okJson({ results: [{ error: 'UpstreamRejected' }] }));
+    second.ctx.api.render(aProgram({ days: [day([exercise({ load: 0 })])] }));
+    Object.assign(second.ctx.api.S.status, SIGNED_IN);
+    second.ctx.api.S.previews[0] = { name: 'W', exercise_count: 1, resolved: [], unresolved: [], notes: [] };
+    await second.ctx.api.confirmDay(0);
+    assert.match(html(second.doc, 'saveMsg0'), /UpstreamRejected/);
+    assert.equal(second.doc.getElementById('save0').disabled, false);
+});
+
+test('regenerating clears every preview, so a confirm can never save an older program', async () => {
+    const { ctx } = coachPage(async (u) => ({ ok: true, status: 200, json: async () => (u.endsWith('/program') ? aProgram({ goal_label: 'NEW' }) : {}) }));
+    ctx.api.render(aProgram({ days: [day([exercise()])] }));
+    ctx.api.S.previews[0] = { name: 'W', exercise_count: 1, resolved: [], unresolved: [], notes: [] };
+    await ctx.api.gen();
+    same(ctx.api.S.previews, {});
+});
+
+test('avoid list: names, remove asks first, the add form sends pain or avoid', async () => {
+    const sent = [];
+    let confirmed = false;
+    const { ctx, doc } = coachPage(async (u, o) => { sent.push([u, o.method, o.body && JSON.parse(o.body)]); return { ok: true, status: 200, json: async () => ({ profile: { avoid: [] }, next_program_adjustment: {} }) }; },
+        { confirm: () => confirmed });
+    ctx.api.renderAvoid({ profile: { avoid: ['Lat pulldown', 'Cable curl'], avg_rpe: 8 }, next_program_adjustment: { action: 'hold (feedback neutral)' } });
+    const h = html(doc, 'avoid-body');
+    assert.match(h, /Lat pulldown/);
+    assert.match(h, /removeAvoid\(1\)/);
+    assert.match(h, /hold \(feedback neutral\) \(average RPE 8\)/);
+    await ctx.api.removeAvoid(1);
+    assert.equal(sent.length, 0);  // declined
+    confirmed = true;
+    await ctx.api.removeAvoid(1);
+    assert.equal(sent[0][0], '/api/coach/feedback?avoid=Cable%20curl');
+    assert.equal(sent[0][1], 'DELETE');
+    sent.length = 0;
+    doc.getElementById('a-name').value = '  Squat ';
+    doc.getElementById('a-pain').checked = true;
+    await ctx.api.submitAvoid();
+    same(sent[0][2], { pain: true, exercise: 'Squat' });
+    doc.getElementById('a-pain').checked = false;
+    doc.getElementById('a-name').value = 'Lunge';
+    await ctx.api.submitAvoid();
+    same(sent[1][2], { avoid: 'Lunge' });
+    doc.getElementById('a-name').value = '   ';
+    sent.length = 0;
+    await ctx.api.submitAvoid();
+    assert.equal(sent.length, 0);
+    assert.match(html(doc, 'a-msg'), /Type the exercise name/);
+});
+
+test('avoid list: empty and unreadable states', () => {
+    const { ctx, doc } = coachPage(noFetch);
+    ctx.api.renderAvoid({ profile: { avoid: [] } });
+    assert.match(html(doc, 'avoid-body'), /Nothing is on your avoid list/);
+    ctx.api.renderAvoid({ profile: { avoid: ['x'], unreadable: 'JSONDecodeError' } });
+    assert.match(html(doc, 'avoid-body'), /could not be fully read \(JSONDecodeError\)/);
+});
+
+test('the coach page does not fail when WHOOP and readiness are down: other cards still load', async () => {
+    const { ctx, doc } = coachPage(async (u) => {
+        if (u.includes('/whoop') || u.includes('/readiness')) throw new Error('offline');
+        return { ok: true, status: 200, json: async () => (u.endsWith('/feedback') ? { profile: { avoid: ['Squat'] } } : u.endsWith('/status') ? SIGNED_IN : {}) };
+    });
+    await ctx.api.loadAll();
+    assert.match(html(doc, 'avoid-body'), /Squat/);
+    assert.match(html(doc, 'readiness-body'), /could not be used/);
+});

@@ -41,6 +41,7 @@ BACKOFF_MAX_S = 3600
 CONSENT_TTL_S = 600
 CALLBACK_PATH = "/whoop/callback"
 MAX_PENDING_STATES = 5
+_TOKENISH = re.compile(r"[A-Za-z0-9._~\-]{1,2048}")  # what an OAuth code or our state can look like: anything else is refused unread
 SYNCED_KINDS = ("whoop_recovery", "sleep_hours")  # all WHOOP yields: no HRV/resting-HR baseline
 HOW_TO = ("WHOOP is not connected. Set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET on the server and put the consented "
           "whoop.token.json in the data volume (see docs/ai-coach.md). The coach works without it.")
@@ -347,7 +348,7 @@ def finish_consent(data_dir, code, state, env=None, http=None, now=None):
     Nothing happens unless `state` is a pending, unexpired one; it is burned before the exchange."""
     env = _env(env)
     now = now or datetime.now(timezone.utc)
-    if not (isinstance(code, str) and isinstance(state, str) and 0 < len(code) <= 2048 and 0 < len(state) <= 256):
+    if not (isinstance(code, str) and isinstance(state, str) and _TOKENISH.fullmatch(code) and _TOKENISH.fullmatch(state)):
         raise ConsentError("This sign-in link is not valid. Start again from the Coach page.")
     if not _burn(data_dir, state, now):
         raise ConsentError("This sign-in link is unknown, expired or already used. Start again from the Coach page.")

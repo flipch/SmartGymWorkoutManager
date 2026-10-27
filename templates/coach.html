@@ -308,7 +308,7 @@ function parseOneRm(text) {
     String(text || '').split('\n').forEach((line, i) => {
         line = line.trim();
         if (!line) return;
-        const m = /^(.*\S)[\s:=]+(\d+(?:[.,]\d+)?)\s*(?:kg|lb|lbs)?$/i.exec(line);
+        const m = /^(.+?)[\s:=]+(\d+(?:[.,]\d+)?)\s*(?:kg|lbs?)?$/i.exec(line);
         if (!m) { errors.push('line ' + (i + 1)); return; }
         out[m[1].trim()] = Number(m[2].replace(',', '.'));
     });
