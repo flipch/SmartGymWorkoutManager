@@ -6,9 +6,13 @@ and wrote partial files, and redirected the browser to the caller's URL on failu
 """
 import hashlib
 import os
+import re
 from urllib.parse import urlparse
 
 import requests
+from urllib3.util import parse_url
+
+_AUTHORITY = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::443)?", re.IGNORECASE)
 
 # Hosts we are willing to fetch media from (exact names, or a leading-dot suffix). Override with GYM_MEDIA_HOSTS.
 DEFAULT_HOSTS = (".speediance.com", "d1rwzqjevxdih5.cloudfront.net")
@@ -28,15 +32,18 @@ def allowed_hosts() -> tuple[str, ...]:
 
 def is_allowed_url(url) -> bool:
     """https only, a vendor media host, a known media extension, no credentials in the URL."""
-    if not isinstance(url, str):
-        return False
+    if not isinstance(url, str) or len(url) > 2048 or any(ord(c) <= 32 or ord(c) >= 127 or c == "\\" for c in url):
+        return False  # a backslash, space or control character is read differently by different URL parsers
     try:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
         port = parsed.port
-    except ValueError:
+        other = parse_url(url)  # the parser requests/urllib3 will actually use to connect
+    except Exception:
         return False
     if parsed.scheme != "https" or not host or parsed.username or parsed.password or port not in (None, 443):
+        return False
+    if not _AUTHORITY.fullmatch(parsed.netloc) or (other.host or "").lower() != host or other.port not in (None, 443) or other.auth:
         return False
     if not any(host == h.lstrip(".") or (h.startswith(".") and host.endswith(h)) for h in allowed_hosts()):
         return False

@@ -1261,7 +1261,14 @@ You must output a JSON object with the following structure:
         const blocked = editorBlocker();
         if (blocked) { alert(blocked); return; }
         try {
-            const data = JSON.parse(jsonStr);
+            let data = JSON.parse(jsonStr);
+            if (Array.isArray(data)) {  // the dashboard export is a list of workouts; one of them can be imported at a time
+                if (data.length !== 1) {
+                    alert(`Nothing was imported: the file holds ${data.length} workouts. Paste one workout at a time.`);
+                    return;
+                }
+                data = data[0];
+            }
 
             // Weights are never converted: refuse a file written in the other unit (a bare number would be 2.2x off)
             const declared = String((data && data.weightUnit) ?? '').trim().toLowerCase();

@@ -248,7 +248,7 @@
                             <span class="${diffColor}">${diff}</span>
                             ${cats ? `<span class="text-gray-400">${esc(cats)}</span>` : ''}
                         </div>
-                        ${c.trainedUserCount ? `<span class="text-xs text-gray-500">${c.trainedUserCount.toLocaleString()} trained</span>` : ''}
+                        ${c.trainedUserCount ? `<span class="text-xs text-gray-500">${esc(Number(c.trainedUserCount).toLocaleString())} trained</span>` : ''}
                         ${c.isNew ? ' <span class="inline-block px-1.5 py-0.5 bg-green-600 text-white text-[10px] rounded">NEW</span>' : ''}
                         ${c.isHot ? ' <span class="inline-block px-1.5 py-0.5 bg-red-600 text-white text-[10px] rounded">HOT</span>' : ''}
                     </div>

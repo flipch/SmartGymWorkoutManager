@@ -409,7 +409,11 @@ def autoregulate(whoop_recovery: float = None, hrv_vs_baseline: str = None,
     def run():
         got = state_io.require_readiness(r)  # out-of-range numbers are refused
         if use_stored_readiness:  # a partial reading must not hide a fresh stored red one
-            got = merge_readiness(got, _client().data_dir)
+            data_dir = _client().data_dir
+            unreadable = _readiness_read_error(data_dir)
+            if unreadable:
+                raise RuntimeError(f"the stored readiness could not be read ({unreadable}): post a new reading, or pass use_stored_readiness=false")
+            got = merge_readiness(got, data_dir)
         return coach.autoregulate(got)
     return _safe(run)
 

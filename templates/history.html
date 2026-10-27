@@ -354,7 +354,7 @@
                             <div class="col-span-11">Duration</div>
                         </div>`;
                     sets.forEach((s, i) => {
-                        const dur = s.time || s.targetCount || 0;  // what was held, not what was prescribed
+                        const dur = (s.time ?? s.targetCount) || 0;  // what was held (an explicit 0 included), not what was prescribed
                         setsHtml += `
                             <div class="grid grid-cols-12 gap-1 items-center bg-gray-800/50 rounded px-1 py-0.5 text-xs">
                                 <div class="col-span-1 text-center text-gray-500 font-mono">${i + 1}</div>
@@ -511,6 +511,9 @@
         }
         btn.disabled = false;
         btn.textContent = 'Deep Export';
+        if (fullDataset.length && fullDataset.every(r => r.detail === null)) {  // nothing but error entries is not an export
+            return alert('Export failed: no workout detail could be fetched (' + fullDataset.length + ' of ' + fullDataset.length + ' failed). Try again.');
+        }
 
         const exportObj = {
             exportDate: new Date().toISOString(),

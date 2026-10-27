@@ -112,6 +112,15 @@ def _int(value):
     return int(float(value))
 
 
+def _goal_unit(detail):
+    """Mirrors the editor's getSetGoalUnit: 'sec' (timed), 'reps', 'kcal' or None (the per-set toggle decides)."""
+    method = detail.get('completionMethod')
+    selected = detail.get('selectCompletionMethod')
+    if method == 0 and str(selected if selected is not None else '') == '1':
+        return 'sec'
+    return {1: 'reps', 2: 'sec', 5: 'kcal'}.get(method)
+
+
 def _has_cable_load(exercises):
     """Is any set a kg/lb cable load (not a preset RM, not a Vita level)? Those are the numbers a wrong unit corrupts."""
     for ex in exercises:
@@ -187,6 +196,7 @@ class SpeedianceClient:
         # DATA_DIR lets the web app and the MCP server share one config.json
         # (the logged-in user's token) + library cache via a mounted volume.
         self.data_dir = os.environ.get("DATA_DIR", ".")
+        self._goal_units = {}  # group id -> the unit its exercise forces on every set, from the last strict detail read
         try:
             os.makedirs(self.data_dir, exist_ok=True)
         except Exception:
@@ -650,8 +660,14 @@ class SpeedianceClient:
             return detail
         return resp.json().get('data', {})
 
+    def exercise_goal_unit(self, group_id):
+        """The unit the exercise itself forces on its sets ('sec', 'reps', 'kcal'), or None when the per-set choice decides.
+        Read from the same strict detail answer is_exercise_unilateral used (no second request); None when that was not read."""
+        return self._goal_units.get(group_id)
+
     def is_exercise_unilateral(self, group_id, strict=False):
         detail = self.get_exercise_detail(group_id, strict=strict)
+        self._goal_units[group_id] = _goal_unit(detail)
         return detail.get('isLeftRight') == 1
 
     def get_batch_details(self, group_ids, strict=False):
@@ -774,6 +790,7 @@ class SpeedianceClient:
         total_capacity = 0
 
         unilateral_check = {}
+        self._goal_units = {}
         for group_id in group_ids:
             unilateral_check[group_id] = self.is_exercise_unilateral(group_id, strict=True)
 
@@ -789,6 +806,11 @@ class SpeedianceClient:
                 raise ValueError(f"exercise {group_id}: this is not a level-based (Vita) exercise; its data_stat_type must not be 6")
             
             is_unilateral = unilateral_check.get(group_id, False)
+            forced_unit = self.exercise_goal_unit(group_id)
+            if forced_unit == 'kcal':
+                raise ValueError(f"exercise {group_id}: this is a calorie-goal exercise; calorie targets cannot be saved by this app yet")
+            if forced_unit and any(str(s.get('unit') or 'reps').lower() != forced_unit for s in sets):
+                raise ValueError(f"exercise {group_id}: this exercise is {'timed' if forced_unit == 'sec' else 'rep-based'}; every set's unit must be '{forced_unit}'")
             if is_unilateral and len(sets) % 2:  # the machine alternates left, right: a lone set is one-sided work
                 raise ValueError(f"exercise {group_id}: a one-sided exercise needs left/right pairs (an even number of sets)")
 

@@ -1389,6 +1389,75 @@ class Round23(unittest.TestCase):
         self.assertIn("could not be loaded", out["data_note"])
 
 
+class Round24(unittest.TestCase):
+    def mcp(self, name):
+        return getattr(getattr(mcp_server, name), "fn", getattr(mcp_server, name))
+
+    def test_the_media_allowlist_means_the_same_host_to_every_parser(self):
+        import media
+        refused = ["https://192.168.1.1\\.speediance.com/x.mp4", "https://evil.com\\@cdn.speediance.com/x.mp4", "https://a.speediance.com:444/x.mp4",
+                   "https://cdn.speediance.com /x.mp4", "https://cdn.speediance.com\t/x.mp4", "https://cdn.speediance.com\n/x.mp4",
+                   "https://user@cdn.speediance.com/x.mp4", "https://cdn.speediance.com@evil.com/x.mp4", "http://cdn.speediance.com/x.mp4",
+                   "https://cdn.speediance.com/x.exe", "https://\u0441dn.speediance.com/x.mp4", "https://127.0.0.1/x.mp4",
+                   "https://evil.com/.speediance.com/x.mp4", "https://evil.com?.speediance.com/x.mp4", "https://evil.com#.speediance.com/x.mp4",
+                   "https://evil.com\\.d1rwzqjevxdih5.cloudfront.net/x.mp4", "https://" + "a" * 3000 + ".speediance.com/x.mp4", None, 5]
+        for url in refused:
+            self.assertFalse(media.is_allowed_url(url), repr(url)[:70])
+        for url in ("https://cdn.speediance.com/a/b.mp4", "https://CDN.Speediance.com:443/a.jpg?x=1", "https://d1rwzqjevxdih5.cloudfront.net/x.png"):
+            self.assertTrue(media.is_allowed_url(url), url)
+
+    def test_the_media_proxy_never_connects_for_a_smuggled_host(self):
+        with mock.patch("requests.get") as get:
+            for url in ("https://192.168.1.1\\.speediance.com/x.mp4", "https://evil.com\\@cdn.speediance.com/x.mp4"):
+                resp = gym_app.app.test_client().get("/media_proxy", headers=BASIC, query_string={"url": url})
+                self.assertNotEqual(resp.status_code, 200, url)
+            get.assert_not_called()
+
+    def test_an_exercises_own_goal_unit_is_enforced_on_the_save_path(self):
+        client = client_with(1, True)
+        del client.is_exercise_unilateral  # exercise the real strict read
+        for method, selected, ok_unit, bad_unit in ((2, None, "sec", "reps"), (1, None, "reps", "sec"), (0, "1", "sec", "reps")):
+            client.get_exercise_detail = lambda gid, strict=False, m=method, sel=selected: {"isLeftRight": 0, "completionMethod": m, "selectCompletionMethod": sel}
+            good, bad = ex(10), ex(10)
+            good["sets"] = [{"reps": 30, "weight": 5, "rest": 60, "unit": ok_unit}]
+            bad["sets"] = [{"reps": 30, "weight": 5, "rest": 60, "unit": bad_unit}]
+            client.prepare_workout("n", [good])
+            with self.assertRaises(ValueError, msg=(method, selected)) as ctx:
+                client.prepare_workout("n", [bad])
+            self.assertIn(f"must be '{ok_unit}'", str(ctx.exception))
+        client.get_exercise_detail = lambda gid, strict=False: {"isLeftRight": 0, "completionMethod": 5}
+        with self.assertRaises(ValueError) as ctx:
+            client.prepare_workout("n", [ex(10)])
+        self.assertIn("calorie-goal", str(ctx.exception))
+        client.get_exercise_detail = lambda gid, strict=False: {"isLeftRight": 0, "completionMethod": 3}
+        client.prepare_workout("n", [ex(10)])  # no rule for an unknown method
+
+    def test_autoregulate_reports_an_unreadable_stored_reading(self):
+        d = tempfile.mkdtemp(prefix="gym-r24-")
+        path = features._readiness_path(d)
+        for content in ("{not json", "[1]", '"text"'):
+            open(path, "w").write(content)
+            with mock.patch.object(features, "_readiness_path", side_effect=lambda dd=None: path):
+                c = gym_app.app.test_client()
+                resp = c.post("/api/coach/autoregulate", headers=BASIC, json={"sleep_hours": 9})
+                self.assertEqual((resp.status_code, resp.get_json()["error"]), (500, "readiness_unreadable"), content)
+                self.assertEqual(c.post("/api/coach/autoregulate?use_stored=0", headers=BASIC, json={"sleep_hours": 9}).status_code, 200)
+                self.assertEqual(c.get("/api/coach/readiness", headers=BASIC).status_code, 500)
+                prog = c.post("/api/coach/program", headers=BASIC, json={"goal": "muscle", "readiness": {"sleep_hours": 9}})
+                self.assertEqual(prog.status_code, 200, content)  # a wrong-shaped file never crashes the planner
+                self.assertIn("readiness_error", prog.get_json())
+            client = mock.Mock(data_dir=d)
+            with mock.patch.object(mcp_server, "_client", return_value=client), mock.patch.object(mcp_server, "_require_auth"):
+                self.assertIn("error", self.mcp("autoregulate")(sleep_hours=9))
+                self.assertNotIn("error", self.mcp("autoregulate")(sleep_hours=9, use_stored_readiness=False))
+
+    def test_the_machines_sidedness_beats_a_name_guess_in_working_sets(self):
+        sets = [{"reps": 10, "weight": 20}] * 4
+        self.assertEqual(features._working_sets({"name": "Cable Curl", "unilateral": True, "sets": sets}), 2.0)
+        self.assertEqual(features._working_sets({"name": "Single-arm Row", "unilateral": False, "sets": sets}), 4)
+        self.assertEqual(features._working_sets({"name": "Single-arm Row", "sets": sets}), 2.0)  # no flag: the name guess
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

@@ -165,7 +165,9 @@ def _epley(w, reps):
 def _working_sets(ex):
     """Count sets that were actually worked (have reps); unilateral counts L+R as 0.5 each."""
     n = sum(1 for s in ex.get("sets", []) if (s.get("reps") or _set_weight(s) > 0))
-    _, _, uni = coach.classify_exercise(ex["name"])
+    uni = ex.get("unilateral")
+    if not isinstance(uni, bool):  # the session summary carries the machine's own flag; a name guess is the fallback
+        _, _, uni = coach.classify_exercise(ex["name"])
     return n / 2.0 if uni else n
 
 
@@ -566,7 +568,8 @@ def _readiness_path(data_dir=None):
 def _load_readiness(data_dir=None):
     try:
         with open(_readiness_path(data_dir)) as f:
-            return json.load(f)
+            loaded = json.load(f)
+        return loaded if isinstance(loaded, dict) else {}  # a list or a string is reported by _readiness_read_error, never crashed on
     except Exception:
         return {}
 
@@ -724,6 +727,10 @@ def coach_autoregulate():
     except ValueError as e:
         return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
     if request.args.get("use_stored", "1") != "0":  # a partial reading must not hide a fresh stored red one
+        unreadable = _readiness_read_error()
+        if unreadable:  # nor may an unreadable one: say so rather than answer from the partial reading alone
+            return jsonify({"error": "readiness_unreadable", "message": f"The stored readiness could not be read ({unreadable}); "
+                            "post a new reading, or add ?use_stored=0 to ignore it."}), 500
         readiness = merge_readiness(readiness)
     return jsonify(coach.autoregulate(readiness))
 

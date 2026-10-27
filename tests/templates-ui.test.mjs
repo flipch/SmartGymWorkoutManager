@@ -557,8 +557,9 @@ test('workout history: a search during the export cannot mix two ranges into one
 
 test('history: the deep export marks a failed record instead of storing the error as its detail', async () => {
     const { ctx, calls } = historyActions('history.html', 'async function deepExportHistory', '    function exportHistory', {
-        historyData: { records: [{ trainingId: 5, type: 5 }], start: 'a', end: 'b' }, loadedRange: { start: '2026-09-01', end: '2026-09-30' },
-        fetch: async () => ({ ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }),
+        historyData: { records: [{ trainingId: 5, type: 5 }, { trainingId: 6, type: 5 }], start: 'a', end: 'b' }, loadedRange: { start: '2026-09-01', end: '2026-09-30' },
+        fetch: async (url) => (url.includes('/6?') ? { ok: true, status: 200, json: async () => ({ code: 0 }) }
+                                                    : { ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }),
     });
     await ctx.deepExportHistory();
     const blob = calls.find((c) => c[0] === 'blob');
@@ -926,7 +927,7 @@ test('history: only the newest range loads, and an export is named for the range
 });
 
 test('history detail shows the time that was held, not the time that was prescribed', () => {
-    assert.match(read('history.html'), /const dur = s\.time \|\| s\.targetCount \|\| 0;/);
+    assert.match(read('history.html'), /const dur = \(s\.time \?\? s\.targetCount\) \|\| 0;/);
 });
 
 test('a double click on Schedule books once', async () => {
@@ -1000,4 +1001,39 @@ test('the single-range export is named for the range that was loaded', () => {
     vm.runInContext(between(src, 'function exportHistory', '    // Keyboard shortcuts') + '\nglobalThis.exportHistory = exportHistory;', ctx);
     ctx.exportHistory();
     assert.equal(anchors[0].download, 'workout_history_2026-09-01_2026-09-30.json');
+});
+
+// ----------------------------------------------------------------------------------------------- round 24
+test('the dashboard export (a list of workouts) can be imported one workout at a time', async () => {
+    const one = { name: 'x', weightUnit: 'kg', exercises: [{ id: 5, sets: [aSet()] }] };
+    const e = editor(() => metaOf());
+    e.ctx.userUnit = 0;
+    await importJson(e.ctx, e.doc, [one]);
+    assert.equal(e.ctx.workoutData.length, 1);
+    const many = editor(() => metaOf());
+    many.ctx.userUnit = 0;
+    many.ctx.workoutData = planWith(1);
+    await importJson(many.ctx, many.doc, [one, one]);
+    assert.equal(many.ctx.workoutData[0].title, 'old0');
+    assert.ok(many.calls.some((c) => c[0] === 'alert' && /holds 2 workouts/.test(c[1])));
+    const empty = editor(() => metaOf());
+    await importJson(empty.ctx, empty.doc, []);
+    assert.ok(empty.calls.some((c) => c[0] === 'alert' && /holds 0 workouts/.test(c[1])));
+});
+
+test('history: a deep export in which every detail failed is not downloaded', async () => {
+    const { ctx, calls } = historyActions('history.html', 'async function deepExportHistory', '    function exportHistory', {
+        historyData: { records: [{ trainingId: 5, type: 5 }], start: 'a', end: 'b' }, loadedRange: { start: 'a', end: 'b' },
+        fetch: async () => ({ ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }),
+    });
+    await ctx.deepExportHistory();
+    assert.equal(calls.filter((c) => c[0] === 'blob').length, 0);
+    assert.ok(calls.some((c) => c[0] === 'alert' && /Export failed/.test(c[1])));
+});
+
+test('a measured zero is not replaced by the prescribed duration, and vendor numbers are escaped', () => {
+    assert.match(read('history.html'), /const dur = \(s\.time \?\? s\.targetCount\) \|\| 0;/);
+    assert.equal(((0 ?? 60) || 0), 0);
+    assert.match(read('browse.html'), /esc\(Number\(c\.trainedUserCount\)\.toLocaleString\(\)\)/);
+    assert.doesNotMatch(read('browse.html'), /\$\{c\.trainedUserCount\.toLocaleString\(\)\}/);
 });
