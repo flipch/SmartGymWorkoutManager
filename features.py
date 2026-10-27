@@ -1361,6 +1361,9 @@ def coach_apply():
         return jsonify({"error": "not_authenticated",
                         "message": "Log in at /settings to save to your Speediance account."}), 401
     body = json_object(request.get_json(silent=True))
+    unknown = sorted(str(k) for k in set(body) - {"program", "day_index", "name", "dry_run", "load_unit"})
+    if unknown:  # "dayIndex" must not read as "no day_index" and save every day
+        return jsonify({"error": "bad_request", "message": "Unknown field(s): " + ", ".join(unknown)}), 400
     program = body.get("program")
     if not isinstance(program, dict) or not program.get("days"):
         return jsonify({"error": "no_program",

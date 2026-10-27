@@ -251,6 +251,12 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                     else "no recorded sets last time (skipped or unrecorded): use your template's targets")
             out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None, note))
             continue
+        done_reps = sorted(r.reps for r in performed if r.reps)
+        if reps and done_reps and done_reps[len(done_reps) // 2] < 0.6 * reps:  # a 1-rep max is not the load for a 10-rep prescription
+            out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
+                                        f"last logged at about {done_reps[len(done_reps) // 2]} rep(s) per set, far from the {reps} prescribed: "
+                                        "choose a load that leaves the target RIR"))
+            continue
         last = anchor_load(performed)
         if last is None:  # the sets that carry a load did not all count (a seconds-only side, a set without reps)
             out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,

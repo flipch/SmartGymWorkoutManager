@@ -132,6 +132,27 @@ def delete_workout(template_id: str) -> dict:
     return _safe(run)
 
 
+_EXERCISE_KEYS = {"groupId", "sets", "preset_id", "variant_id", "data_stat_type"}
+_SET_KEYS = {"reps", "weight", "rest", "unit", "mode"}
+
+
+def _check_exercise_keys(exercises):
+    """save_workout reads fixed keys only; any other (a misspelled `weight`, or the coach's `load`/`rest_sec`) would be
+    dropped and the workout saved with defaults. Names only in the message, never the values."""
+    if not isinstance(exercises, list):
+        return  # validate_workout reports the shape
+    for i, ex in enumerate(exercises, 1):
+        if not isinstance(ex, dict):
+            continue
+        extra = sorted(str(k) for k in set(ex) - _EXERCISE_KEYS)
+        if extra:
+            raise ValueError(f"exercise {i}: unknown key(s) {', '.join(extra)}; allowed: {', '.join(sorted(_EXERCISE_KEYS))}")
+        for j, st in enumerate(ex.get("sets") if isinstance(ex.get("sets"), list) else [], 1):
+            extra = sorted(str(k) for k in set(st) - _SET_KEYS) if isinstance(st, dict) else []
+            if extra:
+                raise ValueError(f"exercise {i} set {j}: unknown key(s) {', '.join(extra)}; allowed: {', '.join(sorted(_SET_KEYS))}")
+
+
 @mcp.tool()
 def save_workout(name: str, exercises: list, template_id: StrictInt | StrictStr | None = None) -> dict:  # true must not become template 1
     """Create (template_id omitted) or update (template_id given) a workout.
@@ -144,6 +165,7 @@ def save_workout(name: str, exercises: list, template_id: StrictInt | StrictStr 
     Returns the Speediance API response."""
     def run():
         _require_writes()
+        _check_exercise_keys(exercises)  # a key this tool does not read ("load", "rest_sec") must not be silently dropped
         c = _client(); _require_auth(c)
         result = c.save_workout(name, exercises, template_id)
         if not isinstance(result, dict) or result.get("code") != 0:  # the web route and apply_program check this too
@@ -174,6 +196,8 @@ def schedule_workout(day: str, template_code: str, add: bool = True) -> dict:
         _check_template_id(template_code)  # one real id: not 0, a negative, a list or a path
         c = _client(); _require_auth(c)
         ok = c.schedule_workout(day, template_code, 1 if add else 0)
+        if not ok:  # an unacknowledged write is a failure, not a normal-shaped answer
+            raise UpstreamError("the vendor did not confirm the calendar change: check the calendar before trying again")
         return {"day": day, "template_code": template_code,
                 "action": "scheduled" if add else "unscheduled", "ok": bool(ok)}
     return _safe(run)

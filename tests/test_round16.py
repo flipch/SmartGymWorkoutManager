@@ -2777,3 +2777,53 @@ class Round49(unittest.TestCase):
         for entry, title in (("Seated Row", "Seated Leg Curl"), ("leg press", "Leg Extension"), ("row", "Arrow Press"), ("chest press", "Chest Fly")):
             self.assertFalse(coach._is_avoided(title, {coach._norm_name(entry)}), (entry, title))
         self.assertEqual(coach._stem("calves"), "calf")
+
+
+class Round50(unittest.TestCase):
+    def call(self, tool, args, writes=True):
+        import asyncio
+        client = mock.Mock(data_dir=tempfile.mkdtemp(prefix="gym-r50-"))
+        client.save_workout.return_value = {"code": 0, "data": {"id": 9}}
+        client.schedule_workout.return_value = False
+        with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1" if writes else "0"}), mock.patch.object(mcp_server, "_client", return_value=client), \
+                mock.patch.object(mcp_server, "_require_auth"):
+            try:
+                out = asyncio.run(mcp_server.mcp.call_tool(tool, args))
+            except Exception as e:
+                out = e
+        return client, out
+
+    def test_save_workout_refuses_keys_it_would_silently_drop(self):
+        good = [{"groupId": 7, "sets": [{"reps": 8, "weight": 60, "rest": 90, "unit": "reps"}]}]
+        client, _ = self.call("save_workout", {"name": "n", "exercises": good})
+        client.save_workout.assert_called_once()
+        for bad in ([{"groupId": 7, "sets": [{"reps": 8, "load": 60, "rest_sec": 120}]}],
+                    [{"groupId": 7, "sets": [{"reps": 8, "wieght": 60}]}],
+                    [{"groupId": 7, "title": "x", "sets": [{"reps": 8, "weight": 60}]}]):
+            client, _ = self.call("save_workout", {"name": "n", "exercises": bad})
+            client.save_workout.assert_not_called()
+
+    def test_an_unacknowledged_calendar_change_is_an_error_not_ok_false(self):
+        client, out = self.call("schedule_workout", {"day": "2026-10-28", "template_code": "abc"})
+        text = str(out)
+        self.assertIn("did not confirm", text)
+
+    def test_apply_refuses_a_misspelled_day_index(self):
+        with mock.patch.object(features, "_authed", return_value=True), mock.patch.object(features, "writes_enabled", return_value=True), \
+                mock.patch.object(features, "apply_program") as spy:
+            resp = gym_app.app.test_client().post("/api/coach/apply", headers=BASIC, json={"program": {"days": [{"exercises": []}]}, "dayIndex": 2, "dry_run": False})
+        self.assertEqual(resp.status_code, 400)
+        spy.assert_not_called()
+
+    def test_a_template_history_far_below_the_prescribed_reps_gives_no_load(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        auto = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+        for reps in (1, 3):
+            template = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=tuple(SetResult("Bench", reps=reps, load=150.0, target=10) for _ in range(3)))
+            out = planner._from_template(template, auto, 5.0, date(2026, 10, 26))[0]
+            self.assertIsNone(out.load, reps)
+            self.assertIn("far from", out.load_basis)
+        ok = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=tuple(SetResult("Bench", reps=8, load=150.0, target=10) for _ in range(3)))
+        self.assertIsNotNone(planner._from_template(ok, auto, 5.0, date(2026, 10, 26))[0].load)
