@@ -147,14 +147,45 @@ class AccessJwt:
         self.audience = audience
         self._key_for = key_for or self._default_key_for()
 
+    FETCH_COOLDOWN_S = 30  # after a failed key fetch, refuse without fetching again (forged tokens must not amplify into fetches)
+
     def _default_key_for(self):
+        import time
         import jwt
         client = jwt.PyJWKClient(f"{self.issuer}/cdn-cgi/access/certs", cache_keys=True, lifespan=3600, timeout=5)
-        return lambda token: client.get_signing_key_from_jwt(token).key
+        state = {"retry_at": 0.0}
+
+        def key_for(token):
+            if time.monotonic() < state["retry_at"]:
+                raise OSError("signing keys unavailable (cooling down)")
+            try:
+                return client.get_signing_key_from_jwt(token).key
+            except Exception:
+                state["retry_at"] = time.monotonic() + self.FETCH_COOLDOWN_S
+                raise
+        return key_for
+
+    def _plausible(self, token: str) -> bool:
+        """Cheap checks on the UNVERIFIED claims, before any key is fetched: the right issuer, audience, an allowed email
+        and an unexpired token. A forged token that fails them costs no network call; one that passes still has to verify."""
+        import time
+        import jwt
+        try:
+            claims = jwt.decode(token, options={"verify_signature": False})
+        except Exception:  # noqa: BLE001
+            return False
+        aud = claims.get("aud")
+        email = claims.get("email")
+        exp = claims.get("exp")
+        return (claims.get("iss") == self.issuer and (aud == self.audience or (isinstance(aud, list) and self.audience in aud))
+                and isinstance(email, str) and email.strip().lower() in self.emails
+                and isinstance(exp, (int, float)) and not isinstance(exp, bool) and exp > time.time())
 
     def email(self, token: str) -> str | None:
         """The verified email of the Access user, or None."""
         import jwt
+        if not self._plausible(token):
+            return None
         try:
             claims = jwt.decode(token, self._key_for(token), algorithms=["RS256"], audience=self.audience,
                                 issuer=self.issuer, options={"require": ["exp", "iat", "iss", "aud"]})

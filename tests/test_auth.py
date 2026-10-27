@@ -242,3 +242,47 @@ class CloudflareAccessAssertion(unittest.TestCase):
                     auth.load_access()
         with patch.dict(os.environ, {"GYM_ACCESS_TEAM": "doghous", "GYM_ACCESS_AUD": self.AUD, "GYM_ACCESS_EMAILS": f" {self.EMAIL} , "}):
             self.assertEqual(auth.load_access().emails, {self.EMAIL})
+
+    def test_a_token_with_the_wrong_claims_costs_no_key_fetch_and_a_failed_fetch_cools_down(self):
+        calls = []
+
+        def counting(token):
+            calls.append(token)
+            return self.key.public_key()
+        access = auth.AccessJwt(self.TEAM, self.AUD, [self.EMAIL], key_for=counting)
+        for bad in (self.jwt(email="mallory@example.com"), self.jwt(aud=["b" * 64]), self.jwt(iss="https://evil.cloudflareaccess.com"),
+                    self.jwt(exp=1_600_000_000, iat=1_599_999_000), "garbage", ""):
+            self.assertIsNone(access.email(bad))
+        self.assertEqual(calls, [], "claims that cannot pass must not reach the key lookup")
+        self.assertEqual(access.email(self.jwt()), self.EMAIL)
+        self.assertEqual(len(calls), 1)
+        # the real key lookup: one failed fetch, then refusals without a second fetch until the cooldown ends
+        import jwt as pyjwt
+        fetches = []
+
+        def fail(self_, *a, **k):
+            fetches.append(1)
+            raise pyjwt.PyJWKClientError("down")
+        with patch.object(pyjwt.PyJWKClient, "get_signing_key_from_jwt", fail):
+            real = auth.AccessJwt(self.TEAM, self.AUD, [self.EMAIL])
+            for _ in range(5):
+                self.assertIsNone(real.email(self.jwt()))
+        self.assertEqual(len(fetches), 1)
+
+
+class TunnelIsolation(unittest.TestCase):
+    """The tunnel shares a network with the MCP service only: a wrong dashboard route cannot reach the web UI."""
+
+    def blocks(self):
+        import re
+        text = open(os.path.join(os.path.dirname(__file__), "..", "docker-compose.yml")).read()
+        services = text.split("\nservices:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+        return {m.group(1): m.group(2) for m in re.finditer(r"^  ([a-z-]+):\n((?:    .*\n|\n)+)", services + "\n", re.M)}
+
+    def test_only_the_mcp_and_the_tunnel_are_on_the_edge_network(self):
+        blocks = self.blocks()
+        self.assertEqual(set(blocks), {"smart-gym-app", "smart-gym-mcp", "gym-tunnel"})
+        self.assertIn("networks: [default, edge]", blocks["smart-gym-mcp"])
+        self.assertIn("networks: [edge]", blocks["gym-tunnel"])
+        self.assertNotIn("edge", blocks["smart-gym-app"])
+        self.assertIn("profiles: [chatgpt]", blocks["gym-tunnel"])  # opt-in, never started by a plain `up`

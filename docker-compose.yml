@@ -34,6 +34,7 @@ services:
     restart: unless-stopped
     ports:
       - "5002:5002"
+    networks: [default, edge]  # `edge` is shared only with the tunnel, so cloudflared cannot name smart-gym-app
     environment:
       - PYTHONUNBUFFERED=1
       - DATA_DIR=/data
@@ -62,18 +63,24 @@ services:
       start_period: 15s
       retries: 3
 
-  # Outbound-only tunnel for ChatGPT's connector (opt-in: `docker compose --profile chatgpt up -d`). It publishes ONLY the
-  # MCP service, never the web UI; Cloudflare Access (managed OAuth, one allowed email) sits in front of it.
+  # Outbound-only tunnel for ChatGPT's connector (opt-in: `docker compose --profile chatgpt up -d`). It sits on the `edge`
+  # network with the MCP service ONLY, so even a wrong route in the Cloudflare dashboard cannot reach the web UI. The route
+  # must be hostname -> http://smart-gym-mcp:5002. Cloudflare Access (managed OAuth, one allowed email) fronts it, and the
+  # MCP verifies the Access assertion itself.
   gym-tunnel:
     image: cloudflare/cloudflared:2026.9.1
     container_name: smart_gym_tunnel
     profiles: [chatgpt]
+    networks: [edge]
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${GYM_TUNNEL_TOKEN:?set GYM_TUNNEL_TOKEN in .env}
     depends_on:
       - smart-gym-mcp
+
+networks:
+  edge:
 
 volumes:
   gym-data:
