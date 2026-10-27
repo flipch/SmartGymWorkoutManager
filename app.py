@@ -110,7 +110,7 @@ def index():
     try:
         workouts = client.get_user_workouts()
         # Sort workouts from oldest to newest (so newest is closest to Calendar section)
-        workouts.sort(key=lambda w: (0, int(str(w.get('id'))), '') if str(w.get('id')).isdigit() else (1, 0, str(w.get('id', ''))))
+        workouts.sort(key=lambda w: (0, int(str(w.get('id'))), '') if str(w.get('id')).isascii() and str(w.get('id')).isdigit() else (1, 0, str(w.get('id', ''))))
     except Exception as e:
         if str(e) == "Unauthorized":
             client.logout()
@@ -452,7 +452,7 @@ def library():
         accessories = []
         categories = []
 
-    accessory_map = {str(acc['id']): acc['name'] for acc in accessories}
+    accessory_map = {str(acc['id']): acc['name'] for acc in accessories if isinstance(acc, dict) and 'id' in acc and 'name' in acc}
     
     # Enrich exercises with equipment names
     for ex in exercises:
@@ -513,7 +513,7 @@ def exercise_detail(ex_id):
     mapped_accessories = []
     for acc in all_accessories:
         # Check if the ID is in the required list
-        if str(acc['id']) in required_ids:
+        if isinstance(acc, dict) and str(acc.get('id')) in required_ids:
             mapped_accessories.append(acc)
             
     # 3. "showDetails" is a JSON string in the API response, we need to parse it

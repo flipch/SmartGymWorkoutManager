@@ -75,7 +75,11 @@ def file_lock(path, timeout: float = 10.0):
 
 def quarantine(path) -> str:
     """Move an unreadable state file aside (never delete evidence) and return the new name."""
-    target = f"{path}.corrupt-{int(time.time())}"
+    base = f"{path}.corrupt-{int(time.time())}"
+    target, n = base, 0
+    while os.path.exists(target):  # two damaged files in one second must not overwrite each other
+        n += 1
+        target = f"{base}-{n}"
     os.replace(path, target)
     return target
 

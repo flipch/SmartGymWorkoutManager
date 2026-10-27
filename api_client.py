@@ -95,19 +95,19 @@ def _bounded(value, what, hi):
 def unit_is_confirmed(credentials):
     """Has a human chosen the account's unit? The vendor does not report it, so a default 0 proves nothing (imperial does:
     nobody defaults to it)."""
-    return isinstance(credentials, dict) and bool(credentials.get("unit_confirmed"))
+    return isinstance(credentials, dict) and credentials.get("unit_confirmed") is True  # "false" or 1 in a hand-edited file is not a human choice
 
 
 def _check_template_id(value):
     """A template id for an update or delete: an opaque id or a positive number, never a bool, 0 or a negative."""
     if value is None or isinstance(value, (bool, float)) or not valid_record_id(str(value)) \
-            or (str(value).lstrip("-").isdigit() and not 0 < int(str(value)) < 2 ** 53):  # NaN, inf and 1e-05 are not ids; neither is 20 digits
+            or (str(value).lstrip("-").isdigit() and (not str(value).isascii() or not 0 < int(str(value)) < 2 ** 53)):  # NaN, inf and 1e-05 are not ids; neither is 20 digits
         raise ValueError("template id must be a single id of letters, digits, - or _ (a positive number or an opaque id)")
 
 
 def _group_id(value, where):
     """A library group id as an int ('5' and 5 are the same exercise; anything else is refused, never interpolated)."""
-    if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().isdigit():
+    if isinstance(value, bool) or not isinstance(value, (int, str)) or not (str(value).isascii() and str(value).strip().isdigit()):
         raise ValueError(f"{where}: groupId must be a positive whole number")
     n = int(str(value).strip())
     if not 0 < n < 2 ** 53:  # the library's real ids reach 4.5e14; anything a JS client could not hold exactly is refused
@@ -162,7 +162,7 @@ def validate_workout(name, exercises, imperial=False):
             if isinstance(preset, bool) or not math.isfinite(number) or number != int(number) or not (number == -1 or 0 <= number <= 1000):
                 raise ValueError(f"exercise {n}: preset_id must be -1 (custom load) or a preset number")
         variant = ex.get('variant_id')
-        if variant not in (None, "") and not (str(variant).isdigit() and int(variant) > 0):
+        if variant not in (None, "") and not (str(variant).isascii() and str(variant).isdigit() and int(variant) > 0):
             raise ValueError(f"exercise {n}: variant_id must be a positive whole number")
         stat = _bounded(ex.get('data_stat_type') or 0, f"exercise {n}: data_stat_type", 100)
         if stat != int(stat):
@@ -702,7 +702,7 @@ class SpeedianceClient:
         Fetches calendar data for a specific month.
         date_str: 'YYYY-MM'
         """
-        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", str(date_str)):  # a typo'd month would read as "nothing scheduled"
+        if not re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])", str(date_str)):  # a typo'd month would read as "nothing scheduled"
             raise ValueError("month must be YYYY-MM")
         url = f"{self.base_url}/api/app/v5/trainingCalendar/monthNew?date={_q(date_str)}&selectedDeviceType={self.device_type}"
         try:
@@ -826,9 +826,9 @@ class SpeedianceClient:
                 raise ValueError(f"exercise {group_id}: a one-sided exercise needs left/right pairs (an even number of sets)")
 
             user_variant_id = ex.get('variant_id')
-            if user_variant_id and str(user_variant_id).isdigit() and str(user_variant_id) not in variants.get(str(ex['groupId']), set()):
+            if user_variant_id and str(user_variant_id).isascii() and str(user_variant_id).isdigit() and str(user_variant_id) not in variants.get(str(ex['groupId']), set()):
                 raise ValueError(f"exercise {group_id}: variant_id does not belong to this exercise")
-            real_variant_id = int(user_variant_id) if user_variant_id and str(user_variant_id).isdigit() else id_map.get(str(ex['groupId']))
+            real_variant_id = int(user_variant_id) if user_variant_id and str(user_variant_id).isascii() and str(user_variant_id).isdigit() else id_map.get(str(ex['groupId']))
             
             if not real_variant_id:  # dropping it silently would save (or, on an update, overwrite) a smaller workout
                 raise ValueError(f"exercise {group_id}: not found in the exercise library")
@@ -952,7 +952,7 @@ class SpeedianceClient:
         }
 
         if template_id not in (None, ""):
-            payload['id'] = int(template_id) if str(template_id).isdigit() else str(template_id)  # ids may be opaque
+            payload['id'] = int(template_id) if str(template_id).isascii() and str(template_id).isdigit() else str(template_id)  # ids may be opaque
         return payload
 
     def save_workout(self, name, exercises, template_id=None):

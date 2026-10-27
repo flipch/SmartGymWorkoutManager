@@ -2385,3 +2385,88 @@ class Round41(unittest.TestCase):
         for bad in (True, 0, -1, 1.0, 1.5, float("nan"), float("inf"), 1e-05, 12345678901234567890, "12345678901234567890", "", None, "1,2"):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 api_client._check_template_id(bad)
+
+
+class Round42(unittest.TestCase):
+    def test_only_a_real_true_confirms_the_unit(self):
+        for good in (True,):
+            self.assertTrue(api_client.unit_is_confirmed({"unit_confirmed": good}))
+        for bad in ("false", "true", 1, "yes", [1], {}, None, 0, False):
+            self.assertFalse(api_client.unit_is_confirmed({"unit_confirmed": bad}), repr(bad))
+
+    def test_non_ascii_digits_are_not_ids_or_months(self):
+        client = api_client.SpeedianceClient()
+        with self.assertRaises(ValueError):
+            client.get_calendar_month("２０２６-10")
+        client.get_calendar_month  # the ASCII control is exercised by the earlier month test
+        for bad in ("١", "²", "1_0", "１２"):
+            with self.assertRaises(ValueError, msg=bad):
+                api_client._group_id(bad, "x")
+        for bad in ("١", "²", "１２"):  # "1_0" is a legal opaque template id; a non-ASCII digit string is not an id
+            with self.assertRaises(ValueError, msg=bad):
+                api_client._check_template_id(bad)
+        self.assertEqual(api_client._group_id("12", "x"), 12)
+
+    def test_two_damaged_files_in_one_second_keep_both(self):
+        import state_io
+        d = tempfile.mkdtemp(prefix="gym-r42-")
+        path = os.path.join(d, "readiness.json")
+        for body in ("A", "B", "C"):
+            with open(path, "w") as f:
+                f.write(body)
+            with mock.patch("state_io.time.time", return_value=1_792_000_000):
+                state_io.quarantine(path)
+        kept = sorted(open(os.path.join(d, n)).read() for n in os.listdir(d) if ".corrupt-" in n)
+        self.assertEqual(kept, ["A", "B", "C"])
+
+    def test_a_pain_report_logged_while_apply_runs_still_blocks_the_save(self):
+        d = tempfile.mkdtemp(prefix="gym-r42-")
+        client = mock.Mock(data_dir=d, credentials={"token": "x", "unit": 1})
+        client.get_library.return_value = []
+        client.save_workout.return_value = {"code": 0, "data": {"id": 1}}
+        program = {"goal_label": "G", "days": [{"name": "D", "exercises": [
+            {"name": "Cable chest press", "primary": "chest", "sets": 2, "reps": 8, "load": 0, "rest_sec": 60}]}]}
+
+        def prepare(nm, exercises):  # the vendor checks take a while; the pain report arrives meanwhile
+            features.log_feedback({"pain": True, "exercise": "Cable chest press"}, d)
+        client.prepare_workout.side_effect = prepare
+        resolved = {"groupId": 7, "matched_name": "Cable Chest Press", "muscle": "chest", "confidence": "high"}
+        with mock.patch.object(features, "resolve_exercise", return_value=resolved):
+            out = features.apply_program(client, program, 0, None, dry_run=False)
+        client.save_workout.assert_not_called()
+        self.assertEqual((out["created"], out["failed"]), (0, 1))
+        self.assertEqual(out["results"][0]["error"], "AvoidListChanged")
+
+    def test_an_accessory_without_an_id_does_not_crash_the_pages(self):
+        client = mock.Mock()
+        client.credentials = {"token": "x"}
+        client.get_accessories.return_value = [{"name": "noid"}, {"id": 1, "name": "Bar"}, "junk"]
+        client.get_exercise_detail.return_value = {"id": 5, "title": "T", "accessories": "1", "actionLibraryList": [{"id": 1}]}
+        client.get_library.return_value = []
+        with mock.patch.object(gym_app, "client", client):
+            resp = gym_app.app.test_client().get("/exercise/5", headers=BASIC)
+        self.assertLess(resp.status_code, 500)
+
+    def test_the_library_page_survives_an_accessory_without_an_id(self):
+        client = mock.Mock()
+        client.credentials = {"token": "x"}
+        client.get_accessories.return_value = [{"name": "noid"}, {"id": 1, "name": "Bar"}, "junk"]
+        client.get_library.return_value = [{"id": 5, "title": "T", "mainMuscleGroupName": "chest", "accessories": "1"}]
+        client.get_categories.return_value = [{"id": 1, "name": "Chest"}]
+        with mock.patch.object(gym_app, "client", client):
+            resp = gym_app.app.test_client().get("/library", headers=BASIC)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_the_pain_recheck_also_matches_the_coachs_own_name(self):
+        d = tempfile.mkdtemp(prefix="gym-r42-")
+        client = mock.Mock(data_dir=d, credentials={"token": "x", "unit": 1})
+        client.get_library.return_value = []
+        client.save_workout.return_value = {"code": 0, "data": {"id": 1}}
+        program = {"goal_label": "G", "days": [{"name": "D", "exercises": [
+            {"name": "Cable chest press", "primary": "chest", "sets": 2, "reps": 8, "load": 0, "rest_sec": 60}]}]}
+        client.prepare_workout.side_effect = lambda nm, ex: features.log_feedback({"pain": True, "exercise": "Cable chest press"}, d)
+        resolved = {"groupId": 7, "matched_name": "Pec Machine", "muscle": "chest", "confidence": "high"}  # the library's title differs from the coach's name
+        with mock.patch.object(features, "resolve_exercise", return_value=resolved):
+            out = features.apply_program(client, program, 0, None, dry_run=False)
+        client.save_workout.assert_not_called()
+        self.assertEqual(out["results"][0]["error"], "AvoidListChanged")

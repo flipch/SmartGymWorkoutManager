@@ -7,6 +7,7 @@
 *.env
 config.json
 readiness.json
+readiness.json.corrupt-*
 coach_feedback.json
 data/
 recordings/

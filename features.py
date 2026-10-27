@@ -56,7 +56,7 @@ def _parse_date(v):
         return None
     if isinstance(v, bool):
         return None
-    if isinstance(v, (int, float)) or (isinstance(v, str) and v.strip().isdigit()):
+    if isinstance(v, (int, float)) or (isinstance(v, str) and v.strip().isascii() and v.strip().isdigit()):
         try:
             n = int(v)
             if n > 10_000_000_000:        # epoch millis
@@ -1269,6 +1269,13 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
         if modes:
             entry["notes"] = [f"coach modes ({', '.join(modes)}) are not applied: every set is saved as Standard"]
         if not dry_run and exercises:
+            fresh = _avoid_entries(client, program)  # a pain report logged while this call was checking the library must still win
+            hit = [r["coach_name"] for r in resolved if coach._is_avoided(r["matched_name"], fresh) or coach._is_avoided(r["coach_name"] or "", fresh)]
+            if hit:
+                entry["error"] = "AvoidListChanged"
+                entry["message"] = "an exercise on your avoid list was added while this ran, so nothing was saved: " + ", ".join(str(h) for h in hit)
+                results.append(entry)
+                continue
             try:
                 resp = client.save_workout(nm, exercises)
                 if not isinstance(resp, dict) or resp.get("code") != 0:  # the vendor may answer 200 with an error code
