@@ -431,6 +431,8 @@ html:not([data-theme-mode]) .ui-theme-btn .ui-ic-auto { display: block; }
 .ui-flash-error   { --flash-bg: var(--red-900);    --flash-line: var(--red-700);    --flash-fg: var(--red-200); }
 .ui-flash-success { --flash-bg: var(--green-900);  --flash-line: var(--green-700);  --flash-fg: var(--green-200); }
 .ui-flash-info    { --flash-bg: var(--blue-900);   --flash-line: var(--blue-700);   --flash-fg: var(--blue-200); }
+.ui-flash-warn    { --flash-bg: var(--yellow-900); --flash-line: var(--yellow-700); --flash-fg: var(--yellow-200); }
+.ui-flash a { color: inherit; text-decoration: underline; font-weight: 600; }
 .ui-flash-debug   { --flash-bg: var(--surface);    --flash-line: var(--line);       --flash-fg: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; white-space: pre-wrap; }
 
 /* ------------------------------------------------------------------------------------------ components (ui- prefix) */

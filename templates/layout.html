@@ -32,7 +32,7 @@
     document.documentElement.classList.add('js');
     // ui-theme:end
     </script>
-    <link rel="stylesheet" href="/static/ui-theme.css?v=092afb44ef">
+    <link rel="stylesheet" href="/static/ui-theme.css?v=ebb8332013">
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <script>
     // tailwind-config:start
@@ -128,6 +128,7 @@
     </header>
 
     <main id="main-content" class="ui-main" tabindex="-1">
+        <!--ui-unit-notice-->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% for category, message in messages %}
                 {% set kind = category if category in ('error', 'success', 'debug') else 'info' %}

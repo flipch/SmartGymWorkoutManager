@@ -163,6 +163,8 @@
         flex-direction: column;
     }
 
+    /* days of the neighbouring months: quieter by background and a dashed edge, never by opacity (opacity .3 left their numbers at 1.6:1) */
+    .history-calendar-day.outside-month { background-color: transparent; border-style: dashed; }
     .history-calendar-day.today {
         background-color: rgb(var(--raised));
         border-color: rgb(var(--control-line));
@@ -628,7 +630,7 @@
             if (i < startDay) {
                 dayNumber = prevMonthStart + i;
                 currentDate = new Date(currentCalendarYear, currentCalendarMonth - 1, dayNumber);
-                cell.classList.add('opacity-30');
+                cell.classList.add('outside-month');
             }
             // Days from current month
             else if (i < startDay + lastDayOfMonth.getDate()) {
@@ -646,12 +648,12 @@
             else {
                 dayNumber = i - startDay - lastDayOfMonth.getDate() + 1;
                 currentDate = new Date(currentCalendarYear, currentCalendarMonth + 1, dayNumber);
-                cell.classList.add('opacity-30');
+                cell.classList.add('outside-month');
             }
 
             // Day number at top
             const dayLabel = document.createElement('div');
-            dayLabel.className = isCurrentMonth ? 'text-gray-300 font-bold mb-1' : 'text-gray-600 font-bold mb-1';
+            dayLabel.className = isCurrentMonth ? 'text-gray-300 font-bold mb-1' : 'text-gray-400 font-bold mb-1';
             dayLabel.textContent = dayNumber;
             cell.appendChild(dayLabel);
 

@@ -124,9 +124,13 @@ def index():
     unit = client.credentials.get('unit', 0)
     return render_template('index.html', workouts=workouts, unit=unit)
 
-_UNIT_BANNER = (b'<div style="background:#92400e;color:#fff;padding:8px 14px;font:14px system-ui;text-align:center">'
+_UNIT_NOTICE = (b'<div class="ui-flash ui-flash-warn" role="status" data-ui-unit-notice><div class="ui-flash-body">'
                 b'Your weight unit (kg or lb) has not been set, so weights on this page may be mislabelled. '
-                b'<a href="/settings" style="color:#fde68a;text-decoration:underline">Choose it in Settings</a>.</div>')
+                b'<a href="/settings">Choose it in Settings</a>.</div></div>')
+_UNIT_NOTICE_MARKER = b'<!--ui-unit-notice-->'  # layout.html puts it at the top of <main>: after the skip link and the nav, themed
+_UNIT_BANNER_FALLBACK = (b'<div style="background:#92400e;color:#fff;padding:8px 14px;font:14px system-ui;text-align:center">'
+                         b'Your weight unit (kg or lb) has not been set, so weights on this page may be mislabelled. '
+                         b'<a href="/settings" style="color:#fde68a;text-decoration:underline">Choose it in Settings</a>.</div>')
 
 
 @app.after_request
@@ -144,9 +148,12 @@ def warn_when_the_unit_is_unset(response):
         if (response.mimetype == 'text/html' and response.status_code == 200 and not response.direct_passthrough
                 and creds.get("token") and not unit_is_confirmed(creds) and not request.path.startswith('/settings')):
             data = response.get_data()
-            match = re.search(rb'<body[^>]*>', data)
-            if match:
-                response.set_data(data[:match.end()] + _UNIT_BANNER + data[match.end():])
+            if _UNIT_NOTICE_MARKER in data:
+                response.set_data(data.replace(_UNIT_NOTICE_MARKER, _UNIT_NOTICE, 1))
+            else:  # a page that does not extend the layout must still say it: the unsafe failure is a silent one
+                match = re.search(rb'<body[^>]*>', data)
+                if match:
+                    response.set_data(data[:match.end()] + _UNIT_BANNER_FALLBACK + data[match.end():])
     except Exception:  # a banner must never break a page
         pass
     return response

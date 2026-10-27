@@ -152,7 +152,7 @@ class Contrast(unittest.TestCase):
 
     def test_flash_messages_meet_aa(self):
         pairs = {"error": ("red-200", "red-900"), "success": ("green-200", "green-900"), "info": ("blue-200", "blue-900"),
-                 "debug": ("fg", "surface")}
+                 "warn": ("yellow-200", "yellow-900"), "debug": ("fg", "surface")}
         for theme, t in THEMES.items():
             for kind, (fg, bg) in pairs.items():
                 self.check(theme, t[fg], t[bg], 4.5, f"flash {kind}")

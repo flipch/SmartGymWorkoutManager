@@ -148,7 +148,7 @@ def install(client):
     import requests
     requests.request = _no_network  # a client method that is not stubbed below fails loudly instead of calling the vendor
     requests.Session.request = _no_network
-    client.credentials = {"token": "fixture", "user_id": "1", "unit": 0, "unit_confirmed": True, "region": "Global", "device_type": 1,
+    client.credentials = {"token": "fixture", "user_id": "1", "unit": 0, "unit_confirmed": not os.environ.get("FIXTURE_UNIT_UNSET"), "region": "Global", "device_type": 1,
                           "allow_monster_moves": False, "owned_accessories": [], "owned_devices": [], "custom_instruction": ""}
     client.device_type, client.allow_monster_moves = 1, False
     client.get_library = lambda strict=False: library()
