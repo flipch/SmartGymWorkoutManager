@@ -2210,3 +2210,20 @@ class Round37(unittest.TestCase):
             timed = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Cable Row", reps=0, seconds=45, load=load) for _ in range(3)))
             out = planner._from_template(template, {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}, 5.0, date(2026, 10, 26), [template, timed])
             self.assertIsNone(out[0].load, load)
+
+    def test_an_unreadable_feedback_file_is_not_quarantined_as_corrupt(self):
+        import features
+        d = tempfile.mkdtemp(prefix="gym-r37-")
+        features.log_feedback({"pain": True, "exercise": "Cable curl"}, d)
+        path = features._feedback_path(d)
+        os.chmod(path, 0)
+        try:
+            if os.access(path, os.R_OK):
+                self.skipTest("running as a user that ignores file modes")
+            with self.assertRaises(OSError):
+                features.log_feedback({"rpe": 7}, d)
+            self.assertEqual(features._feedback_read_error(d), "PermissionError")
+            self.assertEqual([n for n in os.listdir(d) if "corrupt" in n], [])
+        finally:
+            os.chmod(path, 0o600)
+        self.assertIn("Cable curl", features._feedback_profile(d)["avoid"])

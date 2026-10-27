@@ -830,9 +830,13 @@ def _load_feedback_events(data_dir=None, *, quarantine_corrupt=False):
         raise ValueError("not a list")
     except FileNotFoundError:
         return []
-    except (OSError, ValueError):
+    except ValueError:  # the content is damaged: move it aside rather than overwrite it
         if quarantine_corrupt and os.path.exists(path):
             state_io.quarantine(path)
+        return []
+    except OSError:  # unreadable is not corrupt (permissions, EIO): quarantining would drop a valid pain/avoid list
+        if quarantine_corrupt:
+            raise
         return []
 
 
