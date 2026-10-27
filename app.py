@@ -1,10 +1,11 @@
 from flask import Flask, abort, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, Response
-from api_client import SpeedianceClient
+from api_client import SpeedianceClient, unit_is_confirmed
 from auth import load_token, install_flask_auth, install_flask_write_gate
 from features import init_features
 import media
 from insights_core import json_object, valid_iso_date, valid_record_id
 import json
+import re
 import os
 import sys
 import webbrowser
@@ -113,6 +114,27 @@ def index():
 
     unit = client.credentials.get('unit', 0)
     return render_template('index.html', workouts=workouts, unit=unit)
+
+_UNIT_BANNER = (b'<div style="background:#92400e;color:#fff;padding:8px 14px;font:14px system-ui;text-align:center">'
+                b'Your weight unit (kg or lb) has not been set, so weights on this page may be mislabelled. '
+                b'<a href="/settings" style="color:#fde68a;text-decoration:underline">Choose it in Settings</a>.</div>')
+
+
+@app.after_request
+def warn_when_the_unit_is_unset(response):
+    """Pages label weights from a default of kg: say so, once, on every page, until a person has chosen the unit."""
+    try:
+        creds = client.credentials
+        if (response.mimetype == 'text/html' and response.status_code == 200 and not response.direct_passthrough
+                and creds.get("token") and not unit_is_confirmed(creds) and not request.path.startswith('/settings')):
+            data = response.get_data()
+            match = re.search(rb'<body[^>]*>', data)
+            if match:
+                response.set_data(data[:match.end()] + _UNIT_BANNER + data[match.end():])
+    except Exception:  # a banner must never break a page
+        pass
+    return response
+
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
@@ -482,12 +504,12 @@ def api_exercise_detail(ex_id):
     
     try:
         # Uses the existing cache/request
-        detail = client.get_exercise_detail(ex_id)
+        detail = client.get_exercise_detail(ex_id, strict=True)  # a vendor blip is an error, never "no variants"
         return jsonify(detail)
     except Exception as e:
         if str(e) == "Unauthorized":
             return jsonify({"error": "Unauthorized"}), 401
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "upstream_error"}), 502
 
 @app.route('/api/workout/<code>')
 def api_workout_detail(code):

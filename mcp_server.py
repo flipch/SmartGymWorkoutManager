@@ -20,7 +20,7 @@ from mcp.server.mcpserver import MCPServer
 import coach
 import state_io
 from auth import BearerAuthASGI, load_token, writes_enabled
-from api_client import SpeedianceClient, unit_is_confirmed
+from api_client import SpeedianceClient, UpstreamError, unit_is_confirmed
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize, valid_iso_date, valid_record_id
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
@@ -134,7 +134,10 @@ def save_workout(name: str, exercises: list, template_id: int | str | None = Non
     def run():
         _require_writes()
         c = _client(); _require_auth(c)
-        return c.save_workout(name, exercises, template_id)
+        result = c.save_workout(name, exercises, template_id)
+        if not isinstance(result, dict) or result.get("code") != 0:  # the web route and apply_program check this too
+            raise UpstreamError(f"the vendor rejected the workout (code {result.get('code') if isinstance(result, dict) else '?'})")
+        return result
     return _safe(run)
 
 
@@ -221,10 +224,15 @@ def workout_session(training_id: int, training_type: str = "custom") -> dict:
     recent_workouts). training_type: 'custom' or 'course'."""
     def run():
         c = _client(); _require_auth(c)
-        detail = c.get_training_detail(training_id, training_type)
-        record = {"trainingId": training_id, "title": None,
-                  "type": 2 if training_type == "course" else 5}
-        return _summarize_session(record, detail, _unit_label(c))
+        kind = str(training_type).strip().lower()
+        if kind not in ("custom", "course"):
+            raise ValueError("training_type must be 'custom' or 'course'")
+        detail = c.get_training_detail(training_id, kind)
+        record = {"trainingId": training_id, "title": None, "type": 2 if kind == "course" else 5}
+        out = _summarize_session(record, detail, _unit_label(c))
+        out.update({"name": None, "date": None, "duration": None, "duration_sec": None, "calories": None, "volume": None,
+                    "note": "header fields are not available for a session fetched by id; use recent_workouts for them"})
+        return out
     return _safe(run)
 
 

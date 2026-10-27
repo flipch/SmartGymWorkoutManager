@@ -783,7 +783,11 @@ def log_feedback(payload, data_dir=None):
     with state_io.file_lock(path + ".lock"):  # web app and MCP server both append
         events = _load_feedback_events(data_dir, quarantine_corrupt=True)
         events.append(event)
-        # a pain/avoid entry is a standing safety instruction: ordinary entries age out after 100, those never do
+        # a pain/avoid entry is a standing safety instruction: ordinary entries age out after 100, these only after 500 DISTINCT exercises
+        subject = coach._norm_name(event.get("exercise") or event.get("avoid") or "")
+        if event.get("pain") or event.get("avoid"):  # one standing entry per exercise: a repeat report must not crowd out others
+            events = [e for e in events[:-1] if not ((e.get("pain") or e.get("avoid"))
+                                                     and subject and coach._norm_name(e.get("exercise") or e.get("avoid") or "") == subject)] + [event]
         standing = [e for e in events if e.get("pain") or e.get("avoid")][-500:]
         ordinary = [e for e in events if not (e.get("pain") or e.get("avoid"))][-100:]
         state_io.atomic_write_json(path, sorted(standing + ordinary, key=lambda e: str(e.get("ts") or "")))
@@ -1128,14 +1132,16 @@ def coach_apply():
     if not isinstance(program, dict) or not program.get("days"):
         return jsonify({"error": "no_program",
                         "message": "POST {program:<generate_program output>, day_index?, name?, dry_run?}"}), 400
+    if not _all_finite(body):
+        return jsonify({"error": "bad_request", "message": "Numbers must be finite."}), 400
     dry_run = body.get("dry_run") is not False  # only a literal false saves; null/0/"" stay a dry run
     if not dry_run and not writes_enabled():
         return jsonify({"error": "writes_disabled", "message": "Set GYM_ALLOW_WRITES=1 to save to Speediance."}), 403
     try:
         return jsonify(apply_program(_client, program, body.get("day_index"), body.get("name"), dry_run,
                                      body.get("load_unit")))
-    except ValueError as e:
-        return jsonify({"error": "bad_request", "message": str(e)}), 400
+    except (ValueError, OverflowError) as e:
+        return jsonify({"error": "bad_request", "message": str(e) if isinstance(e, ValueError) else "Number out of range."}), 400
     except Exception as e:
         return jsonify({"error": "apply_failed", "message": type(e).__name__}), 502
 
@@ -1198,10 +1204,18 @@ function render(p){
     h+=`<div style="margin-top:10px"><button class=alt onclick="saveDay(${Number(i)})">💾 Save to my workouts</button> <span id=save${Number(i)} class=muted></span></div>`;
     h+='</div>';
   });
+  if(p.avoid_unmatched&&p.avoid_unmatched.length)h+='<div class=warn style="margin-top:8px">⚠ Your avoid list has entries that matched no exercise (check the spelling): '+p.avoid_unmatched.map(a=>esc(a)).join(', ')+'</div>';
+  if(p.feedback_error)h+='<div class=warn style="margin-top:8px">⚠ Your saved pain/avoid list could not be fully read ('+esc(p.feedback_error)+'): exclusions may be missing.</div>';
   h+=`<p class=muted>${esc(p.disclaimer)}</p>`;
   $('out').innerHTML=h;
 }
+const saving={};
 async function saveDay(i){
+  if(saving[i])return;  // a double click must not create two templates
+  saving[i]=true;
+  try{ await saveDayOnce(i); } finally { saving[i]=false; }
+}
+async function saveDayOnce(i){
   const el=$('save'+i); el.textContent='Saving…';
   let resp;
   try{ resp=await fetch('/api/coach/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({program:window.__P,day_index:i,dry_run:false})}); }
@@ -1210,7 +1224,8 @@ async function saveDay(i){
   const d=await resp.json(); const r=(d.results&&d.results[0])||{};
   if(r.created){
     let m=`<span class=ok>✓ Saved "${esc(r.name)}" (${esc(r.exercise_count)} exercises)</span>`;
-    if(r.unresolved&&r.unresolved.length)m+=` <span class=warn>· couldn't match: ${r.unresolved.map(u=>esc(u.name)).join(', ')}</span>`;
+    if(r.unresolved&&r.unresolved.length)m+=` <span class=warn>· not saved: ${r.unresolved.map(u=>esc(u.name)+(u.reason?' ('+esc(u.reason)+')':'')).join(', ')}</span>`;
+    if(d.feedback_error)m+=` <span class=warn>· ⚠ your pain/avoid list could not be fully read (${esc(d.feedback_error)})</span>`;
     el.innerHTML=m;
   } else { el.innerHTML='<span class=warn>'+esc(r.error||d.message||'Could not save')+'</span>'; }
 }

@@ -94,7 +94,7 @@ def _bounded(value, what, hi):
 def unit_is_confirmed(credentials):
     """Has a human chosen the account's unit? The vendor does not report it, so a default 0 proves nothing (imperial does:
     nobody defaults to it)."""
-    return isinstance(credentials, dict) and bool(credentials.get("unit_confirmed") or credentials.get("unit") == 1)
+    return isinstance(credentials, dict) and bool(credentials.get("unit_confirmed"))
 
 
 def _group_id(value, where):
@@ -143,6 +143,8 @@ def validate_workout(name, exercises, imperial=False):
             if set_unit not in ('reps', 'sec'):
                 raise ValueError(f"{where}: unit must be 'reps' or 'sec'")
             seconds = set_unit == 'sec'
+            if st.get('reps') in (None, "") or not (st.get('reps') or 0):
+                raise ValueError(f"{where}: reps (or seconds) is required")
             _bounded(st.get('reps') or 0, f"{where}: reps", MAX_SECONDS if seconds else MAX_REPS)
             _bounded(st.get('rest') or 0, f"{where}: rest", MAX_REST_S)
             if st.get('mode') not in (None, ""):
@@ -263,7 +265,10 @@ class SpeedianceClient:
     def load_config(self):
         if os.path.exists(self.config_file):
             with open(self.config_file, 'r') as f:
-                return json.load(f)
+                creds = json.load(f)
+            if isinstance(creds, dict) and "unit_confirmed" not in creds and creds.get("user_id") and creds.get("unit") == 1:
+                creds["unit_confirmed"] = True  # a config from before the flag: an imperial choice was made by a person
+            return creds
         return {
             "user_id": "",
             "token": "",
@@ -536,6 +541,8 @@ class SpeedianceClient:
                     current.add(ex.get('device_type'))
                     existing['device_type_list'] = sorted(t for t in current if t)
             
+            if not all_basic_exercises:
+                incomplete = True  # categories answered but held nothing: an outage, not an empty gym
             all_ids = list(unique_exercises.keys())
             detailed_library = []
             chunk_size = 50
@@ -733,9 +740,11 @@ class SpeedianceClient:
         details = self.get_batch_details(group_ids, strict=True)
         
         id_map = {}
+        variants = {}
         for d in details:
             if d.get('actionLibraryList'):
                 id_map[str(d['id'])] = d['actionLibraryList'][0]['id']
+                variants[str(d['id'])] = {str(v.get('id')) for v in d['actionLibraryList'] if isinstance(v, dict)}
         
         action_library_list = []
         total_capacity = 0
@@ -756,6 +765,8 @@ class SpeedianceClient:
                 raise ValueError(f"exercise {group_id}: a one-sided exercise needs left/right pairs (an even number of sets)")
 
             user_variant_id = ex.get('variant_id')
+            if user_variant_id and str(user_variant_id).isdigit() and str(user_variant_id) not in variants.get(str(ex['groupId']), set()):
+                raise ValueError(f"exercise {group_id}: variant_id does not belong to this exercise")
             real_variant_id = int(user_variant_id) if user_variant_id and str(user_variant_id).isdigit() else id_map.get(str(ex['groupId']))
             
             if not real_variant_id:  # dropping it silently would save (or, on an update, overwrite) a smaller workout
@@ -820,7 +831,8 @@ class SpeedianceClient:
                 elif preset_id == -1:
                     api_weight = weight_val  # JS already converted LBS→KG before sending
                     weights_list.append(f"{api_weight:.1f}")
-                    set_capacity += (reps * api_weight)
+                    if unit != 'sec':  # seconds x load is not volume
+                        set_capacity += (reps * api_weight)
                 else:
                     # For presets, we MUST populate weights_list with dummy values (e.g. 3.5)
                     # AND populate counter_list with the RM value.

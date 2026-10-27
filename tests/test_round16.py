@@ -2,6 +2,7 @@
 is a hole in the library; the MATCHED exercise decides left/right; opaque template ids; calorie and unknown units are
 refused; an ACWR-only reading reaches the program."""
 import base64
+import json
 import os
 import shutil
 import subprocess
@@ -68,8 +69,10 @@ class TheUnitGateCoversEverySavePath(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_confirmed_or_imperial_accounts_save(self):
-        for unit, confirmed in ((0, True), (1, False), (1, True)):
+        for unit, confirmed in ((0, True), (1, True)):
             self.assertEqual(client_with(unit, confirmed).save_workout("n", [ex(40)])["code"], 0, (unit, confirmed))
+        with self.assertRaises(ValueError):
+            client_with(1, False).save_workout("n", [ex(40)])  # imperial by default is still unchosen
 
     def test_numbers_that_are_not_a_unit_bearing_load_are_not_gated(self):
         client = client_with(0, False)
@@ -531,7 +534,8 @@ class TheUnitSurvivesALogoutOfTheSameAccountOnly(unittest.TestCase):
 
     def test_whoami_says_unknown_for_an_unchosen_unit(self):
         tool = getattr(mcp_server.whoami, "fn", mcp_server.whoami)
-        for client, expect in ((client_with(0, False), "unknown"), (client_with(0, True), "metric"), (client_with(1, False), "imperial")):
+        for client, expect in ((client_with(0, False), "unknown"), (client_with(0, True), "metric"), (client_with(1, True), "imperial"),
+                                (client_with(1, False), "unknown")):
             with mock.patch.object(mcp_server, "_client", return_value=client):
                 self.assertEqual(tool()["unit"], expect)
 
@@ -736,6 +740,161 @@ class Round18Harness(unittest.TestCase):
         plank_plan = next(e for e in result.exercises if e.name == "Synthetic Plank")
         self.assertIsNone(plank_plan.reps)  # 60 seconds is not 60 repetitions
         self.assertIn("timed exercise", plank_plan.load_basis)
+
+
+class Round18bServerSide(unittest.TestCase):
+    def test_a_config_from_before_the_flag_is_migrated_only_for_a_signed_in_imperial_account(self):
+        import json as _json
+        d = tempfile.mkdtemp(prefix="gym-cfg-")
+        cases = (({"user_id": "42", "token": "t", "unit": 1}, True), ({"user_id": "42", "token": "t", "unit": 0}, None),
+                 ({"user_id": "", "token": "", "unit": 1}, None), ({"user_id": "42", "token": "t", "unit": 1, "unit_confirmed": False}, False))
+        for creds, expect in cases:
+            with open(os.path.join(d, "config.json"), "w") as f:
+                _json.dump(creds, f)
+            with mock.patch.dict(os.environ, {"DATA_DIR": d}):
+                client = api_client.SpeedianceClient()
+            self.assertEqual(client.credentials.get("unit_confirmed"), expect, creds)
+
+    def test_a_left_over_logged_out_imperial_config_does_not_confirm_the_next_account(self):
+        client = client_with(1, False)
+        client.credentials["user_id"] = ""
+        client.save_config("B", "tok", "Global", 1, "", 1, False, [], [])
+        self.assertFalse(api_client.unit_is_confirmed(client.credentials))
+
+    def test_pain_without_an_exercise_is_refused_loudly(self):
+        import state_io
+        for payload in ({"pain": True}, {"pain": True, "note": "left shoulder"}):
+            with self.assertRaises(ValueError) as ctx:
+                state_io.validate_feedback(payload)
+            self.assertIn("exercise", str(ctx.exception))
+        self.assertEqual(state_io.validate_feedback({"pain": True, "exercise": "Row"})["exercise"], "Row")
+        self.assertEqual(state_io.validate_feedback({"pain": False, "note": "fine"})["pain"], False)
+
+    def test_avoid_matching_ignores_plurals_hyphens_and_case(self):
+        import coach
+        for entry, library in (("Walking lunges", "Walking Lunge"), ("lunges", "Walking Lunge"), ("Bulgarian split squats", "Bulgarian Split Squat"),
+                               ("bulgarian split-squat", "Bulgarian Split Squat"), ("CHEST PRESSES", "Cable Chest Press"), ("Leg Curls", "Leg Curl (ankle)")):
+            self.assertTrue(coach._is_avoided(library, {coach._norm_name(entry)}), (entry, library))
+        self.assertFalse(coach._is_avoided("Lat Pulldown", {coach._norm_name("lunges")}))
+        self.assertFalse(coach._is_avoided("Cable Press", {coach._norm_name("lat")}))  # under 4 characters never matches by part
+
+    def test_a_repeat_pain_report_replaces_its_own_entry_instead_of_crowding_out_others(self):
+        d = tempfile.mkdtemp(prefix="gym-fb-")
+        features.log_feedback({"pain": True, "exercise": "Deadlift"}, d)
+        for _ in range(600):
+            features.log_feedback({"pain": True, "exercise": "Cable Chest Press"}, d)
+            features.log_feedback({"avoid": "cable chest presses"}, d)
+        self.assertIn("Deadlift", features._feedback_profile(d, days=3650)["avoid"])
+        stored = json.load(open(features._feedback_path(d)))
+        self.assertLessEqual(len([e for e in stored if e.get("pain") or e.get("avoid")]), 3)
+
+    def test_the_coach_page_shows_the_safety_warnings(self):
+        html = gym_app.app.test_client().get("/coach", headers=BASIC).get_data(as_text=True)
+        for needle in ("avoid_unmatched", "feedback_error", "saving[i]"):
+            self.assertIn(needle, html)
+
+    def test_a_variant_that_is_not_the_exercises_own_is_refused(self):
+        client = client_with(1, True)
+        with self.assertRaises(ValueError) as ctx:
+            client.prepare_workout("n", [ex(40, variant_id=987654)])
+        self.assertIn("variant_id", str(ctx.exception))
+        self.assertEqual(client.prepare_workout("n", [ex(40, variant_id=1007)])["actionLibraryList"][0]["actionLibraryId"], 1007)
+        self.assertEqual(client.prepare_workout("n", [ex(40, variant_id=None)])["actionLibraryList"][0]["actionLibraryId"], 1007)
+
+    def test_the_exercise_detail_route_reports_a_vendor_blip_not_an_empty_exercise(self):
+        client = mock.Mock()
+        client.credentials = {"token": "x"}
+        client.get_exercise_detail.side_effect = api_client.UpstreamError("exercise detail failed (HTTP 503)")
+        with mock.patch.object(gym_app, "client", client):
+            resp = gym_app.app.test_client().get("/api/exercise/5", headers=BASIC)
+        self.assertEqual(resp.status_code, 502)
+        client.get_exercise_detail.assert_called_with(5, strict=True)
+
+    def test_a_library_with_categories_but_no_exercises_is_an_outage(self):
+        with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-lib-")}):
+            client = api_client.SpeedianceClient()
+        client.save_config("1", "tok", "Global", 0, "", 1, False, [], [])
+        client.library_cache = None
+        client.get_categories = lambda strict=False: [{"id": 1, "name": "A"}]
+        client._request = lambda m, u, **kw: Resp(200, {"code": 0, "data": []})
+        with self.assertRaises(api_client.UpstreamError):
+            client.get_library(strict=True)
+        self.assertFalse(os.path.exists(client.library_cache_file))
+
+    def test_mcp_save_workout_does_not_pass_a_vendor_rejection_off_as_success(self):
+        client = client_with(1, True)
+        tool = getattr(mcp_server.save_workout, "fn", mcp_server.save_workout)
+        client._request = lambda m, u, **kw: Resp(200, {"code": 5000, "message": "Parameter Error"})
+        with mock.patch.object(mcp_server, "_client", return_value=client), mock.patch.object(mcp_server, "_require_auth"), \
+                mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}):
+            self.assertIn("error", tool("n", [ex(40)]))
+            client._request = lambda m, u, **kw: Resp(200, {"code": 0, "data": {"id": 1}})
+            self.assertEqual(tool("n", [ex(40)])["code"], 0)
+
+    def test_workout_session_validates_its_type_and_does_not_invent_a_header(self):
+        client = mock.Mock()
+        client.credentials = {"token": "x", "unit": 1, "unit_confirmed": True}
+        client.get_training_detail.return_value = []
+        tool = getattr(mcp_server.workout_session, "fn", mcp_server.workout_session)
+        with mock.patch.object(mcp_server, "_client", return_value=client), mock.patch.object(mcp_server, "_require_auth"):
+            self.assertIn("error", tool(1, "bogus"))
+            out = tool(1, "Course")
+        client.get_training_detail.assert_called_with(1, "course")
+        self.assertEqual((out["type"], out["name"], out["calories"], out["duration"]), ("Program", None, None, None))
+
+    def test_a_timed_set_adds_no_volume_and_every_set_needs_reps(self):
+        client = client_with(1, True)
+        timed = ex(20)
+        timed["sets"] = [{"reps": 60, "weight": 20, "rest": 30, "unit": "sec"}, {"reps": 10, "weight": 20, "rest": 30, "unit": "reps"}]
+        self.assertEqual(client.prepare_workout("n", [timed])["totalCapacity"], 200.0)
+        for bad in ({"weight": 20, "rest": 30}, {"reps": None, "weight": 20}):
+            broken = ex(20)
+            broken["sets"] = [bad]
+            with self.assertRaises(ValueError):
+                client.prepare_workout("n", [broken])
+
+    def test_plural_ies_words_match_their_singular(self):
+        import coach
+        self.assertTrue(coach._is_avoided("Reverse Fly", {coach._norm_name("reverse flies")}))
+        self.assertEqual(coach._norm_name("Flies"), coach._norm_name("fly"))
+
+    def test_a_huge_integer_in_an_apply_body_is_a_400_not_a_502(self):
+        fake = mock.Mock(data_dir=tempfile.mkdtemp(prefix="gym-body-"), credentials={"token": "x", "unit": 1, "unit_confirmed": True})
+        fake.get_library.return_value = []
+        huge = "9" * 400
+        with mock.patch.object(features, "_client", fake), mock.patch.object(features, "_authed", return_value=True), \
+                mock.patch.object(features, "resolve_exercise", return_value={"groupId": 7, "matched_name": "Press", "confidence": "high"}):
+            resp = gym_app.app.test_client().post(
+                "/api/coach/apply", headers=BASIC, content_type="application/json",
+                data='{"program": {"days": [{"exercises": [{"name": "a", "sets": 2, "reps": 5, "load": %s}]}]}, "load_unit": "kg"}' % huge)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_no_page_sends_the_browser_to_a_get_login(self):
+        root = os.path.join(os.path.dirname(__file__), "..", "templates")
+        for name in os.listdir(root):
+            text = open(os.path.join(root, name), encoding="utf-8").read()
+            self.assertNotIn("href = '/login'", text, name)  # /login accepts POST only: a GET is a 405 page
+            self.assertNotIn('href = "/login"', text, name)
+
+    def test_a_non_finite_apply_body_is_a_400(self):
+        fake = mock.Mock(data_dir=tempfile.mkdtemp(prefix="gym-body-"), credentials={"token": "x", "unit": 1, "unit_confirmed": True})
+        with mock.patch.object(features, "_client", fake), mock.patch.object(features, "_authed", return_value=True):
+            resp = gym_app.app.test_client().post("/api/coach/apply", headers=BASIC, content_type="application/json",
+                                                  data='{"program": {"days": [{"exercises": [{"name": "a", "sets": 1e999}]}]}}')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_the_unit_banner_shows_only_while_the_unit_is_unset(self):
+        client = client_with(0, False)
+        client.get_user_workouts = lambda: []
+        with mock.patch.object(gym_app, "client", client):
+            page = gym_app.app.test_client().get("/", headers=BASIC).get_data(as_text=True)
+            settings = gym_app.app.test_client().get("/settings", headers=BASIC).get_data(as_text=True)
+        self.assertIn("has not been set", page)
+        self.assertNotIn("has not been set, so weights", settings)
+        client = client_with(0, True)
+        client.get_user_workouts = lambda: []
+        with mock.patch.object(gym_app, "client", client):
+            self.assertNotIn("has not been set", gym_app.app.test_client().get("/", headers=BASIC).get_data(as_text=True))
 
 
 @unittest.skipUnless(shutil.which("node"), "node is required")

@@ -144,7 +144,11 @@ class LoadsAreBoundedBeforeAnythingIsSent(unittest.TestCase):
         api_client.validate_workout("t", [good_ex(sets=[good_set(unit="sec", reps=3600)])])
         api_client.validate_workout("p", [good_ex(preset_id=1, sets=[good_set(weight=20)])])
         api_client.validate_workout("v", [good_ex(data_stat_type=6, sets=[good_set(weight=10)])])
-        api_client.validate_workout("z", [good_ex(sets=[{"reps": None, "weight": None, "rest": None}])])  # defaults
+        api_client.validate_workout("z", [good_ex(sets=[{"reps": 1, "weight": None, "rest": None}])])  # weight/rest default
+        for missing in (None, "", 0):  # a set without reps (or seconds) is a typo, not a zero-rep set
+            with self.assertRaises(ValueError, msg=repr(missing)) as ctx:
+                api_client.validate_workout("z", [good_ex(sets=[{"reps": missing, "weight": 5, "rest": 60}])])
+            self.assertIn("reps", str(ctx.exception))
 
     def test_weights(self):
         for bad in (float("nan"), float("inf"), float("-inf"), -0.5, -50, 100.5, 1e7, "abc", True, "1e999", [1]):

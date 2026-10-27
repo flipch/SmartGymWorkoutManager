@@ -61,7 +61,7 @@ function editor(metaFor) {
     const load = between(src, 'async function loadExistingWorkout', '// --- ADD EXERCISE ---');
     vm.runInContext(load + '\nglobalThis.loadExistingWorkout = loadExistingWorkout;', ctx);
     vm.runInContext(between(src, 'window.processImport = async', '\n    };\n') + '\n};', ctx);
-    vm.runInContext(between(src, 'window.saveWorkout = async', '// --- STATS LOGIC ---'), ctx);
+    vm.runInContext(between(src, 'let saveInFlight', '// --- STATS LOGIC ---'), ctx);
     return { ctx, doc, calls };
 }
 
@@ -273,4 +273,117 @@ test('month navigation from the 31st lands in the adjacent month', () => {
     ctx.currentDate = new Date(2026, 9, 31);
     handlers.prevMonth();
     assert.equal(ctx.currentDate.getMonth(), 8);   // September, not October
+});
+
+test('a double click on Save sends one create request', async () => {
+    const { ctx, calls } = editor(() => metaOf());
+    ctx.workoutData = [{ groupId: 5, selectedVariantId: null, selectedPresetId: -1, dataStatType: null, completionMethod: null, selectCompletionMethod: null,
+                         sets: [{ reps: 10, weight: 5, unit: 'reps', rest: 60 }] }];
+    await Promise.all([ctx.window.saveWorkout(), ctx.window.saveWorkout()]);
+    assert.equal(calls.filter((c) => c[0] === 'fetch').length, 1);
+    await ctx.window.saveWorkout();  // and a later, deliberate save works again
+    assert.equal(calls.filter((c) => c[0] === 'fetch').length, 2);
+});
+
+test('an exercise with no known variants sends no variant id (the server uses its own)', async () => {
+    const { ctx } = editor(() => metaOf());
+    await importJson(ctx, makeDocumentFor(ctx), { name: 'n', exercises: [{ id: 5, sets: [{ reps: 10, weight: 5, rest: 60 }] }] });
+    assert.equal(ctx.workoutData[0].selectedVariantId, null);
+});
+function makeDocumentFor(ctx) { return ctx.document; }
+
+test('only the newest calendar answer draws, and a 401 goes to settings', async () => {
+    const src = read('index.html');
+    const drawn = [];
+    const waiting = [];
+    let status = 200;
+    const loc = { href: '' };
+    const ctx = {
+        console, currentDate: new Date(2026, 9, 1), window: { location: loc },
+        getMonthString: (d) => `${d.getFullYear()}-${d.getMonth() + 1}`,
+        document: { getElementById: () => ({ innerHTML: '' }) },
+        renderCalendarGrid: (d) => drawn.push(d.month),
+        fetch: (url) => new Promise((resolve) => waiting.push(() => resolve({ status, json: async () => ({ month: url }) }))),
+    };
+    ctx.window.location = loc;
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'let calendarSeq = 0;', '    function renderCalendarGrid') .replace(/window\.location\.href/g, 'loc.href'), Object.assign(ctx, { loc }));
+    const a = ctx.fetchCalendarData();
+    const b = ctx.fetchCalendarData();
+    waiting[1]();  // the newer request answers first
+    await b;
+    waiting[0]();  // the older one arrives last and must not draw
+    await a;
+    assert.equal(drawn.length, 1);
+    status = 401;
+    const c = ctx.fetchCalendarData();
+    waiting[2]();
+    await c;
+    assert.equal(loc.href, '/settings');
+});
+
+test('a slower program answer for a program no longer shown is ignored', async () => {
+    const src = read('browse.html');
+    const waiting = {};
+    const doc = makeDocument();
+    const rendered = [];
+    const ctx = {
+        console, document: doc, DIFF_MAP: {}, allPrograms: [{ id: 1 }, { id: 2 }], renderProgramDetail: (d) => rendered.push(d.id),
+        fetch: (url) => new Promise((resolve) => { const id = Number(url.split('/').pop()); waiting[id] = () => resolve({ json: async () => ({ id }) }); }),
+    };
+    vm.createContext(ctx);
+    vm.runInContext('let currentProgramId = null;', ctx);
+    vm.runInContext(between(src, 'async function openProgramDetail', '    function renderProgramDetail') + '\nglobalThis.open = openProgramDetail;', ctx);
+    const a = ctx.open(1);
+    const b = ctx.open(2);
+    waiting[2](); await b;
+    waiting[1](); await a;
+    same(rendered, [2]);
+});
+
+test('adding an exercise with no known variants sends no variant id', async () => {
+    const { ctx } = editor(() => metaOf());
+    const src = read('create.html');
+    vm.runInContext(between(src, 'async function addExerciseToPlan', '    // --- ').replace('async function addExerciseToPlan', 'globalThis.addExerciseToPlan = async function addExerciseToPlan'), ctx);
+    await ctx.addExerciseToPlan(7, 'Press', '');
+    assert.equal(ctx.workoutData[0].selectedVariantId, null);
+});
+
+// the /coach page lives inside features.py as a Python string
+function coachPage(fetchImpl) {
+    const py = fs.readFileSync(path.join(__dirname, '..', 'features.py'), 'utf8');
+    const html = between(py, '_COACH_HTML = """', '"""\n');
+    const script = between(html, '<script>', '</script>').slice('<script>'.length);
+    const doc = makeDocument();
+    const ctx = { document: doc, console, fetch: fetchImpl, window: {}, JSON, Number, Object, alert() {} };
+    vm.createContext(ctx);
+    vm.runInContext(script + '\nglobalThis.api = { render, saveDay };', ctx);
+    return { ctx, doc };
+}
+
+const aProgram = (extra = {}) => ({ review: { score: 80, warnings: [] }, goal_label: 'G', days_per_week: 3, experience: 'x', weekly_sets_per_muscle: {},
+    days: [{ name: 'D', warmup: '', setup_swaps: 0, exercises: [] }], disclaimer: 'd', ...extra });
+
+test('the coach page shows unmatched avoid entries and an unreadable feedback file', () => {
+    const { ctx, doc } = coachPage(() => Promise.reject(new Error('unused')));
+    ctx.api.render(aProgram({ avoid_unmatched: ['lunges <b>'], feedback_error: 'JSONDecodeError' }));
+    const html = doc.getElementById('out').innerHTML;
+    assert.match(html, /matched no exercise/);
+    assert.ok(html.includes('lunges &lt;b&gt;') || !html.includes('<b>'), 'escaped');
+    assert.match(html, /could not be fully read \(JSONDecodeError\)/);
+    ctx.api.render(aProgram());
+    assert.doesNotMatch(doc.getElementById('out').innerHTML, /matched no exercise|could not be fully read/);
+});
+
+test('saving a coach day sends one request per click and reports what was not saved and why', async () => {
+    let n = 0;
+    const answer = { results: [{ created: true, name: 'W', exercise_count: 1, unresolved: [{ name: 'Lunge', reason: 'on your avoid list' }] }],
+                     feedback_error: 'QuarantinedCorruptFile' };
+    const { ctx, doc } = coachPage(async () => { n += 1; return { status: 200, json: async () => answer }; });
+    ctx.api.render(aProgram());
+    await Promise.all([ctx.api.saveDay(0), ctx.api.saveDay(0)]);
+    assert.equal(n, 1);
+    const html = doc.getElementById('save0').innerHTML;
+    assert.match(html, /Lunge \(on your avoid list\)/);
+    assert.match(html, /QuarantinedCorruptFile/);
 });

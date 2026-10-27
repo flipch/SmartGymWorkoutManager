@@ -256,6 +256,7 @@
     }
 
     let currentCourseId = null;
+    let currentProgramId = null;
 
     async function openCourseDetail(courseId) {
         const c = allCourses.find(x => x.id === courseId) || {};
@@ -427,9 +428,11 @@
         document.getElementById('programModalLoading').classList.remove('hidden');
         document.getElementById('programModalWeeks').innerHTML = '';
 
+        currentProgramId = planId;
         try {
             const resp = await fetch(`/api/browse/program/${planId}`);
             const data = await resp.json();
+            if (currentProgramId !== planId) return;  // a slower answer for a program that is no longer shown
             document.getElementById('programModalLoading').classList.add('hidden');
             renderProgramDetail(data);
         } catch (err) {

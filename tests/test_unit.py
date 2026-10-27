@@ -160,7 +160,7 @@ class TestSaveWorkoutWeights(unittest.TestCase):
         """Gain Muscle preset (1) → counterweight2 has RM values, weights has dummy '3.5'."""
         exercises = [{
             'groupId': 2,
-            'variant_id': 2001,
+            'variant_id': 1002,
             'preset_id': 1,
             'sets': [
                 {'reps': 10, 'weight': 12, 'mode': 1, 'rest': 60, 'unit': 'reps'},
@@ -197,7 +197,7 @@ class TestSaveWorkoutWeights(unittest.TestCase):
         """Bilateral exercise → leftRight = '0,0,0'."""
         exercises = [{
             'groupId': 10,
-            'variant_id': 10001,
+            'variant_id': 1010,
             'preset_id': -1,
             'sets': [
                 {'reps': 10, 'weight': 20.0, 'mode': 1, 'rest': 60, 'unit': 'reps'},
@@ -213,7 +213,7 @@ class TestSaveWorkoutWeights(unittest.TestCase):
         """Unilateral 4 sets (L1,R1,L2,R2) → leftRight = '1,2,1,2'."""
         exercises = [{
             'groupId': 20,
-            'variant_id': 20001,
+            'variant_id': 1020,
             'preset_id': -1,
             'sets': [
                 {'reps': 10, 'weight': 6.0, 'mode': 1, 'rest': 45, 'unit': 'reps'},
@@ -292,7 +292,7 @@ class TestImperialWeightRoundTrip(unittest.TestCase):
         from api_client import SpeedianceClient
         client = SpeedianceClient.__new__(SpeedianceClient)
         client.credentials = {
-            "user_id": "u", "token": "t", "region": "Global", "unit": 1,
+            "user_id": "u", "token": "t", "region": "Global", "unit": 1, "unit_confirmed": True,
             "custom_instruction": "", "device_type": 1,
             "allow_monster_moves": False, "owned_accessories": [], "owned_devices": []
         }

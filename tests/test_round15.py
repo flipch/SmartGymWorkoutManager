@@ -79,9 +79,11 @@ class UnitMustBeConfirmedBeforeLoadsAreSaved(Base):
             features.apply_program(make_client({"token": "x", "unit": 0}), program(day(load=40)), 0, None, load_unit="kg")
 
     def test_confirmed_or_imperial_accounts_pass(self):
-        for creds in ({"token": "x", "unit": 0, "unit_confirmed": True}, {"token": "x", "unit": 1}):
+        for creds in ({"token": "x", "unit": 0, "unit_confirmed": True}, {"token": "x", "unit": 1, "unit_confirmed": True}):
             client, out = self.apply(creds, load=40)
             self.assertEqual(out["created"], 1, creds)
+        with self.assertRaises(ValueError):  # a bare imperial default is not a choice either: only the flag counts
+            self.apply({"token": "x", "unit": 1}, load=40)
 
     def test_a_program_without_loads_needs_no_confirmation(self):
         client = make_client({"token": "x", "unit": 0})

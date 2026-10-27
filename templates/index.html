@@ -315,7 +315,9 @@
         return `${year}-${month}`;
     }
 
+    let calendarSeq = 0;
     async function fetchCalendarData() {
+        const seq = ++calendarSeq;  // only the newest request may draw
         const dateStr = getMonthString(currentDate);
         const grid = document.getElementById('calendarGrid');
         grid.innerHTML = '<div class="col-span-7 text-center text-gray-500 py-10">Loading...</div>';
@@ -323,10 +325,11 @@
         try {
             const response = await fetch(`/api/calendar?date=${dateStr}`);
             if (response.status === 401) {
-                window.location.href = '/login';
+                window.location.href = '/settings';
                 return;
             }
             const data = await response.json();
+            if (seq !== calendarSeq) return;
             renderCalendarGrid(data);
         } catch (error) {
             console.error('Error fetching calendar:', error);

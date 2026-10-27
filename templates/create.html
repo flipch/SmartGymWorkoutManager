@@ -466,7 +466,7 @@
                 isBarbell: meta.isBarbell,
                 variants: meta.variants,
                 presets: meta.presets,
-                selectedVariantId: meta.variants?.[0]?.id || groupId,
+                selectedVariantId: meta.variants?.[0]?.id ?? null,  // none known: the server picks the exercise's own
                 selectedPresetId: -1, // Custom Default
                 sets: startSets,
                 cablePosition: meta.cablePosition,
@@ -1275,7 +1275,7 @@ You must output a JSON object with the following structure:
                         isUnilateral: meta.isUnilateral,
                         variants: meta.variants,
                         presets: meta.presets,
-                        selectedVariantId: meta.variants?.[0]?.id || groupId,
+                        selectedVariantId: meta.variants?.[0]?.id ?? null,  // none known: the server picks the exercise's own
                         selectedPresetId: importedPresetId,
                         sets: finalSets,
                         cablePosition: meta.cablePosition,
@@ -1387,7 +1387,13 @@ You must output a JSON object with the following structure:
         renderBuilder();
     };
 
+    let saveInFlight = false;
     window.saveWorkout = async () => {
+        if (saveInFlight) return;  // a double click must not create two templates
+        saveInFlight = true;
+        try { await saveWorkoutOnce(); } finally { saveInFlight = false; }
+    };
+    const saveWorkoutOnce = async () => {
         const name = document.getElementById('plan-name').value || "Custom Workout";
         if(workoutData.length === 0) return alert("Plan is empty!");
 

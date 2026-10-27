@@ -17,6 +17,7 @@ the numbers are the engine's, the judgement/conversation is the agent's.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 
 # ───────────────────────────────────────────── goal prescriptions (programming.md §Key numbers)
@@ -243,8 +244,20 @@ def _swap_count(ordered):
     return swaps
 
 
+def _stem(token):
+    """Plural and hyphen insensitive: 'lunges' = 'lunge', 'split-squats' = 'split squat'."""
+    if len(token) > 3:
+        if token.endswith("sses"):
+            return token[:-2]
+        if token.endswith("ies"):
+            return token[:-3] + "y"
+        if token.endswith("s") and not token.endswith(("ss", "us", "is")):
+            return token[:-1]
+    return token
+
+
 def _norm_name(value):
-    return " ".join(str(value).lower().split())
+    return " ".join(_stem(t) for t in re.findall(r"[a-z0-9]+", str(value).lower()))
 
 
 def _is_avoided(name, avoid):

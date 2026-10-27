@@ -163,7 +163,7 @@
 
         try {
             const resp = await fetch(`/api/history?start=${start}&end=${end}`);
-            if (resp.status === 401) { window.location.href = '/login'; return; }
+            if (resp.status === 401) { window.location.href = '/settings'; return; }
             const data = await resp.json();
             if (!resp.ok) {  // an outage must not read as "No workouts found"
                 document.getElementById('loadingState').classList.add('hidden');
