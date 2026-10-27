@@ -351,17 +351,22 @@ test('adding an exercise with no known variants sends no variant id', async () =
     assert.equal(ctx.workoutData[0].selectedVariantId, null);
 });
 
-// the /coach page lives inside features.py as a Python string
-function coachPage(fetchImpl) {
-    const py = fs.readFileSync(path.join(__dirname, '..', 'features.py'), 'utf8');
-    const html = between(py, '_COACH_HTML = """', '"""\n');
-    const script = between(html, '<script>', '</script>').slice('<script>'.length);
+// the /coach page is templates/coach.html: layout.html supplies esc() and jsq(), the page script sits between two markers
+function coachPage(fetchImpl, over = {}) {
+    const layoutFns = between(read('layout.html'), 'function esc', '</script>');
+    const script = between(read('coach.html'), '// ==== coach:begin', '// ==== coach:end');
     const doc = makeDocument();
-    const ctx = { document: doc, console, fetch: fetchImpl, window: {}, JSON, Number, Object, alert() {} };
+    const win = { confirm: () => true, location: { href: '' }, ...over };
+    const ctx = { document: doc, console, fetch: fetchImpl, window: win, alert() {} };
     vm.createContext(ctx);
-    vm.runInContext(script + '\nglobalThis.api = { render, saveDay, gen };', ctx);
+    vm.runInContext(layoutFns + '\n' + script + `
+globalThis.api = { S, render: (p) => { S.program = p; renderProgram(); }, renderProgram, renderReadiness, renderWhoop, renderAvoid, gen, confirmDay, previewDay,
+    previewAll, renderAllApply, manualPayload, submitManual, parseOneRm, prefsFromForm, rememberPrefs, resetPrefs, removeAvoid, submitAvoid, refreshWhoop,
+    connectWhoop, effectText, applyBlocker, loadReadiness, loadAll };`, ctx);
     return { ctx, doc };
 }
+const okJson = (body, status = 200) => async () => ({ ok: status < 400, status, json: async () => body });
+const SIGNED_IN = { authenticated: true, writes_enabled: true, unit_confirmed: true };
 
 const aProgram = (extra = {}) => ({ review: { score: 80, warnings: [] }, goal_label: 'G', days_per_week: 3, experience: 'x', weekly_sets_per_muscle: {},
     days: [{ name: 'D', warmup: '', setup_swaps: 0, exercises: [] }], disclaimer: 'd', ...extra });
@@ -381,11 +386,13 @@ test('saving a coach day sends one request per click and reports what was not sa
     let n = 0;
     const answer = { results: [{ created: true, name: 'W', exercise_count: 1, unresolved: [{ name: 'Lunge', reason: 'on your avoid list' }] }],
                      feedback_error: 'QuarantinedCorruptFile' };
-    const { ctx, doc } = coachPage(async () => { n += 1; return { status: 200, json: async () => answer }; });
+    const { ctx, doc } = coachPage(async () => { n += 1; return { status: 200, ok: true, json: async () => answer }; });
     ctx.api.render(aProgram());
-    await Promise.all([ctx.api.saveDay(0), ctx.api.saveDay(0)]);
+    Object.assign(ctx.api.S.status, SIGNED_IN);
+    ctx.api.S.previews[0] = { name: 'W', exercise_count: 1, resolved: [], unresolved: [], notes: [] };
+    await Promise.all([ctx.api.confirmDay(0), ctx.api.confirmDay(0)]);
     assert.equal(n, 1);
-    const html = doc.getElementById('save0').innerHTML;
+    const html = doc.getElementById('apply0').innerHTML;
     assert.match(html, /Lunge \(on your avoid list\)/);
     assert.match(html, /QuarantinedCorruptFile/);
 });
@@ -651,16 +658,20 @@ test('the coach page says why a program could not be generated', async () => {
                          { ok: false, status: 500, json: async () => { throw new Error('not json'); } }]) {
         const { ctx, doc } = coachPage(async () => reply);
         await ctx.api.gen();
-        assert.doesNotMatch(doc.getElementById('out').innerHTML, /Generating/);
-        assert.match(doc.getElementById('out').innerHTML, /sleep_hours|Could not reach/);
+        assert.doesNotMatch(doc.getElementById('out').innerHTML, /Building your program/);
+        assert.match(doc.getElementById('out').innerHTML, /sleep_hours|HTTP 500/);
     }
 });
 
 test('the coach page does not leave Saving… up when the answer is not JSON', async () => {
     const { ctx, doc } = coachPage(async () => ({ ok: false, status: 502, json: async () => { throw new Error('<html>'); } }));
     ctx.api.render(aProgram());
-    await ctx.api.saveDay(0);
-    assert.match(doc.getElementById('save0').innerHTML, /Unexpected answer \(HTTP 502\)/);
+    Object.assign(ctx.api.S.status, SIGNED_IN);
+    ctx.api.S.previews[0] = { name: 'W', exercise_count: 1, resolved: [], unresolved: [], notes: [] };
+    await ctx.api.confirmDay(0);
+    assert.match(doc.getElementById('saveMsg0').innerHTML, /HTTP 502/);
+    assert.doesNotMatch(doc.getElementById('saveMsg0').innerHTML, /Saving…/);
+    assert.match(doc.getElementById('saveMsg0').innerHTML, /Check My Workouts before saving again/);
 });
 
 test('the insights page does not show an outage as zeros or as "not logged in"', async () => {

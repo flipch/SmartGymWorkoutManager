@@ -12,7 +12,7 @@ All endpoints degrade gracefully when not logged in (return empty/zeroed
 data rather than erroring), and parse the Speediance responses defensively
 since field names vary by region/firmware.
 """
-from flask import Blueprint, jsonify, Response, render_template_string, request
+from flask import Blueprint, jsonify, Response, render_template, render_template_string, request
 from datetime import datetime, date, timedelta, timezone
 import contextlib
 import glob
@@ -27,6 +27,7 @@ import coach
 from api_client import MAX_EXERCISES, MAX_REPS, MAX_REST_S, MAX_SETS, unit_is_confirmed, validate_workout
 from auth import writes_enabled
 import state_io
+import whoop_sync
 from insights_core import clamp_days, clamp_n, json_object, recovery_advice, summarize
 
 features_bp = Blueprint('features', __name__)
@@ -851,6 +852,136 @@ def coach_autoregulate():
     return jsonify(coach.autoregulate(readiness))
 
 
+# ── what the Coach page needs to know about THIS server (booleans only: never a credential) ──
+@features_bp.route('/api/coach/status')
+def coach_status():
+    unit = None
+    if _unit_confirmed(_client):
+        unit = "lb" if _imperial(_client) else "kg"
+    return jsonify({"authenticated": _authed(), "writes_enabled": writes_enabled(),
+                    "unit_confirmed": _unit_confirmed(_client), "account_unit": unit})
+
+
+# ── remembered preferences (goal, days, experience, 1RMs): a small validated file, with a reset ──
+def _prefs_path(data_dir=None):
+    return os.path.join(_data_dir(data_dir), "coach_prefs.json")
+
+
+def load_preferences(data_dir=None):
+    """(preferences, error): {} and None when nothing is remembered; {} and an error class name when the file cannot be used."""
+    path = _prefs_path(data_dir)
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            return {}, "NotAnObject"
+        return state_io.validate_preferences({k: v for k, v in raw.items() if k != "updated"}), None
+    except FileNotFoundError:
+        return {}, None
+    except (OSError, ValueError) as e:
+        return {}, type(e).__name__
+
+
+def save_preferences(payload, data_dir=None):
+    prefs = state_io.validate_preferences(payload)
+    path = _prefs_path(data_dir)
+    with state_io.file_lock(path + ".lock"):
+        if os.path.exists(path) and load_preferences(data_dir)[1]:
+            state_io.quarantine(path)  # a damaged file is moved aside, never silently overwritten
+        state_io.atomic_write_json(path, {**prefs, "updated": state_io.utc_stamp()})
+    return prefs
+
+
+def reset_preferences(data_dir=None):
+    path = _prefs_path(data_dir)
+    with state_io.file_lock(path + ".lock"):
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+
+
+@features_bp.route('/api/coach/preferences', methods=['GET', 'POST', 'DELETE'])
+def coach_preferences():
+    """GET what is remembered; POST replaces it (validated, unknown fields refused); DELETE forgets it."""
+    if request.method == 'DELETE':
+        try:
+            reset_preferences()
+        except (OSError, TimeoutError) as e:
+            return jsonify({"error": "preferences_not_saved", "message": type(e).__name__}), 503
+        return jsonify({"preferences": {}, "reset": True})
+    if request.method == 'POST':
+        try:
+            prefs = save_preferences(request.get_json(silent=True))
+        except ValueError as e:
+            return jsonify({"error": "invalid_preferences", "message": str(e)}), 400
+        except (OSError, TimeoutError) as e:
+            return jsonify({"error": "preferences_not_saved", "message": type(e).__name__}), 503
+        return jsonify({"preferences": prefs})
+    prefs, error = load_preferences()
+    return jsonify({"preferences": prefs, "error": error})
+
+
+# ── WHOOP: the app pulls it itself (whoop_sync.py); the page only shows status and asks for a refresh ──
+@features_bp.route('/api/coach/whoop')
+def coach_whoop():
+    return jsonify({"whoop": whoop_sync.status(_data_dir())})
+
+
+@features_bp.route('/api/coach/whoop/refresh', methods=['POST'])
+def coach_whoop_refresh():
+    """Pull WHOOP now if it is due (force=true: ignore the 15-minute throttle, keep a 30-second floor). Never an error page:
+    a WHOOP problem is an `outcome` and a status."""
+    body = json_object(request.get_json(silent=True))
+    result = whoop_sync.sync(_data_dir(), force=body.get("force") is True)
+    return jsonify({"outcome": result["outcome"], "whoop": result["status"],
+                    "saved": result.get("saved", []), "skipped": result.get("skipped", {})})
+
+
+@features_bp.route('/api/coach/whoop/connect', methods=['POST'])
+def coach_whoop_connect():
+    """Start the in-app WHOOP consent from the Coach page: mints a single-use state and returns WHOOP's authorize URL."""
+    try:
+        url, _state = whoop_sync.begin_consent(_data_dir())
+    except whoop_sync.ConsentError as e:
+        return jsonify({"error": "whoop_not_configured", "message": str(e)}), 400
+    except (OSError, TimeoutError) as e:
+        return jsonify({"error": "whoop_state_not_saved", "message": type(e).__name__}), 503
+    return jsonify({"url": url})
+
+
+_CALLBACK_PAGE = ("<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">"
+                  "<title>WHOOP</title><style>body{{font-family:system-ui,sans-serif;background:#0d1117;color:#c9d1d9;max-width:34rem;"
+                  "margin:3rem auto;padding:0 1rem}}a{{color:#3fb950}}</style></head><body><h1>{title}</h1><p>{text}</p>"
+                  "<p><a href=\"/coach\">Back to the Coach</a></p></body></html>")
+
+
+def _callback_response(status, title, text):
+    from html import escape
+    resp = Response(_CALLBACK_PAGE.format(title=escape(title), text=escape(text)), status=status, mimetype="text/html")
+    # the address of this page carries a one-time code: keep it out of Referer headers and caches, and load nothing
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@features_bp.route('/whoop/callback')
+def whoop_callback():
+    """WHOOP redirects the owner's browser here, WITHOUT Basic-auth credentials (auth.py exempts exactly GET /whoop/callback),
+    so this handler is safe on its own: nothing happens unless `state` is one that an authenticated caller minted (single use,
+    10 minutes). That single-use state is what prevents login CSRF. Neither the code nor a token is logged or rendered."""
+    if request.args.get("error"):  # the owner said no (or WHOOP refused): say so, change nothing
+        return _callback_response(400, "WHOOP sign-in declined", "WHOOP did not grant access (" + request.args.get("error", "")[:40]
+                                  + "). Nothing was changed. Start again from the Coach page if you want to retry.")
+    try:
+        whoop_sync.finish_consent(_data_dir(), request.args.get("code", ""), request.args.get("state", ""))
+    except whoop_sync.ConsentError as e:
+        return _callback_response(400, "WHOOP sign-in did not complete", str(e))
+    except (OSError, TimeoutError) as e:
+        return _callback_response(503, "WHOOP sign-in did not complete", "The server could not record the sign-in (" + type(e).__name__ + ").")
+    return _callback_response(200, "WHOOP connected", "The coach will now pull your recovery and sleep from WHOOP. You can close this tab.")
+
+
 def _all_finite(value):
     stack = [value]  # iterative: a deeply nested body must be refused, not crash the worker with a RecursionError
     while stack:
@@ -1047,11 +1178,48 @@ def _feedback_profile(data_dir=None, days=14):
             "recent_notes": [e["note"] for e in recent if e.get("note")][-5:]}
 
 
-@features_bp.route('/api/coach/feedback', methods=['GET', 'POST'])
+def remove_avoid(name, data_dir=None):
+    """Take one exercise off the avoid list (an `avoid` report, or a `pain` report naming it). Returns True when something
+    was removed. Only the exclusion goes: a report that also carried a session's RPE or soreness keeps those."""
+    target = coach._norm_name(state_io.validate_feedback({"avoid": name})["avoid"])
+    path = _feedback_path(data_dir)
+    with state_io.file_lock(path + ".lock"):
+        events = _load_feedback_events(data_dir, quarantine_corrupt=True)
+        out, removed = [], False
+        for e in events:
+            if target not in _exclusions(e):
+                out.append(e)
+                continue
+            removed = True
+            e = dict(e)
+            if e.get("avoid") and coach._norm_name(e["avoid"]) == target:
+                e.pop("avoid")
+            if e.get("pain") and e.get("exercise") and coach._norm_name(e["exercise"]) == target:
+                e["pain"] = False
+            if any(e.get(k) not in (None, "", False) for k in _SESSION_SIGNALS) or _exclusions(e):
+                out.append(e)
+        if removed:
+            state_io.atomic_write_json(path, out)
+    return removed
+
+
+@features_bp.route('/api/coach/feedback', methods=['GET', 'POST', 'DELETE'])
 def coach_feedback():
     """POST a feedback event from a session (any subset of: rpe 1-10, difficulty
     too_easy|ok|too_hard, completion, soreness 1-5, pain, avoid <exercise>, note).
-    GET returns the derived profile + how it will adjust the next program."""
+    GET returns the derived profile + how it will adjust the next program.
+    DELETE ?avoid=<exercise> takes that exercise off the avoid list."""
+    if request.method == 'DELETE':
+        try:
+            removed = remove_avoid(request.args.get("avoid", ""))
+        except ValueError as e:
+            return jsonify({"error": "invalid_feedback", "message": str(e)}), 400
+        except (OSError, TimeoutError) as e:
+            return jsonify({"error": "feedback_not_saved", "message": type(e).__name__}), 503
+        if not removed:
+            return jsonify({"error": "not_on_list", "message": "That exercise is not on your avoid list."}), 404
+        prof = _feedback_profile()
+        return jsonify({"removed": True, "profile": prof, "next_program_adjustment": coach.feedback_adjustment(prof)})
     if request.method == 'POST':
         try:
             event = log_feedback(request.get_json(silent=True))
@@ -1481,103 +1649,9 @@ def coach_apply():
         return jsonify({"error": "apply_failed", "message": type(e).__name__}), 502
 
 
-_COACH_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>AI Coach · Smart Gym</title><style>
-:root{color-scheme:dark}body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#0f1419;color:#e6edf3;margin:0;padding:28px;max-width:980px;margin:0 auto}
-h1{font-weight:650;margin:0 0 2px}.sub{color:#8b98a5;margin:0 0 22px}
-.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:end;background:#161b22;border:1px solid #21262d;border-radius:14px;padding:16px;margin-bottom:18px}
-label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:#8b98a5;margin-bottom:4px}
-select,input{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px 10px;font-size:.9rem}
-button{background:#238636;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-weight:600;cursor:pointer}
-button.alt{background:#1f6feb}
-.day{background:#161b22;border:1px solid #21262d;border-radius:14px;padding:16px 18px;margin-bottom:14px}
-.day h3{margin:0 0 4px}.muted{color:#8b98a5;font-size:.82rem}
-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.88rem}
-th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #21262d}th{color:#8b98a5;font-weight:600;font-size:.72rem;text-transform:uppercase}
-.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.72rem;font-weight:700}
-.standard{background:#21303f;color:#79c0ff}.eccentric{background:#3a2a16;color:#d29922}.chain{background:#2d233f;color:#bc8cff}.constant{background:#16303a;color:#39a7d2}.spotter{background:#3d2230;color:#f778ba}
-.review{border-radius:14px;padding:16px 18px;margin-bottom:14px;border:1px solid #21262d}
-.warn{color:#f0883e}.ok{color:#3fb950}.score{font-size:2rem;font-weight:700}
-a{color:#58a6ff}
-</style></head><body>
-<h1>🧠 AI Coach</h1><p class=sub>flipch fork · evidence-based program generator (see <a href="/api/coach/principles">principles</a> · citations in repo <code>knowledge/</code>)</p>
-<div class=bar>
-  <div><label>Goal</label><select id=goal>
-    <option value=muscle>Build muscle</option><option value=strength>Build strength</option>
-    <option value=fatloss>Lose fat</option><option value=general selected>General / recomp</option></select></div>
-  <div><label>Days/week</label><select id=days><option>3</option><option selected>4</option><option>5</option><option>2</option></select></div>
-  <div><label>Experience</label><select id=exp><option>beginner</option><option selected>intermediate</option><option>advanced</option></select></div>
-  <div><label>Readiness (Whoop %)</label><input id=whoop type=number min=0 max=100 placeholder="optional" style=width:120px></div>
-  <div><label>Sleep (h)</label><input id=sleep type=number step=0.5 placeholder="opt" style=width:80px></div>
-  <button onclick=gen()>Generate program</button>
-</div>
-<div id=out class=muted>Pick options and generate a program. Runs fully offline (PT mode); add readiness to autoregulate.</div>
-<script>
-const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const $=id=>document.getElementById(id);
-let genSeq=0;
-async function gen(){
-  const mine=++genSeq;
-  $('out').innerHTML='<p class=muted>Generating…</p>';
-  const body={goal:$('goal').value,days_per_week:+$('days').value,experience:$('exp').value};
-  const r={}; if($('whoop').value)r.whoop_recovery=+$('whoop').value; if($('sleep').value)r.sleep_hours=+$('sleep').value;
-  if(Object.keys(r).length)body.readiness=r;
-  let resp,p;
-  try{ resp=await fetch('/api/coach/program',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); p=await resp.json(); }
-  catch(e){ if(mine!==genSeq)return; $('out').innerHTML='<p class=warn>Could not reach the server.</p>'; return; }
-  if(mine!==genSeq)return;  // a newer request was started: its answer is the one on screen
-  if(!resp.ok||!p||!p.review){ $('out').innerHTML='<p class=warn>'+esc((p&&(p.message||p.error))||('HTTP '+resp.status))+'</p>'; return; }
-  render(p);
-}
-function render(p){
-  window.__P=p;
-  let h=`<div class=review style="background:#161b22"><span class=score>${esc(p.review.score)}</span> <span class=muted>/100 program quality · ${esc(p.goal_label)} · ${esc(p.days_per_week)}×/wk · ${esc(p.experience)}</span>`;
-  if(p.autoregulation){h+=`<div style="margin-top:8px">Readiness: <b>${esc(p.autoregulation.band.toUpperCase())}</b> — ${esc(p.autoregulation.message)}</div>`;}
-  if(p.review.warnings.length){h+='<ul>'+p.review.warnings.map(w=>`<li class=warn>⚠ ${esc(w)}</li>`).join('')+'</ul>';}
-  else{h+='<div class=ok style="margin-top:8px">✓ Volume, balance and order all within evidence-based ranges.</div>';}
-  h+=`<div class=muted style="margin-top:6px">Weekly sets/muscle: ${Object.entries(p.weekly_sets_per_muscle).map(([k,v])=>esc(k)+' '+esc(v)).join(' · ')}</div></div>`;
-  p.days.forEach((d,i)=>{
-    h+=`<div class=day><h3>${esc(d.name)}</h3><div class=muted>${esc(d.warmup)} · ~${esc(d.setup_swaps)} setup changes</div>`;
-    h+='<table><tr><th>Exercise</th><th>Sets×Reps</th><th>%1RM</th><th>RIR</th><th>Rest</th><th>Mode</th><th>Setup</th></tr>';
-    for(const e of d.exercises){h+=`<tr><td>${esc(e.name)}${e.unilateral?' <span class=muted>(L/R)</span>':''}</td><td>${esc(e.sets)}×${esc(e.reps)}${e.load?(' @'+esc(e.load)):''}</td><td>${esc(e.pct1rm)}</td><td>${esc(e.rir)}</td><td>${esc(e.rest_sec)}s</td><td><span class="pill ${esc(e.mode)}" title="${esc(e.mode_note)}">${esc(e.mode)}</span></td><td class=muted>${esc(e.accessory)}/${esc(e.belt)}</td></tr>`;}
-    h+='</table>';
-    if(d.conditioning)h+=`<div class=muted style="margin-top:8px">🏃 ${esc(d.conditioning)}</div>`;
-    h+=`<div style="margin-top:10px"><button class=alt onclick="saveDay(${Number(i)})">💾 Save to my workouts</button> <span id=save${Number(i)} class=muted></span></div>`;
-    h+='</div>';
-  });
-  if(p.avoid_unmatched&&p.avoid_unmatched.length)h+='<div class=warn style="margin-top:8px">⚠ Your avoid list has entries that matched no exercise (check the spelling): '+p.avoid_unmatched.map(a=>esc(a)).join(', ')+'</div>';
-  if(p.readiness_error)h+='<div class=warn style="margin-top:8px">⚠ Your stored readiness could not be read ('+esc(p.readiness_error)+'): this program ignores it. Post a new reading.</div>';
-  if(p.feedback_error)h+='<div class=warn style="margin-top:8px">⚠ Your saved pain/avoid list could not be fully read ('+esc(p.feedback_error)+'): exclusions may be missing.</div>';
-  h+=`<p class=muted>${esc(p.disclaimer)}</p>`;
-  $('out').innerHTML=h;
-}
-const saving={};
-async function saveDay(i){
-  if(saving[i])return;  // a double click must not create two templates
-  saving[i]=true;
-  try{ await saveDayOnce(i); } finally { saving[i]=false; }
-}
-async function saveDayOnce(i){
-  const el=$('save'+i); el.textContent='Saving…';
-  let resp;
-  try{ resp=await fetch('/api/coach/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({program:window.__P,day_index:i,dry_run:false})}); }
-  catch(e){ el.innerHTML='<span class=warn>Network error</span>'; return; }
-  if(resp.status===401){ el.innerHTML='<span class=warn>Log in at /settings to save to your Speediance account.</span>'; return; }
-  let d; try{ d=await resp.json(); }catch(e){ el.innerHTML='<span class=warn>Unexpected answer (HTTP '+esc(resp.status)+'): check My Workouts before saving again.</span>'; return; }
-  const r=(d.results&&d.results[0])||{};
-  if(r.created){
-    let m=`<span class=ok>✓ Saved "${esc(r.name)}" (${esc(r.exercise_count)} exercises)</span>`;
-    if(r.unresolved&&r.unresolved.length)m+=` <span class=warn>· not saved: ${r.unresolved.map(u=>esc(u.name)+(u.reason?' ('+esc(u.reason)+')':'')).join(', ')}</span>`;
-    if(d.feedback_error)m+=` <span class=warn>· ⚠ your pain/avoid list could not be fully read (${esc(d.feedback_error)})</span>`;
-    el.innerHTML=m;
-  } else { el.innerHTML='<span class=warn>'+esc(r.message||r.error||d.message||'Could not save')+'</span>'; }
-}
-</script></body></html>"""
-
-
 @features_bp.route('/coach')
 def coach_page():
-    return render_template_string(_COACH_HTML)
+    return render_template('coach.html')  # templates/coach.html extends layout.html; every value arrives through the JSON APIs
 
 
 # ═══════════════════════ Completed-session detail (latest workout) ═══════════════════════

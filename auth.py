@@ -17,6 +17,9 @@ import os
 import re
 
 EXEMPT_PATHS = frozenset({"/healthz"})
+# (method, path) pairs the Flask app serves without credentials. WHOOP sends the owner's browser back here after consent; the
+# handler authenticates itself with a single-use state. Exactly this method and this path: no prefix, no trailing slash, no case folding.
+EXEMPT_ROUTES = frozenset({("GET", "/whoop/callback")})
 
 
 def load_token() -> str | None:
@@ -61,7 +64,7 @@ def install_flask_auth(app, token: str | None):
 
     @app.before_request
     def _require_shared_secret():
-        if request.path in EXEMPT_PATHS:
+        if request.path in EXEMPT_PATHS or (request.method, request.path) in EXEMPT_ROUTES:
             return None
         if authorized(request.headers.get("Authorization", ""), token):
             return None
@@ -78,6 +81,7 @@ def install_flask_auth(app, token: str | None):
 LOCAL_ONLY_ENDPOINTS = frozenset({
     "features.coach_apply", "features.coach_autoregulate", "features.coach_critique", "features.coach_feedback",
     "features.coach_program", "features.coach_readiness",
+    "features.coach_preferences", "features.coach_whoop_refresh", "features.coach_whoop_connect",  # local state / the app's own WHOOP link
     "update_custom_instruction", "update_accessories", "update_owned_devices", "login", "settings",
     "preload_assets", "refresh_library",  # local media/library cache only
 })

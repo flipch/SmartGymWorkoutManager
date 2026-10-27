@@ -1,0 +1,623 @@
+{% extends "layout.html" %}
+{% block head %}{% endblock %}
+{% block content %}
+<div class="max-w-5xl mx-auto space-y-6">
+    <header>
+        <h1 class="text-3xl font-bold text-white">AI Coach</h1>
+        <p class="text-gray-400 text-sm">Evidence-based program generator. Citations are in the repo <code>knowledge/</code> folder; <a href="/api/coach/principles" class="text-green-400 hover:underline">principles</a>.</p>
+    </header>
+
+    <div id="notice" role="status" aria-live="polite" class="text-sm"></div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+        <section aria-labelledby="h-readiness" class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+            <h2 id="h-readiness" class="text-xl font-bold text-white mb-3">Readiness today</h2>
+            <div id="readiness-body" aria-live="polite" class="text-sm text-gray-300">Loading readiness…</div>
+            <p class="mt-3 text-xs text-gray-400 border-t border-gray-700 pt-3">WHOOP recovery is not validated for strength training, so it is a <strong class="text-gray-200">soft veto</strong> only: a low or red score can cut today's volume and load; a high one never adds any. The most conservative signal wins. A signal older than 36 hours is ignored.</p>
+            <details class="mt-3">
+                <summary class="cursor-pointer text-green-400 hover:underline focus:outline-none focus:ring-2 focus:ring-green-500 rounded">Enter or override a reading by hand</summary>
+                <form id="manual-form" onsubmit="return submitManual(event)" class="mt-3 grid grid-cols-2 gap-3 text-sm" novalidate>
+                    <div><label for="m-whoop" class="block text-gray-400 mb-1">WHOOP recovery %</label>
+                        <input id="m-whoop" type="number" inputmode="decimal" min="0" max="100" step="1" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"></div>
+                    <div><label for="m-sleep" class="block text-gray-400 mb-1">Sleep (hours)</label>
+                        <input id="m-sleep" type="number" inputmode="decimal" min="0" max="24" step="0.25" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"></div>
+                    <div><label for="m-subj" class="block text-gray-400 mb-1">How you feel (1 to 5)</label>
+                        <select id="m-subj" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                            <option value="">not set</option><option value="1">1 awful</option><option value="2">2 poor</option><option value="3">3 okay</option><option value="4">4 good</option><option value="5">5 great</option></select></div>
+                    <div><label for="m-hrv" class="block text-gray-400 mb-1">HRV vs your baseline</label>
+                        <select id="m-hrv" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                            <option value="">not set</option><option value="above">above</option><option value="within">within</option><option value="below">below</option></select></div>
+                    <div class="col-span-2"><label for="m-rhr" class="block text-gray-400 mb-1">Resting heart rate vs baseline (bpm, + is higher)</label>
+                        <input id="m-rhr" type="number" inputmode="decimal" min="-30" max="40" step="1" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"></div>
+                    <div class="col-span-2 flex flex-wrap items-center gap-3">
+                        <button id="m-save" type="submit" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:ring-2 focus:ring-green-400">Save reading</button>
+                        <span id="m-msg" role="status" aria-live="polite" class="text-sm"></span>
+                    </div>
+                    <p class="col-span-2 text-xs text-gray-500">Only the fields you fill in are sent. A newer reading replaces an older one for the same field.</p>
+                </form>
+            </details>
+        </section>
+
+        <section aria-labelledby="h-whoop" class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+            <h2 id="h-whoop" class="text-xl font-bold text-white mb-3">WHOOP</h2>
+            <div id="whoop-body" aria-live="polite" class="text-sm text-gray-300">Checking WHOOP…</div>
+        </section>
+    </div>
+
+    <section aria-labelledby="h-plan" class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+        <h2 id="h-plan" class="text-xl font-bold text-white mb-3">Build a program</h2>
+        <form id="plan-form" onsubmit="return submitPlan(event)" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm" novalidate>
+            <div><label for="p-goal" class="block text-gray-400 mb-1">Goal</label>
+                <select id="p-goal" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                    <option value="muscle">Build muscle</option><option value="strength">Build strength</option><option value="fatloss">Lose fat</option><option value="general" selected>General / recomp</option></select></div>
+            <div><label for="p-days" class="block text-gray-400 mb-1">Days per week</label>
+                <select id="p-days" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                    <option>1</option><option>2</option><option>3</option><option selected>4</option><option>5</option></select></div>
+            <div><label for="p-exp" class="block text-gray-400 mb-1">Experience</label>
+                <select id="p-exp" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                    <option>beginner</option><option selected>intermediate</option><option>advanced</option></select></div>
+            <div><label for="p-unit" class="block text-gray-400 mb-1">1RM unit</label>
+                <select id="p-unit" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                    <option value="">none entered</option><option value="kg">kg</option><option value="lb">lb</option></select></div>
+            <div class="sm:col-span-2 lg:col-span-4"><label for="p-1rm" class="block text-gray-400 mb-1">1RMs (optional; one per line: an exercise or muscle name, then the number, for example <code>chest 80</code>)</label>
+                <textarea id="p-1rm" rows="3" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"></textarea>
+                <p class="text-xs text-gray-500 mt-1">Without 1RMs the program has no loads: you pick them on the machine.</p></div>
+            <div class="sm:col-span-2 lg:col-span-4 flex flex-wrap items-center gap-3">
+                <button id="p-gen" type="submit" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:ring-2 focus:ring-green-400">Generate program</button>
+                <button id="p-remember" type="button" onclick="rememberPrefs()" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded focus:outline-none focus:ring-2 focus:ring-green-400">Remember these</button>
+                <button id="p-reset" type="button" onclick="resetPrefs()" class="bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 px-4 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-400">Reset</button>
+                <span id="p-msg" role="status" aria-live="polite" class="text-sm text-gray-400"></span>
+            </div>
+        </form>
+    </section>
+
+    <section aria-labelledby="h-out" id="program-section">
+        <h2 id="h-out" class="sr-only">Your program</h2>
+        <div id="out" aria-live="polite" class="text-sm text-gray-400">Choose your options and generate a program. It works offline; readiness trims it when you are under-recovered.</div>
+    </section>
+
+    <section aria-labelledby="h-avoid" class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+        <h2 id="h-avoid" class="text-xl font-bold text-white mb-1">Avoid list and pain</h2>
+        <p class="text-xs text-gray-400 mb-3">Exercises listed here are left out of every program and are never saved to your machine, even when a library match is only close.</p>
+        <div id="avoid-body" aria-live="polite" class="text-sm text-gray-300">Loading…</div>
+        <form id="avoid-form" onsubmit="return submitAvoid(event)" class="mt-3 flex flex-wrap items-end gap-3 text-sm" novalidate>
+            <div class="flex-grow min-w-[12rem]"><label for="a-name" class="block text-gray-400 mb-1">Exercise to avoid</label>
+                <input id="a-name" type="text" maxlength="120" autocomplete="off" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"></div>
+            <label class="flex items-center gap-2 text-gray-300 pb-2"><input id="a-pain" type="checkbox" class="h-4 w-4"> it hurt (log as pain)</label>
+            <button id="a-add" type="submit" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:ring-2 focus:ring-green-400">Add</button>
+            <span id="a-msg" role="status" aria-live="polite" class="text-sm w-full"></span>
+        </form>
+    </section>
+</div>
+
+<script>
+{% raw %}
+// ==== coach:begin
+const $ = id => document.getElementById(id);
+const S = {status: {}, readiness: null, whoop: null, program: null, previews: {}, avoid: [], loadUnit: '', saved: {}};
+const BTN = 'text-white font-bold py-2 px-3 rounded focus:outline-none focus:ring-2 focus:ring-green-400 disabled:opacity-50 disabled:cursor-not-allowed ';
+const BTN_GREEN = BTN + 'bg-green-600 hover:bg-green-700';
+const BTN_GRAY = BTN + 'bg-gray-600 hover:bg-gray-500';
+const SIGNALS = {
+    whoop_recovery: ['WHOOP recovery', '%'], sleep_hours: ['Sleep', ' h'], subjective: ['How you feel', '/5'],
+    hrv_vs_baseline: ['HRV vs baseline', ''], rhr_delta_bpm: ['Resting HR vs baseline', ' bpm'], acwr: ['Training load ratio', ''],
+};
+const SOURCES = {whoop: 'WHOOP', manual: 'Manual'};
+const MODE_CLASS = {standard: 'bg-blue-900 text-blue-200', eccentric: 'bg-yellow-900 text-yellow-200', chain: 'bg-purple-900 text-purple-200',
+                    constant: 'bg-cyan-900 text-cyan-200', spotter: 'bg-pink-900 text-pink-200'};
+
+function note(html, kind) {
+    const cls = kind === 'error' ? 'text-red-400' : kind === 'warn' ? 'text-yellow-400' : 'text-green-400';
+    $('notice').innerHTML = html ? '<p class="' + cls + '">' + html + '</p>' : '';
+}
+function setText(id, text, kind) {
+    const cls = kind === 'error' ? 'text-red-400' : kind === 'warn' ? 'text-yellow-400' : kind === 'ok' ? 'text-green-400' : 'text-gray-400';
+    $(id).innerHTML = text ? '<span class="' + cls + '">' + esc(text) + '</span>' : '';
+}
+function busy(id, on) { $(id).disabled = !!on; }
+
+async function callApi(method, url, body) {
+    try {
+        const resp = await fetch(url, {method, headers: {'Content-Type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body)});
+        let data = {};
+        try { data = await resp.json(); } catch (e) { data = {}; }
+        return {ok: !!resp.ok, status: resp.status, data: data || {}};
+    } catch (e) {
+        return {ok: false, status: 0, data: {message: 'Could not reach the server.'}};
+    }
+}
+function apiMessage(r) {
+    const d = r.data || {};
+    if (r.status === 0) return 'Could not reach the server.';
+    if (r.status === 401) return 'You are signed out: reload the page to sign in again.';
+    if (r.status === 403 && d.error === 'cross_site_request_refused') return 'The server refused this request (cross-site). Open the page from the app address and try again.';
+    return String(d.message || d.error || ('HTTP ' + r.status));
+}
+
+function ageText(h) {
+    if (h == null || !isFinite(h)) return 'time unknown';
+    if (h < 0.1) return 'just now';
+    if (h < 1) return Math.round(h * 60) + ' min ago';
+    if (h < 48) return (Math.round(h * 10) / 10) + ' h ago';
+    return Math.round(h / 24) + ' days ago';
+}
+function clock(iso) {
+    const d = new Date(iso);
+    if (!iso || isNaN(d.getTime())) return 'unknown';
+    return d.toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+}
+function band(b) {
+    const cls = b === 'low' ? 'bg-red-900 text-red-200' : b === 'high' ? 'bg-green-900 text-green-200' : 'bg-yellow-900 text-yellow-200';
+    return '<span class="inline-block px-2 py-0.5 rounded-full text-xs font-bold uppercase ' + cls + '">' + esc(b || 'unknown') + '</span>';
+}
+function effectText(adj) {
+    const vol = Math.min(0, Number(adj && adj.volume_pct) || 0), inten = Math.min(0, Number(adj && adj.intensity_pct) || 0);
+    const rir = Number(adj && adj.rir_min) || 0;
+    const parts = [];
+    if (vol < 0) parts.push('about ' + Math.abs(vol) + '% fewer sets');
+    if (inten < 0) parts.push('about ' + Math.abs(inten) + '% lighter loads');
+    if (adj && adj.band !== 'high' && rir >= 2) parts.push('stop with at least ' + rir + ' reps in reserve');
+    if (!parts.length) return 'Train the program as written. Readiness never adds volume or load.';
+    return 'Today: ' + parts.join(', ') + '.';
+}
+
+// ---- readiness card
+function renderReadiness(r) {
+    r = r || {};
+    if (r.error) {
+        $('readiness-body').innerHTML = '<p class="text-red-400">The stored readiness could not be used: ' + esc(r.message || r.error) + ' Save a new reading below.</p>';
+        return;
+    }
+    const sigs = Array.isArray(r.signals) ? r.signals : [];
+    const adj = r.adjustment || {};
+    const limit = r.max_age_hours || 36;
+    let h = '';
+    if (!sigs.length) {
+        h += '<p class="text-gray-400">No readiness data yet. The coach assumes an ordinary day (moderate) and trains the program as written. Connect WHOOP or enter a reading below.</p>';
+    } else {
+        const fresh = sigs.filter(s => !s.stale);
+        const stale = sigs.filter(s => s.stale);
+        h += '<p class="mb-2">Today\'s band: ' + band(adj.band) + (fresh.length ? '' : ' <span class="text-yellow-400">(no fresh signal)</span>') + '</p>';
+        h += '<p class="mb-3 text-gray-200">' + esc(effectText(adj)) + '</p>';
+        h += '<ul class="divide-y divide-gray-700 mb-3">';
+        for (const s of sigs) {
+            const meta = SIGNALS[s.key] || [s.key, ''];
+            const src = SOURCES[s.source] || 'Source not recorded';
+            h += '<li class="py-2 flex flex-wrap items-center gap-x-3 gap-y-1' + (s.stale ? ' opacity-60' : '') + '">'
+                + '<span class="font-semibold text-white">' + esc(meta[0]) + '</span>'
+                + '<span>' + esc(s.value) + esc(meta[1]) + '</span>'
+                + '<span class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-200">' + esc(src) + '</span>'
+                + '<span class="text-xs text-gray-400">' + esc(ageText(s.age_hours)) + '</span>'
+                + (s.stale ? '<span class="text-xs px-2 py-0.5 rounded bg-yellow-900 text-yellow-200">Stale: older than ' + esc(limit) + ' h, ignored</span>' : '')
+                + '</li>';
+        }
+        h += '</ul>';
+        const why = (Array.isArray(adj.signals) ? adj.signals : []).concat(Array.isArray(adj.overrides) ? adj.overrides : []);
+        if (why.length) h += '<p class="text-xs text-gray-400 mb-1">Why:</p><ul class="list-disc pl-5 text-xs text-gray-300">' + why.map(w => '<li>' + esc(w) + '</li>').join('') + '</ul>';
+        if (stale.length) h += '<p class="mt-2 text-xs text-yellow-400">' + esc(stale.length) + ' signal' + (stale.length > 1 ? 's are' : ' is') + ' older than ' + esc(limit) + ' hours and ignored.</p>';
+    }
+    $('readiness-body').innerHTML = h;
+}
+async function loadReadiness() {
+    const r = await callApi('GET', '/api/coach/readiness');
+    S.readiness = r.data;
+    if (!r.ok && !(r.data && r.data.error)) r.data = {error: 'unavailable', message: apiMessage(r)};
+    renderReadiness(r.data);
+    return r;
+}
+function manualPayload() {
+    const out = {}, bad = [];
+    const num = (id, key, lo, hi) => {
+        const raw = String($(id).value == null ? '' : $(id).value).trim();
+        if (!raw) return;
+        const v = Number(raw);
+        if (!isFinite(v) || v < lo || v > hi) bad.push(key); else out[key] = v;
+    };
+    num('m-whoop', 'whoop_recovery', 0, 100);
+    num('m-sleep', 'sleep_hours', 0, 24);
+    num('m-rhr', 'rhr_delta_bpm', -30, 40);
+    if ($('m-subj').value) out.subjective = Number($('m-subj').value);
+    if ($('m-hrv').value) out.hrv_vs_baseline = $('m-hrv').value;
+    return {out, bad};
+}
+async function submitManual(ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
+    const {out, bad} = manualPayload();
+    if (bad.length) { setText('m-msg', 'Check: ' + bad.join(', ') + ' is out of range.', 'error'); return false; }
+    if (!Object.keys(out).length) { setText('m-msg', 'Fill in at least one field.', 'error'); return false; }
+    out.source = 'manual';
+    busy('m-save', true);
+    setText('m-msg', 'Saving…');
+    const r = await callApi('POST', '/api/coach/readiness', out);
+    busy('m-save', false);
+    if (!r.ok) { setText('m-msg', apiMessage(r), 'error'); return false; }
+    setText('m-msg', 'Saved.', 'ok');
+    await loadReadiness();
+    regenerateIfShown();
+    return false;
+}
+
+// ---- WHOOP card
+function renderWhoop(w) {
+    w = w || {};
+    let h = '';
+    const pull = w.last_pull ? 'Last pull ' + esc(clock(w.last_pull)) : 'No pull yet';
+    const next = w.next_pull ? ' · next after ' + esc(clock(w.next_pull)) : '';
+    const canConnect = !!w.can_connect;
+    const refresh = '<button id="w-refresh" type="button" onclick="refreshWhoop(true)" class="' + BTN_GREEN + '">Refresh from WHOOP</button>';
+    const connect = (label) => '<button id="w-connect" type="button" onclick="connectWhoop()" class="' + BTN_GRAY + '">' + label + '</button>';
+    if (w.state === 'not_configured' || !w.state) {
+        h += '<p class="text-gray-300 mb-2"><span class="inline-block w-2 h-2 rounded-full bg-gray-500 mr-2"></span>Not connected.</p>'
+            + '<p class="text-gray-400">' + esc(w.message || 'WHOOP is not set up on this server. The coach works without it.') + '</p>'
+            + (canConnect ? '<p class="mt-3">' + connect('Connect WHOOP') + '</p>' : '');
+    } else if (w.state === 'needs_reconsent') {
+        h += '<p class="text-red-400 font-semibold mb-2"><span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-2"></span>WHOOP needs re-consent</p>'
+            + '<p class="text-gray-300">' + esc(w.message || '') + '</p>'
+            + '<p class="text-xs text-gray-400 mt-1">The server has stopped retrying. Your last readings stay in use until they pass 36 hours.</p>'
+            + '<p class="mt-3">' + (canConnect ? connect('Reconnect WHOOP') : '<span class="text-gray-400">Ask the owner to reconnect WHOOP (see docs/ai-coach.md).</span>') + '</p>';
+    } else if (w.state === 'refreshing_failed') {
+        h += '<p class="text-yellow-400 font-semibold mb-2"><span class="inline-block w-2 h-2 rounded-full bg-yellow-500 mr-2"></span>' + esc(w.message || 'WHOOP unavailable') + '</p>'
+            + '<p class="text-gray-400">' + pull + next + '. It retries by itself, slowing down after each failure. Your last readings stay in use.</p>'
+            + '<p class="mt-3 flex flex-wrap gap-2">' + refresh + (canConnect ? connect('Reconnect WHOOP') : '') + '</p>';
+    } else {
+        h += '<p class="text-green-400 font-semibold mb-2"><span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-2"></span>Connected</p>'
+            + '<p class="text-gray-300">' + pull + next + '</p>'
+            + (Array.isArray(w.notes) && w.notes.length ? '<ul class="list-disc pl-5 text-xs text-gray-400 mt-2">' + w.notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '')
+            + '<p class="mt-3 flex flex-wrap gap-2">' + refresh + (canConnect ? connect('Reconnect WHOOP') : '') + '</p>';
+    }
+    h += '<p id="w-msg" role="status" aria-live="polite" class="mt-2 text-xs text-gray-400"></p>';
+    $('whoop-body').innerHTML = h;
+}
+const OUTCOME_TEXT = {pulled: 'Updated from WHOOP.', throttled: 'Already up to date (checked a moment ago).', busy: 'Another pull is running; try again shortly.',
+                      not_configured: 'WHOOP is not set up on this server.', needs_reconsent: 'WHOOP needs re-consent.', failed: 'WHOOP did not answer; your last readings stay in use.'};
+let whoopInFlight = false;
+async function refreshWhoop(force) {
+    if (whoopInFlight) return;
+    whoopInFlight = true;
+    if (force && $('w-refresh')) { busy('w-refresh', true); }
+    const r = await callApi('POST', '/api/coach/whoop/refresh', {force: !!force});
+    whoopInFlight = false;
+    if (!r.ok) {
+        // the pull itself never fails a page; only the request can (offline, signed out)
+        if ($('w-msg')) $('w-msg').innerHTML = '<span class="text-red-400">' + esc(apiMessage(r)) + '</span>';
+        if ($('w-refresh')) busy('w-refresh', false);
+        return;
+    }
+    if (r.data.whoop) { S.whoop = r.data.whoop; renderWhoop(S.whoop); }
+    const o = r.data.outcome;
+    if (force && $('w-msg')) $('w-msg').innerHTML = '<span class="' + (o === 'pulled' ? 'text-green-400' : 'text-gray-400') + '">' + esc(OUTCOME_TEXT[o] || '') + '</span>';
+    if (o === 'pulled') {
+        await loadReadiness();
+        if (Array.isArray(r.data.saved) && r.data.saved.length) regenerateIfShown();
+    }
+}
+async function connectWhoop() {
+    busy('w-connect', true);
+    const r = await callApi('POST', '/api/coach/whoop/connect', {});
+    if (!r.ok || !r.data.url || String(r.data.url).indexOf('https://api.prod.whoop.com/') !== 0) {
+        busy('w-connect', false);
+        if ($('w-msg')) $('w-msg').innerHTML = '<span class="text-red-400">' + esc(r.ok ? 'WHOOP gave no sign-in address.' : apiMessage(r)) + '</span>';
+        return;
+    }
+    window.location.href = r.data.url;
+}
+
+// ---- preferences
+function parseOneRm(text) {
+    const out = {}, errors = [];
+    String(text || '').split('\n').forEach((line, i) => {
+        line = line.trim();
+        if (!line) return;
+        const m = /^(.*\S)[\s:=]+(\d+(?:[.,]\d+)?)\s*(?:kg|lb|lbs)?$/i.exec(line);
+        if (!m) { errors.push('line ' + (i + 1)); return; }
+        out[m[1].trim()] = Number(m[2].replace(',', '.'));
+    });
+    return {out, errors};
+}
+function oneRmText(map) {
+    return Object.keys(map || {}).map(k => k + ' ' + map[k]).join('\n');
+}
+function prefsFromForm() {
+    const rms = parseOneRm($('p-1rm').value);
+    if (rms.errors.length) return {error: 'Could not read the 1RM ' + rms.errors.join(', ') + ': use a name, then a number.'};
+    const prefs = {goal: $('p-goal').value, days_per_week: Number($('p-days').value), experience: $('p-exp').value};
+    if (Object.keys(rms.out).length) {
+        if (!$('p-unit').value) return {error: 'Choose kg or lb for your 1RMs.'};
+        prefs.one_rm = rms.out;
+        prefs.load_unit = $('p-unit').value;
+    }
+    return {prefs};
+}
+function fillPrefs(p) {
+    p = p || {};
+    $('p-goal').value = p.goal || 'general';
+    $('p-days').value = String(p.days_per_week || 4);
+    $('p-exp').value = p.experience || 'intermediate';
+    $('p-1rm').value = oneRmText(p.one_rm);
+    $('p-unit').value = p.load_unit || '';
+}
+async function loadPrefs() {
+    const r = await callApi('GET', '/api/coach/preferences');
+    const p = r.data && r.data.preferences;
+    if (p && Object.keys(p).length) { fillPrefs(p); setText('p-msg', 'Your remembered choices are filled in.'); }
+    else if (r.data && r.data.error) setText('p-msg', 'Saved choices could not be read (' + r.data.error + '); using defaults.', 'warn');
+}
+async function rememberPrefs() {
+    const f = prefsFromForm();
+    if (f.error) { setText('p-msg', f.error, 'error'); return; }
+    busy('p-remember', true);
+    const r = await callApi('POST', '/api/coach/preferences', f.prefs);
+    busy('p-remember', false);
+    setText('p-msg', r.ok ? 'Remembered on this server.' : apiMessage(r), r.ok ? 'ok' : 'error');
+}
+async function resetPrefs() {
+    busy('p-reset', true);
+    const r = await callApi('DELETE', '/api/coach/preferences');
+    busy('p-reset', false);
+    if (!r.ok) { setText('p-msg', apiMessage(r), 'error'); return; }
+    fillPrefs({});
+    setText('p-msg', 'Forgotten. The form is back to its defaults.', 'ok');
+}
+
+// ---- program
+let genSeq = 0;
+async function submitPlan(ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
+    await gen();
+    return false;
+}
+function regenerateIfShown() { if (S.program) return gen(); }
+async function gen() {
+    const mine = ++genSeq;
+    const f = prefsFromForm();
+    if (f.error) { setText('p-msg', f.error, 'error'); return; }
+    setText('p-msg', '');
+    S.previews = {}; S.saved = {};
+    $('out').innerHTML = '<p class="text-gray-400">Building your program…</p>';
+    busy('p-gen', true);
+    const body = {goal: f.prefs.goal, days_per_week: f.prefs.days_per_week, experience: f.prefs.experience, apply_readiness: true};
+    if (f.prefs.one_rm) body.one_rm = f.prefs.one_rm;
+    const r = await callApi('POST', '/api/coach/program', body);
+    if (mine !== genSeq) return;  // a newer request owns the screen
+    busy('p-gen', false);
+    if (!r.ok || !r.data || !r.data.review) {
+        S.program = null;
+        $('out').innerHTML = '<div class="bg-gray-800 border border-red-700 rounded-lg p-4"><p class="text-red-400">' + esc(apiMessage(r)) + '</p>'
+            + '<p class="mt-2"><button type="button" onclick="gen()" class="' + BTN_GRAY + '">Try again</button></p></div>';
+        return;
+    }
+    S.program = r.data;
+    S.loadUnit = f.prefs.load_unit || '';
+    renderProgram();
+    if (S.status && S.status.authenticated) previewAll(mine);
+}
+function hasLoads(p) {
+    return !!(p && (p.days || []).some(d => (d.exercises || []).some(e => Number(e.load) > 0)));
+}
+function adjFor(p, di, name) {
+    const list = (p.readiness_applied && p.readiness_applied.adjustments) || [];
+    return list.filter(a => a.day === di && a.exercise === name);
+}
+function renderProgram() {
+    const p = S.program;
+    if (!p) return;
+    const rev = p.review || {};
+    let h = '<div class="bg-gray-800 border border-gray-700 rounded-lg p-4 mb-4">'
+        + '<p><span class="text-3xl font-bold text-white">' + esc(rev.score) + '</span> <span class="text-gray-400">/100 program quality · ' + esc(p.goal_label) + ' · ' + esc(p.days_per_week) + ' days a week · ' + esc(p.experience) + '</span></p>';
+    const warns = Array.isArray(rev.warnings) ? rev.warnings : [];
+    h += warns.length ? '<ul class="mt-2 text-yellow-400">' + warns.map(w => '<li>Warning: ' + esc(w) + '</li>').join('') + '</ul>'
+        : '<p class="mt-2 text-green-400">Volume, balance and order are within evidence-based ranges.</p>';
+    h += '<p class="mt-2 text-xs text-gray-400">Weekly sets per muscle: ' + Object.entries(p.weekly_sets_per_muscle || {}).map(([k, v]) => esc(k) + ' ' + esc(v)).join(' · ') + '</p></div>';
+
+    const ra = p.readiness_applied, auto = p.autoregulation;
+    if (ra) {
+        const adjs = Array.isArray(ra.adjustments) ? ra.adjustments : [];
+        h += '<div class="bg-gray-800 border ' + (adjs.length ? 'border-yellow-700' : 'border-gray-700') + ' rounded-lg p-4 mb-4"><p class="font-semibold text-white">Readiness: ' + band(ra.band) + '</p>';
+        if (adjs.length) {
+            h += '<p class="text-gray-300 mt-1">' + esc(adjs.length) + ' change' + (adjs.length > 1 ? 's' : '') + ' made to this program because of today\'s readiness (shown on each exercise).</p>';
+            h += '<ul class="mt-2 text-xs text-gray-300 list-disc pl-5">' + adjs.map(a => '<li>' + esc(a.exercise) + ': ' + esc(a.field) + ' ' + esc(a.from) + ' to ' + esc(a.to) + '</li>').join('') + '</ul>';
+        } else {
+            h += '<p class="text-gray-300 mt-1">No changes: this is the program as written. Readiness can only reduce a program, never add to it.</p>';
+        }
+        if (ra.note) h += '<p class="mt-2 text-yellow-400">' + esc(ra.note) + '</p>';
+        h += '</div>';
+    } else if (!auto) {
+        h += '<p class="mb-4 text-xs text-gray-400">No fresh readiness: the program is shown as written.</p>';
+    }
+    (p.days || []).forEach((d, i) => { h += renderDay(p, d, i); });
+    if (Array.isArray(p.avoid_unmatched) && p.avoid_unmatched.length) h += '<p class="text-yellow-400 mb-3">Your avoid list has entries that matched no exercise (check the spelling): ' + p.avoid_unmatched.map(a => esc(a)).join(', ') + '</p>';
+    if (p.readiness_error) h += '<p class="text-yellow-400 mb-3">Your stored readiness could not be read (' + esc(p.readiness_error) + '): this program ignores it. Save a new reading.</p>';
+    if (p.feedback_error) h += '<p class="text-yellow-400 mb-3">Your saved pain and avoid list could not be fully read (' + esc(p.feedback_error) + '): exclusions may be missing.</p>';
+    h += '<p class="text-xs text-gray-500">' + esc(p.disclaimer) + '</p>';
+    $('out').innerHTML = h;
+}
+function renderDay(p, d, i) {
+    const unit = S.loadUnit ? ' ' + S.loadUnit : '';
+    const exs = Array.isArray(d.exercises) ? d.exercises : [];
+    const gear = Array.from(new Set(exs.map(e => e.accessory).filter(a => a && a !== 'none')));
+    let h = '<article class="bg-gray-800 border border-gray-700 rounded-lg p-4 mb-4" aria-label="' + esc(d.name) + '">'
+        + '<h3 class="text-lg font-bold text-white">' + esc(d.name) + '</h3>'
+        + '<p class="text-xs text-gray-400">' + esc(d.warmup) + '</p>'
+        + '<p class="text-xs text-gray-400 mt-1">Needs: ' + (gear.length ? gear.map(g => esc(g)).join(', ') : 'no accessories') + ' · about ' + esc(d.setup_swaps) + ' setup changes</p>'
+        + '<ul class="mt-3 divide-y divide-gray-700">';
+    for (const e of exs) {
+        const adj = adjFor(p, i, e.name);
+        const mode = String(e.mode || 'standard');
+        h += '<li class="py-2"><div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">'
+            + '<span class="font-semibold text-white">' + esc(e.name) + (e.unilateral ? ' <span class="text-xs text-gray-400">(left and right)</span>' : '') + '</span>'
+            + '<span class="text-gray-200">' + esc(e.sets) + ' × ' + esc(e.reps) + (Number(e.load) > 0 ? ' @ ' + esc(e.load) + esc(unit) : '') + '</span>'
+            + '<span class="text-xs text-gray-400">' + (Number(e.load) > 0 ? esc(Math.round(Number(e.pct1rm) * 100)) + '% of 1RM · ' : '') + 'RIR ' + esc(e.rir) + ' · rest ' + esc(e.rest_sec) + ' s</span></div>'
+            + '<div class="mt-1 flex flex-wrap items-center gap-2 text-xs">'
+            + '<span class="px-2 py-0.5 rounded-full font-bold ' + (MODE_CLASS[mode] || 'bg-gray-700 text-gray-200') + '" title="' + esc(e.mode_note) + '">' + esc(mode) + '</span>'
+            + '<span class="text-gray-400">belt ' + esc(e.belt) + ' · ' + esc(e.accessory) + '</span>'
+            + adj.map(a => '<span class="px-2 py-0.5 rounded bg-yellow-900 text-yellow-200">readiness: ' + esc(a.field) + ' ' + esc(a.from) + ' to ' + esc(a.to) + '</span>').join('')
+            + '</div></li>';
+    }
+    h += '</ul>';
+    if (d.conditioning) h += '<p class="mt-2 text-xs text-gray-400">' + esc(d.conditioning) + '</p>';
+    h += '<div class="mt-3 border-t border-gray-700 pt-3" id="apply' + Number(i) + '">' + renderApply(i) + '</div></article>';
+    return h;
+}
+
+// ---- apply to machine: preview (dry run) first, then an explicit confirm
+function applyBlocker() {
+    const st = S.status || {};
+    if (!st.authenticated) return 'Log in on the Settings page to check this against your exercise library and save it.';
+    if (hasLoads(S.program) && !st.unit_confirmed) return 'Your account unit (kg or lb) is not confirmed. Choose it on the Settings page, then loads can be saved.';
+    return '';
+}
+function renderApply(i) {
+    const st = S.status || {}, pv = S.previews[i], done = S.saved[i];
+    if (done) return '<p class="text-green-400">Saved as "' + esc(done.name) + '" (' + esc(done.exercise_count) + ' exercises).' + (done.unresolved.length ? ' <span class="text-yellow-400">Not saved: ' + done.unresolved.map(u => esc(u.name) + (u.reason ? ' (' + esc(u.reason) + ')' : '')).join(', ') + '</span>' : '')
+        + (done.feedback_error ? ' <span class="text-yellow-400">Your pain and avoid list could not be fully read (' + esc(done.feedback_error) + ').</span>' : '') + '</p>';
+    const block = applyBlocker();
+    let h = '';
+    if (!pv) {
+        h += block ? '<p class="text-xs text-yellow-400">' + esc(block) + '</p>'
+            : '<p class="text-xs text-gray-400">' + (S.previewing ? 'Checking your exercise library…' : 'Preview checks every exercise against your library without saving anything.') + '</p>'
+            + '<p class="mt-2"><button type="button" id="prev' + Number(i) + '" onclick="previewDay(' + Number(i) + ')" class="' + BTN_GRAY + '">Preview save</button></p>';
+        return h;
+    }
+    if (pv.error) {
+        return '<p class="text-red-400">' + esc(pv.error) + '</p><p class="mt-2"><button type="button" onclick="previewDay(' + Number(i) + ')" class="' + BTN_GRAY + '">Preview again</button></p>';
+    }
+    const unresolved = pv.unresolved || [];
+    h += '<p class="text-gray-200">Preview: <strong>' + esc(pv.exercise_count) + '</strong> of ' + esc(pv.resolved.length + unresolved.length) + ' exercises would be saved as "' + esc(pv.name) + '". Nothing has been saved yet.</p>';
+    if (unresolved.length) {
+        h += '<p class="mt-2 text-yellow-400 text-xs">Not saved:</p><ul class="list-disc pl-5 text-xs text-yellow-200">'
+            + unresolved.map(u => '<li>' + esc(u.name) + ': ' + esc(u.reason || 'not found') + '</li>').join('') + '</ul>';
+    }
+    if (Array.isArray(pv.notes) && pv.notes.length) h += '<ul class="mt-2 list-disc pl-5 text-xs text-gray-400">' + pv.notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>';
+    if (!st.writes_enabled) {
+        h += '<p class="mt-3 text-xs text-yellow-400">Saving is turned off on this server (GYM_ALLOW_WRITES is not 1). You can preview, but not save.</p>';
+    } else if (!pv.exercise_count) {
+        h += '<p class="mt-3 text-xs text-yellow-400">Nothing in this day can be saved.</p>';
+    } else {
+        h += '<p class="mt-3"><button type="button" id="save' + Number(i) + '" onclick="confirmDay(' + Number(i) + ')" class="' + BTN_GREEN + '">Confirm and save to my workouts</button></p>';
+    }
+    h += '<div id="saveMsg' + Number(i) + '" role="status" aria-live="polite" class="mt-2 text-xs"></div>';
+    return h;
+}
+function applyBody(i, dry) {
+    const body = {program: S.program, dry_run: dry};
+    if (i !== null) body.day_index = i;
+    if (hasLoads(S.program)) body.load_unit = S.loadUnit || undefined;
+    return body;
+}
+function previewFromResult(res) {
+    return {name: res.name, exercise_count: res.exercise_count || 0, resolved: res.resolved || [], unresolved: res.unresolved || [], notes: res.notes || []};
+}
+async function previewAll(mine) {
+    if (applyBlocker()) return;
+    S.previewing = true;
+    renderAllApply();
+    const r = await callApi('POST', '/api/coach/apply', applyBody(null, true));
+    if (mine !== undefined && mine !== genSeq) return;
+    S.previewing = false;
+    if (!r.ok) {
+        const msg = apiMessage(r);
+        (S.program.days || []).forEach((d, i) => { S.previews[i] = {error: msg}; });
+    } else {
+        (r.data.results || []).forEach(res => { S.previews[res.day_index] = res.error ? {error: String(res.message || res.error)} : previewFromResult(res); });
+    }
+    renderAllApply();
+}
+function renderAllApply() {
+    ((S.program && S.program.days) || []).forEach((d, i) => { const el = $('apply' + i); if (el) el.innerHTML = renderApply(i); });
+}
+async function previewDay(i) {
+    if (!S.program) return;
+    const mine = genSeq;
+    const r = await callApi('POST', '/api/coach/apply', applyBody(i, true));
+    if (mine !== genSeq) return;
+    const res = r.ok && r.data.results && r.data.results[0];
+    S.previews[i] = !r.ok ? {error: apiMessage(r)} : (!res ? {error: 'The server returned nothing to preview.'} : res.error ? {error: String(res.message || res.error)} : previewFromResult(res));
+    renderAllApply();
+}
+const saving = {};
+async function confirmDay(i) {
+    if (saving[i] || !S.program || !S.previews[i] || S.previews[i].error) return;  // a double click must not create two workouts
+    saving[i] = true;
+    const mine = genSeq;
+    const msg = $('saveMsg' + i);
+    if ($('save' + i)) busy('save' + i, true);
+    msg.innerHTML = '<span class="text-gray-400">Saving…</span>';
+    const r = await callApi('POST', '/api/coach/apply', applyBody(i, false));
+    saving[i] = false;
+    if (mine !== genSeq) return;
+    if (r.status === 403 && r.data && r.data.error === 'writes_disabled') {
+        S.status.writes_enabled = false; renderAllApply(); return;
+    }
+    const res = r.ok && r.data.results && r.data.results[0];
+    if (res && res.created) {
+        S.saved[i] = {name: res.name, exercise_count: res.exercise_count, unresolved: res.unresolved || [], feedback_error: r.data.feedback_error || ''};
+        renderAllApply();
+        return;
+    }
+    if ($('save' + i)) busy('save' + i, false);
+    msg.innerHTML = '<span class="text-red-400">' + esc(!r.ok ? apiMessage(r) : res ? (res.message || res.error || 'Could not save') : 'Could not save') + ' Check My Workouts before saving again.</span>';
+}
+
+// ---- avoid list and pain
+function renderAvoid(fb) {
+    fb = fb || {};
+    const prof = fb.profile || {};
+    const list = Array.isArray(prof.avoid) ? prof.avoid : [];
+    S.avoid = list;
+    let h = '';
+    if (prof.unreadable) h += '<p class="text-yellow-400 mb-2">Your saved avoid list could not be fully read (' + esc(prof.unreadable) + '): exclusions may be missing.</p>';
+    if (!list.length) {
+        h += '<p class="text-gray-400">Nothing is on your avoid list.</p>';
+    } else {
+        h += '<ul class="divide-y divide-gray-700">' + list.map((name, i) => '<li class="py-2 flex items-center justify-between gap-3"><span class="text-white">' + esc(name) + '</span>'
+            + '<button type="button" onclick="removeAvoid(' + Number(i) + ')" class="text-sm text-red-300 hover:text-red-200 underline focus:outline-none focus:ring-2 focus:ring-green-400 rounded" aria-label="Remove ' + esc(name) + ' from the avoid list">Remove</button></li>').join('') + '</ul>';
+    }
+    const adj = fb.next_program_adjustment;
+    if (adj && adj.action) h += '<p class="mt-3 text-xs text-gray-400">Effect on the next program: ' + esc(adj.action) + (prof.avg_rpe != null ? ' (average RPE ' + esc(prof.avg_rpe) + ')' : '') + '.</p>';
+    $('avoid-body').innerHTML = h;
+}
+async function loadAvoid() {
+    const r = await callApi('GET', '/api/coach/feedback');
+    if (!r.ok) { $('avoid-body').innerHTML = '<p class="text-red-400">' + esc(apiMessage(r)) + '</p>'; return; }
+    renderAvoid(r.data);
+}
+async function submitAvoid(ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
+    const name = String($('a-name').value || '').trim();
+    if (!name) { setText('a-msg', 'Type the exercise name.', 'error'); return false; }
+    const body = $('a-pain').checked ? {pain: true, exercise: name} : {avoid: name};
+    busy('a-add', true);
+    const r = await callApi('POST', '/api/coach/feedback', body);
+    busy('a-add', false);
+    if (!r.ok) { setText('a-msg', apiMessage(r), 'error'); return false; }
+    $('a-name').value = '';
+    setText('a-msg', 'Added. It is left out of new programs.', 'ok');
+    renderAvoid(r.data);
+    regenerateIfShown();
+    return false;
+}
+async function removeAvoid(i) {
+    const name = S.avoid[i];
+    if (name === undefined) return;
+    if (!window.confirm('Remove "' + name + '" from your avoid list? It can then be programmed again, including after a pain report.')) return;
+    const r = await callApi('DELETE', '/api/coach/feedback?avoid=' + encodeURIComponent(name));
+    if (!r.ok) { setText('a-msg', apiMessage(r), 'error'); return; }
+    setText('a-msg', 'Removed.', 'ok');
+    renderAvoid(r.data);
+    regenerateIfShown();
+}
+
+// ---- start
+async function loadAll() {
+    const [st, wh] = await Promise.all([callApi('GET', '/api/coach/status'), callApi('GET', '/api/coach/whoop'), loadReadiness(), loadPrefs(), loadAvoid()]);
+    S.status = st.ok ? st.data : {};
+    if (!st.ok) note(esc(apiMessage(st)), 'warn');
+    S.whoop = wh.ok ? wh.data.whoop : null;
+    renderWhoop(S.whoop);
+    refreshWhoop(false);  // throttled on the server; a failure only changes the WHOOP card
+}
+// ==== coach:end
+loadAll();
+{% endraw %}
+</script>
+{% endblock %}

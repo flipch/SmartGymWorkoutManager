@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import app as gym_app  # noqa: E402  (needs the env above)
 import features  # noqa: E402
+from auth import EXEMPT_ROUTES  # noqa: E402
 
 BASIC = {"Authorization": "Basic " + base64.b64encode(f"gym:{TOKEN}".encode()).decode()}
 BEARER = {"Authorization": f"Bearer {TOKEN}"}
@@ -34,6 +35,8 @@ class RealFlaskApp(unittest.TestCase):
                 url = url.replace(f"<int:{arg}>", "1").replace(f"<string:{arg}>", "x").replace(f"<path:{arg}>", "x") \
                          .replace(f"<{arg}>", "x")
             for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
+                if (method, url) in EXEMPT_ROUTES:  # the WHOOP consent callback; tests/test_whoop_sync.py proves it is the ONLY one
+                    continue
                 resp = self.c.open(url, method=method)
                 self.assertEqual(resp.status_code, 401, f"{method} {url}")
                 checked += 1
