@@ -67,7 +67,7 @@ def session_with_sets(record: dict, detail, tz: str = DEFAULT_TZ, unit: str | No
         for row in ex.get("finishedReps") or []:
             if not isinstance(row, dict):
                 raise SchemaDrift(SOURCE, "set row was not an object")
-            timed = ex.get("completionMethod") == 0  # timer-based exercise: reps are not meaningful
+            timed = ex.get("completionMethod") in (0, 2)  # timer-based exercise (2 = Row/Ski timed in the editor): reps are not meaningful
             reps = None if timed else (row.get("finishedCount") or None)
             sets.append(SetResult(exercise=name, reps=reps, load=set_load(row),
                                   seconds=row.get("time") if timed else None, unit=unit,

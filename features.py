@@ -771,12 +771,16 @@ def coach_program():
     if not _all_finite(body):  # 1e999 parses to Infinity, which no JSON client can read back
         return jsonify({"error": "bad_request", "message": "Numbers must be finite."}), 400
     feedback = body.get("feedback")
+    feedback_error = None
     if feedback is None and body.get("use_stored_feedback", True):
         prof = _feedback_profile()
         feedback = prof if prof.get("events") else None
         feedback_error = prof.get("unreadable")
-    else:
-        feedback_error = None
+    elif isinstance(feedback, dict) and body.get("use_stored_feedback", True):
+        prof = _feedback_profile()  # the caller's numbers apply, but a reported pain or avoid stays excluded
+        given = feedback.get("avoid")
+        feedback = {**feedback, "avoid": sorted(set(given if isinstance(given, (list, tuple, set)) else []) | set(prof.get("avoid") or []))}
+        feedback_error = prof.get("unreadable")
     try:
         prog = coach.generate_program(
             goal=body.get("goal", "general"),
@@ -956,7 +960,9 @@ def coach_critique():
     mode = body.get("mode", "session")
     try:
         return jsonify(coach.critique_workout(exercises, goal, mode))
-    except (TypeError, ValueError, AttributeError, KeyError, OverflowError):
+    except ValueError as e:
+        return jsonify({"error": "bad_request", "message": str(e)[:200]}), 400
+    except (TypeError, AttributeError, KeyError, OverflowError):
         return jsonify({"error": "bad_request", "message": "Invalid exercises."}), 400
 
 
@@ -982,6 +988,24 @@ def _variant_tokens(s):
     return _VARIANT & set(re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split())
 
 
+_MOVEMENT = {"press", "fly", "raise", "curl", "row", "pulldown", "pushdown", "extension", "kickback", "squat", "deadlift", "lunge",
+             "crunch", "thrust", "dip", "shrug", "pullover", "twist", "rotation", "pushup", "pullup", "chinup"}
+
+
+def _movement_tokens(s):
+    """The movement words of an exercise name, spelled one way: "Chest Flye" and "Chest Fly" agree, "press" and "fly" do not."""
+    text = re.sub(r"[^a-z0-9 ]", " ", (s or "").lower())
+    text = re.sub(r"\b(pull|push|chin)\s+(down|up)\b", lambda m: m.group(1) + m.group(2), text)
+    out = set()
+    for t in text.split():
+        t = {"flye": "fly", "flyes": "fly", "flies": "fly", "flys": "fly"}.get(t, t)
+        if t.endswith("s") and not t.endswith("ss") and len(t) > 3:
+            t = t[:-1]
+        if t in _MOVEMENT:
+            out.add(t)
+    return out
+
+
 def _norm_tokens(s):
     toks = re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split()
     toks = [t for t in toks if t not in _EQUIP_STOP]
@@ -995,6 +1019,7 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
     if not coach_tokens:
         return None
     coach_variant = _variant_tokens(name)
+    coach_movement = _movement_tokens(name)
     anchor = _MUSCLE_ANCHOR.get((goal_muscle or "").lower(), set())
     if not anchor:  # no muscle given: what the NAME itself says ("Leg extension" is quads) must still match the library entry
         anchor = _MUSCLE_ANCHOR.get((coach.classify_exercise(name)[0] or "").lower(), set())
@@ -1021,7 +1046,7 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
             score -= 0.10
         key = (score, -len(lib_tokens))
         if best is None or key > best[0]:
-            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1, _variant_tokens(title) != coach_variant)
+            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1, _variant_tokens(title) != coach_variant or bool(coach_movement and _movement_tokens(title) != coach_movement))
     if best is None:
         cands = sorted((len(_norm_tokens(ex.get("title") or "")), ex.get("id"), ex.get("title"))
                        for ex in library if isinstance(ex, dict) and ex.get("id")
@@ -1033,7 +1058,8 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
         return None
     score = best[4]
     conf = "high" if score >= 1.0 else "med" if score >= 0.55 else "low"
-    if best[6]:  # "Decline press" must not be saved as "Incline press" (or any other angle or direction)
+    if best[6]:  # a different angle, direction or movement ("Decline press", "Chest fly" for a press)
+        # "Decline press" must not be saved as "Incline press" (or any other angle or direction)
         conf = "low"
     if anchor:  # the movement must train the muscle the coach named: "Leg extension" is not "Triceps extension"
         if best[3] and best[3] not in anchor:
@@ -1159,8 +1185,9 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
         targets = [(day_index, days[day_index])]
     else:  # never fall back to "all days": that would create every workout because of one typo
         raise ValueError(f"day_index must be an integer from 0 to {len(days) - 1}")
-    if name is not None and (not isinstance(name, str) or not name.strip() or len(name) > MAX_WORKOUT_NAME):
-        raise ValueError(f"name must be 1-{MAX_WORKOUT_NAME} characters")
+    name_limit = MAX_WORKOUT_NAME if len(targets) == 1 else MAX_WORKOUT_NAME - 10  # a day's label is appended to every name
+    if name is not None and (not isinstance(name, str) or not name.strip() or len(name) > name_limit):
+        raise ValueError(f"name must be 1-{name_limit} characters" + (" (the day's label is added to each workout)" if len(targets) > 1 else ""))
     if load_unit is not None and load_unit not in ("kg", "lb"):
         raise ValueError("load_unit must be 'kg' or 'lb'")
     if load_unit is None and any(x > 0 for _, d in targets for x in _program_loads(d)):

@@ -225,7 +225,11 @@ def update_unit():
 @app.route('/settings/accessories', methods=['POST'])
 def update_accessories():
     selected = request.form.getlist('accessories')
-    owned = [int(x) for x in selected]
+    try:
+        owned = [int(x) for x in selected]
+    except ValueError:
+        flash("Accessory settings were not saved: unknown value.", "error")
+        return redirect(url_for('settings'))
     creds = client.credentials
     client.save_config(
         creds.get('user_id'),
@@ -244,7 +248,11 @@ def update_accessories():
 @app.route('/settings/owned_devices', methods=['POST'])
 def update_owned_devices():
     selected = request.form.getlist('owned_devices')
-    owned = [int(x) for x in selected]
+    try:
+        owned = [int(x) for x in selected]
+    except ValueError:
+        flash("Device settings were not saved: unknown value.", "error")
+        return redirect(url_for('settings'))
     creds = client.credentials
     client.save_config(
         creds.get('user_id'),

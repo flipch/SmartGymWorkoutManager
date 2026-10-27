@@ -997,6 +997,8 @@
                                         <option value="1" ${set.mode == 1 ? 'selected' : ''}>Standard</option>
                                         <option value="2" ${set.mode == 2 ? 'selected' : ''}>Chains</option>
                                         <option value="3" ${set.mode == 3 ? 'selected' : ''}>Eccentric</option>
+                                        <option value="4" ${set.mode == 4 ? 'selected' : ''}>Constant</option>
+                                        <option value="5" ${set.mode == 5 ? 'selected' : ''}>Spotter</option>
                                     </select>
                                 </div>
                                 <div class="col-span-2">
@@ -1375,10 +1377,10 @@ You must output a JSON object with the following structure:
                         auxiliaryMuscleGroupList: meta.auxiliaryMuscleGroupList
                     });
                 }
+                if (mySeq !== importSeq) return;  // a newer import was started while this one was fetching: it wins
                 if (data.name) {
                     document.getElementById('plan-name').value = data.name;
                 }
-                if (mySeq !== importSeq) return;  // a newer import was started while this one was fetching: it wins
                 workoutData = imported;
                 renderBuilder();
                 closeImportModal();

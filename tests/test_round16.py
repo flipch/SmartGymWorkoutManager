@@ -1732,6 +1732,79 @@ class Round27(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
 
 
+class Round28(unittest.TestCase):
+    def test_a_fly_is_not_a_press(self):
+        lib = [{"id": 1, "title": "Cable Chest Fly", "mainMuscleGroupName": "chest", "isLeftRight": 0}]
+        self.assertEqual(features.resolve_exercise(lib, "Cable Chest Press", "chest")["confidence"], "low")
+        self.assertNotEqual(features.resolve_exercise(lib, "Cable Chest Flye", "chest")["confidence"], "low")
+        self.assertEqual(features._movement_tokens("Lat Pull-Down"), features._movement_tokens("Lat Pulldown"))
+        self.assertNotEqual(features._movement_tokens("Chest Press"), features._movement_tokens("Chest Fly"))
+        self.assertEqual(features._movement_tokens("Chest Flye"), {"fly"})
+        self.assertEqual(features._movement_tokens("Dumbbell Flies"), {"fly"})
+
+    def test_a_timed_row_or_ski_set_has_seconds_not_reps(self):
+        from harness import normalize
+        record = {"trainingId": 1, "startTimestamp": 1_790_000_000_000, "title": "T"}
+        for cm in (0, 2):
+            detail = [{"actionLibraryName": "Row", "completionMethod": cm,
+                       "finishedReps": [{"finishedCount": 60, "targetCount": 60, "time": 60, "capacity": 6000}]}]
+            got = normalize.session_with_sets(record, detail).sets[0]
+            self.assertEqual((got.reps, got.seconds, got.target), (None, 60, None), cm)
+        detail = [{"actionLibraryName": "Press", "completionMethod": 1, "finishedReps": [{"finishedCount": 8, "targetCount": 8, "time": 40}]}]
+        self.assertEqual(normalize.session_with_sets(record, detail).sets[0].reps, 8)
+
+    def test_critique_reads_loose_arguments_or_refuses_them(self):
+        import coach
+        ex_ = [{"name": "Cable chest press", "sets": "3", "reps": "30"}]
+        for kw in ({"goal": "strenght"}, {"mode": "monthly"}):
+            with self.assertRaises(ValueError):
+                coach.critique_workout(ex_, **kw)
+        self.assertEqual(coach.critique_workout(ex_, "strength", "Weekly")["mode"], "weekly")
+        self.assertTrue(coach.critique_workout(ex_, "strength", "session")["warnings"])  # '30' reps is off-target, like 30
+        ecc = [{"name": "Cable curl", "sets": 4, "reps": 10, "mode": "Eccentric overload"}]
+        self.assertTrue(any("Eccentric" in w for w in coach.critique_workout(ecc, "muscle")["warnings"]))
+        resp = gym_app.app.test_client().post("/api/coach/critique", headers=BASIC, json={"exercises": ex_, "goal": "strenght"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("goal", resp.get_json()["message"])
+
+    def test_a_callers_feedback_keeps_the_stored_pain_exclusions(self):
+        profile = {"events": 1, "avoid": ["Cable chest press"], "unreadable": None, "avg_rpe": 7}
+        with mock.patch.object(features, "_feedback_profile", return_value=profile):
+            resp = gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"feedback": {"avg_rpe": 5}})
+            names = {e["name"].lower() for d in resp.get_json()["days"] for e in d["exercises"]}
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("cable chest press", names)
+        self.assertIn("cable chest press", " ".join(resp.get_json().get("feedback_applied", {}).get("avoid", [])).lower())
+
+    def test_the_library_cache_is_per_region(self):
+        a = client_with(0, True)
+        b = client_with(0, True)
+        b.save_config("42", "vendor-token", "EU", 0, "", 1, False, [], [], unit_confirmed=True)
+        self.assertNotEqual(os.path.basename(a._get_library_cache_file()), os.path.basename(b._get_library_cache_file()))
+        self.assertIn("EU", b._get_library_cache_file())
+
+    def test_a_long_program_name_is_refused_with_the_right_limit(self):
+        program = {"days": [{"name": "A", "exercises": []}, {"name": "B", "exercises": []}]}
+        with self.assertRaises(ValueError) as ctx:
+            features.apply_program(None, program, None, "x" * 71, True, "kg")
+        self.assertIn("1-70", str(ctx.exception))
+        try:
+            features.apply_program(None, program, 0, "x" * 71, True, "kg")
+        except Exception as e:  # a single day keeps the full limit: any other failure is fine here
+            self.assertNotIn("name must be", str(e))
+
+    def test_a_hand_made_settings_post_is_not_a_500(self):
+        client = client_with(0, True)
+        c = gym_app.app.test_client()
+        with mock.patch.object(gym_app, "client", client):
+            self.assertEqual(c.post("/settings/accessories", headers=BASIC, data={"accessories": "abc"}).status_code, 302)
+            self.assertEqual(c.post("/settings/owned_devices", headers=BASIC, data={"owned_devices": "abc"}).status_code, 302)
+
+    def test_the_coach_switcher_survives_a_variant_without_a_coach(self):
+        html = open(os.path.join(os.path.dirname(__file__), "..", "templates", "exercise_detail.html")).read()
+        self.assertNotIn("{{ variant.coach.", html)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

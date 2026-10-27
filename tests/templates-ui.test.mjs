@@ -1171,3 +1171,22 @@ test('an imported exercise takes its goal unit from the exercise, not from the f
     await importJson(free.ctx, free.doc, { name: 'n', exercises: [{ id: 5, sets: [{ reps: 60, weight: 20, unit: 'sec' }] }] });
     assert.equal(free.ctx.workoutData[0].sets[0].unit, 'sec');  // no forced unit: the file's choice stands
 });
+
+// ----------------------------------------------------------------------------------------------- round 28
+test('a superseded import does not rename the plan', async () => {
+    const gates = [];
+    const { ctx, doc } = editor(() => new Promise((resolve) => gates.push(resolve)));
+    const first = importJson(ctx, doc, { name: 'Old plan', exercises: [{ id: 5, sets: [{ reps: 10, weight: 100, rest: 60 }] }] });
+    const second = importJson(ctx, doc, { name: 'New plan', exercises: [{ id: 6, sets: [{ reps: 10, weight: 20, rest: 60 }] }] });
+    while (gates.length < 2) await new Promise((r) => setTimeout(r, 1));
+    gates[1](metaOf()); await second;
+    gates[0](metaOf()); await first;
+    assert.equal(doc.getElementById('plan-name').value, 'New plan');
+});
+
+test('the set editor offers every mode the saver accepts', () => {
+    const src = read('create.html');
+    for (const [value, label] of [[1, 'Standard'], [2, 'Chains'], [3, 'Eccentric'], [4, 'Constant'], [5, 'Spotter']]) {
+        assert.match(src, new RegExp(`<option value="${value}" \\$\\{set\\.mode == ${value} \\? 'selected' : ''\\}>${label}</option>`), label);
+    }
+});

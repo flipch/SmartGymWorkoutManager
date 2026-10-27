@@ -526,6 +526,24 @@ def _movement_rank(name):
     return 2
 
 
+def _number_or_none(value):
+    """'30' (a client that sends strings) is 30; '8-12' and junk are not a number."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(str(value).strip())
+    except ValueError:
+        return None
+
+
+def _mode_name(value):
+    """'Eccentric', 'ecc' and 'eccentric overload' are the eccentric mode; anything else keeps its lower-cased name."""
+    text = str(value or "standard").strip().lower()
+    return "eccentric" if text.startswith("ecc") else text
+
+
 def _classify_items(exercises):
     items = []
     for ex in (exercises or []):
@@ -533,8 +551,8 @@ def _classify_items(exercises):
         api_m = ex.get("muscle") or ex.get("api_muscle") or ex.get("mainMuscleGroupName")
         muscle, pattern, uni = classify_exercise(name, api_m)
         items.append({"name": name, "muscle": muscle, "pattern": pattern,
-                      "sets": int(ex.get("sets") or 0), "reps": ex.get("reps"),
-                      "mode": ex.get("mode") or "standard", "unilateral": uni,
+                      "sets": int(ex.get("sets") or 0), "reps": _number_or_none(ex.get("reps")),
+                      "mode": _mode_name(ex.get("mode")), "unilateral": uni,
                       "rank": _movement_rank(name)})
     return items
 
@@ -582,7 +600,12 @@ def critique_workout(exercises, goal="general", mode="session"):
     quality and does NOT apply weekly volume landmarks (which would falsely flag every muscle
     as below-MEV). mode='weekly' treats the list as a whole week and checks MEV/MAV/MRV.
     Exercises are classified by keyword, so real Speediance names work."""
-    g = GOALS.get(goal, GOALS["general"])
+    if goal not in GOALS:
+        raise ValueError(f"unknown goal {goal!r}: use one of {', '.join(GOALS)}")
+    mode = str(mode).strip().lower()
+    if mode not in ("session", "weekly"):
+        raise ValueError("mode must be 'session' or 'weekly'")
+    g = GOALS[goal]
     items = _classify_items(exercises)
     sets_by_muscle = {}
     for it in items:

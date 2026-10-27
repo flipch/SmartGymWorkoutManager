@@ -34,11 +34,11 @@
                         {% for variant in ex.actionLibraryList %}
                         <button onclick="switchCoach(this)" 
                                 data-video="{{ (variant.videoPath or variant.leftVideo) | local_cache(True) }}" 
-                                data-name="{{ variant.coach.name }}" 
-                                data-avatar="{{ variant.coach.avatar | local_cache(True) }}"
+                                data-name="{{ (variant.coach or {}).name }}" 
+                                data-avatar="{{ (variant.coach or {}).avatar | local_cache(True) }}"
                                 class="coach-btn w-8 h-8 rounded-full overflow-hidden border-2 border-gray-600 hover:border-white transition {% if loop.first %}border-green-500{% endif %}"
-                                title="Switch to {{ variant.coach.name }}">
-                            <img src="{{ variant.coach.avatar | local_cache(True) }}" class="w-full h-full object-cover">
+                                title="Switch to {{ (variant.coach or {}).name }}">
+                            <img src="{{ (variant.coach or {}).avatar | local_cache(True) }}" class="w-full h-full object-cover">
                         </button>
                         {% endfor %}
                     </div>

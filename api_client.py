@@ -1,4 +1,5 @@
 import math
+import re
 import time
 import json
 import requests
@@ -243,8 +244,9 @@ class SpeedianceClient:
 
     def _get_library_cache_file(self):
         allow_flag = 1 if self.allow_monster_moves else 0
+        region = re.sub(r"[^A-Za-z0-9]", "", str(self.credentials.get("region") or "Global")) or "Global"  # another region is another library
         return os.path.join(self.data_dir,
-                            f"library_cache_v2_device{self.device_type}_allow{allow_flag}.json")
+                            f"library_cache_v3_{region}_device{self.device_type}_allow{allow_flag}.json")
 
     def _load_library_cache(self):
         """Loads library from disk if available."""
