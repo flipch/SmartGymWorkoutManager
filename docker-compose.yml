@@ -43,6 +43,11 @@ services:
       # bearer token required on every MCP request; write tools stay off unless GYM_ALLOW_WRITES=1
       - GYM_API_TOKEN=${GYM_API_TOKEN:?set GYM_API_TOKEN in .env}
       - GYM_ALLOW_WRITES=${GYM_ALLOW_WRITES:-0}
+      # Cloudflare Access (ChatGPT over the tunnel): all three or none. The origin verifies the Access assertion itself;
+      # the AUD tag is the Access application's. Empty = the Cf-Access-Jwt-Assertion header is ignored.
+      - GYM_ACCESS_TEAM=${GYM_ACCESS_TEAM:-}
+      - GYM_ACCESS_AUD=${GYM_ACCESS_AUD:-}
+      - GYM_ACCESS_EMAILS=${GYM_ACCESS_EMAILS:-}
     volumes:
       - gym-data:/data
     depends_on:
@@ -56,6 +61,19 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+
+  # Outbound-only tunnel for ChatGPT's connector (opt-in: `docker compose --profile chatgpt up -d`). It publishes ONLY the
+  # MCP service, never the web UI; Cloudflare Access (managed OAuth, one allowed email) sits in front of it.
+  gym-tunnel:
+    image: cloudflare/cloudflared:2026.9.1
+    container_name: smart_gym_tunnel
+    profiles: [chatgpt]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${GYM_TUNNEL_TOKEN:?set GYM_TUNNEL_TOKEN in .env}
+    depends_on:
+      - smart-gym-mcp
 
 volumes:
   gym-data:

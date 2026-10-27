@@ -175,6 +175,17 @@ class RealMcpApp(unittest.TestCase):
         self.assertEqual(client.post("/mcp", json={}, headers={"Authorization": "Bearer wrong"}).status_code, 401)
         self.assertNotEqual(client.post("/mcp", json={}, headers=BEARER).status_code, 401)
 
+    def test_build_app_wires_cloudflare_access_only_when_configured(self):
+        import mcp_server
+        self.assertIsNone(mcp_server.build_app("127.0.0.1").access)
+        env = {"GYM_ACCESS_TEAM": "doghous", "GYM_ACCESS_AUD": "a" * 64, "GYM_ACCESS_EMAILS": "me@example.com"}
+        with mock.patch.dict(os.environ, env):
+            access = mcp_server.build_app("127.0.0.1").access
+        self.assertEqual((access.issuer, access.emails), ("https://doghous.cloudflareaccess.com", {"me@example.com"}))
+        with mock.patch.dict(os.environ, {"GYM_ACCESS_TEAM": "doghous"}):
+            with self.assertRaises(RuntimeError):  # half a configuration must not start
+                mcp_server.build_app("127.0.0.1")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -133,3 +133,112 @@ class WriteSafetyDefaults(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloudflareAccessAssertion(unittest.TestCase):
+    """The origin trusts Cf-Access-Jwt-Assertion only when it verifies; the header is forgeable by anyone on the LAN."""
+    TEAM, AUD, EMAIL = "doghous", "a" * 64, "me@example.com"
+
+    @classmethod
+    def setUpClass(cls):
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        cls.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        cls.other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    def setUp(self):
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+        from starlette.testclient import TestClient
+
+        async def inner_mcp(request):
+            return PlainTextResponse("in")
+
+        self.access = auth.AccessJwt(self.TEAM, self.AUD, [self.EMAIL], key_for=lambda token: self.key.public_key())
+        self.c = TestClient(auth.BearerAuthASGI(Starlette(routes=[Route("/mcp", inner_mcp, methods=["POST"])]), TOKEN, self.access))
+
+    def jwt(self, key=None, alg="RS256", **override):
+        import time
+        import jwt as pyjwt
+        now = int(time.time())
+        claims = {"iss": f"https://{self.TEAM}.cloudflareaccess.com", "aud": [self.AUD], "email": self.EMAIL,
+                  "iat": now, "exp": now + 300}
+        claims.update(override)
+        claims = {k: v for k, v in claims.items() if v is not None}
+        return pyjwt.encode(claims, key or self.key, algorithm=alg)
+
+    def post(self, token):
+        return self.c.post("/mcp", headers={"Cf-Access-Jwt-Assertion": token}).status_code
+
+    def test_a_valid_assertion_for_an_allowed_email_passes(self):
+        self.assertEqual(self.post(self.jwt()), 200)
+        self.assertEqual(self.post(self.jwt(email=self.EMAIL.upper())), 200)
+
+    def test_every_way_an_assertion_can_be_wrong_is_refused(self):
+        bad = {
+            "another key": self.jwt(key=self.other),
+            "wrong audience": self.jwt(aud=["b" * 64]),
+            "wrong issuer": self.jwt(iss="https://evil.cloudflareaccess.com"),
+            "expired": self.jwt(exp=1_600_000_000, iat=1_599_999_000),
+            "no expiry": self.jwt(exp=None),
+            "other email": self.jwt(email="mallory@example.com"),
+            "no email (a service token)": self.jwt(email=None, common_name="abc.access"),
+            "email not a string": self.jwt(email=["me@example.com"]),
+            "HS256 signed with the public key bytes": self.jwt(key="x" * 64, alg="HS256"),
+            "garbage": "not.a.jwt",
+            "empty": "",
+        }
+        for name, token in bad.items():
+            self.assertEqual(self.post(token), 401, name)
+
+    def test_alg_none_is_refused(self):
+        import base64, json
+        b = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+        import time
+        forged = b({"alg": "none", "typ": "JWT"}) + "." + b({"iss": self.access.issuer, "aud": [self.AUD], "email": self.EMAIL,
+                                                             "iat": int(time.time()), "exp": int(time.time()) + 300}) + "."
+        self.assertEqual(self.post(forged), 401)
+
+    def test_a_key_lookup_failure_is_refused_not_trusted(self):
+        def boom(token):
+            raise OSError("certs endpoint unreachable")
+        access = auth.AccessJwt(self.TEAM, self.AUD, [self.EMAIL], key_for=boom)
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+        from starlette.testclient import TestClient
+
+        async def inner(request):
+            return PlainTextResponse("in")
+        c = TestClient(auth.BearerAuthASGI(Starlette(routes=[Route("/mcp", inner, methods=["POST"])]), TOKEN, access))
+        self.assertEqual(c.post("/mcp", headers={"Cf-Access-Jwt-Assertion": self.jwt()}).status_code, 401)
+
+    def test_the_shared_secret_still_works_and_a_bad_assertion_does_not_block_it(self):
+        r = self.c.post("/mcp", headers={"Authorization": f"Bearer {TOKEN}", "Cf-Access-Jwt-Assertion": "garbage"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.c.post("/mcp").status_code, 401)
+
+    def test_without_access_configuration_the_header_is_ignored(self):
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+        from starlette.testclient import TestClient
+
+        async def inner(request):
+            return PlainTextResponse("in")
+        c = TestClient(auth.BearerAuthASGI(Starlette(routes=[Route("/mcp", inner, methods=["POST"])]), TOKEN))
+        self.assertEqual(c.post("/mcp", headers={"Cf-Access-Jwt-Assertion": self.jwt()}).status_code, 401)
+
+    def test_configuration_is_all_or_nothing(self):
+        env = {"GYM_ACCESS_TEAM": "", "GYM_ACCESS_AUD": "", "GYM_ACCESS_EMAILS": ""}
+        with patch.dict(os.environ, env):
+            self.assertIsNone(auth.load_access())
+        for partial in ({"GYM_ACCESS_TEAM": "doghous"}, {"GYM_ACCESS_TEAM": "doghous", "GYM_ACCESS_AUD": self.AUD},
+                        {"GYM_ACCESS_TEAM": "Bad Team!", "GYM_ACCESS_AUD": self.AUD, "GYM_ACCESS_EMAILS": self.EMAIL},
+                        {"GYM_ACCESS_TEAM": "evil.com/x", "GYM_ACCESS_AUD": self.AUD, "GYM_ACCESS_EMAILS": self.EMAIL},
+                        {"GYM_ACCESS_TEAM": "doghous", "GYM_ACCESS_AUD": "short", "GYM_ACCESS_EMAILS": self.EMAIL}):
+            with patch.dict(os.environ, {**env, **partial}):
+                with self.assertRaises(RuntimeError, msg=str(partial)):
+                    auth.load_access()
+        with patch.dict(os.environ, {"GYM_ACCESS_TEAM": "doghous", "GYM_ACCESS_AUD": self.AUD, "GYM_ACCESS_EMAILS": f" {self.EMAIL} , "}):
+            self.assertEqual(auth.load_access().emails, {self.EMAIL})

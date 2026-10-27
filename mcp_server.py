@@ -26,7 +26,7 @@ ArgModelBase.model_config = {**ArgModelBase.model_config, "extra": "forbid"}
 
 import coach
 import state_io
-from auth import BearerAuthASGI, load_token, writes_enabled
+from auth import BearerAuthASGI, load_access, load_token, writes_enabled
 from api_client import SpeedianceClient, UpstreamError, _check_template_id, unit_is_confirmed
 from insights_core import clamp_days, clamp_n, recovery_advice, summarize, valid_iso_date, valid_record_id
 from features import (  # shared so MCP == HTTP logic
@@ -514,7 +514,7 @@ def build_app(host: str = "127.0.0.1"):
     """The streamable-HTTP ASGI app, behind the shared-secret check (fails closed without a token)."""
     app = mcp.streamable_http_app(host=host)
     token = load_token()
-    return app if token is None else BearerAuthASGI(app, token)
+    return app if token is None else BearerAuthASGI(app, token, load_access())
 
 
 if __name__ == "__main__":

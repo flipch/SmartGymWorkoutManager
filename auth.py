@@ -10,9 +10,11 @@ Accepted credentials:
 
 /healthz is exempt so Docker and Uptime Kuma keep working.
 """
+import asyncio
 import base64
 import hmac
 import os
+import re
 
 EXEMPT_PATHS = frozenset({"/healthz"})
 
@@ -127,12 +129,59 @@ def install_flask_write_gate(app):
         return None
 
 
-class BearerAuthASGI:
-    """Pure-ASGI wrapper: 401 unless the request carries the shared secret."""
+class AccessJwt:
+    """Verifies the `Cf-Access-Jwt-Assertion` header Cloudflare Access adds after it authenticated a user (managed OAuth
+    for a remote MCP client such as ChatGPT). Anyone on the LAN can send that header straight to the origin port, so it is
+    trusted only after the RS256 signature checks against the team's published keys, plus issuer, audience, expiry and
+    an email on the allow-list. A service token (no email) is refused. Every failure means "not authorized"."""
 
-    def __init__(self, app, token: str):
+    def __init__(self, team: str, audience: str, emails, key_for=None):
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", team or ""):
+            raise RuntimeError("GYM_ACCESS_TEAM must be the Zero Trust team name (letters, digits, dashes)")
+        if len(audience or "") < 32:
+            raise RuntimeError("GYM_ACCESS_AUD must be the Access application's AUD tag")
+        self.emails = {e.strip().lower() for e in emails if e and e.strip()}
+        if not self.emails:
+            raise RuntimeError("GYM_ACCESS_EMAILS must name at least one allowed email")
+        self.issuer = f"https://{team}.cloudflareaccess.com"
+        self.audience = audience
+        self._key_for = key_for or self._default_key_for()
+
+    def _default_key_for(self):
+        import jwt
+        client = jwt.PyJWKClient(f"{self.issuer}/cdn-cgi/access/certs", cache_keys=True, lifespan=3600, timeout=5)
+        return lambda token: client.get_signing_key_from_jwt(token).key
+
+    def email(self, token: str) -> str | None:
+        """The verified email of the Access user, or None."""
+        import jwt
+        try:
+            claims = jwt.decode(token, self._key_for(token), algorithms=["RS256"], audience=self.audience,
+                                issuer=self.issuer, options={"require": ["exp", "iat", "iss", "aud"]})
+        except Exception:  # noqa: BLE001 — a bad signature, a stale key fetch and an outage all mean "no"
+            return None
+        email = claims.get("email")
+        if not isinstance(email, str) or email.strip().lower() not in self.emails:
+            return None
+        return email.strip().lower()
+
+
+def load_access() -> "AccessJwt | None":
+    """The Access verifier, or None when GYM_ACCESS_* is unset (then the header is ignored). A partial or malformed
+    configuration crashes at start-up rather than silently leaving the door half open."""
+    team, aud, emails = (os.environ.get(k, "").strip() for k in ("GYM_ACCESS_TEAM", "GYM_ACCESS_AUD", "GYM_ACCESS_EMAILS"))
+    if not (team or aud or emails):
+        return None
+    return AccessJwt(team, aud, emails.split(","))
+
+
+class BearerAuthASGI:
+    """Pure-ASGI wrapper: 401 unless the request carries the shared secret or a valid Cloudflare Access assertion."""
+
+    def __init__(self, app, token: str, access: "AccessJwt | None" = None):
         self.app = app
         self.token = token
+        self.access = access
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -146,6 +195,9 @@ class BearerAuthASGI:
         headers = dict(scope.get("headers") or [])
         value = headers.get(b"authorization", b"").decode("latin-1")
         if authorized(value, self.token):
+            return await self.app(scope, receive, send)
+        assertion = headers.get(b"cf-access-jwt-assertion", b"").decode("latin-1")
+        if self.access is not None and assertion and await asyncio.to_thread(self.access.email, assertion):
             return await self.app(scope, receive, send)
         body = b'{"error":"unauthorized","message":"Missing or invalid bearer token."}'
         await send({"type": "http.response.start", "status": 401, "headers": [
