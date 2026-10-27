@@ -1899,6 +1899,74 @@ class Round30(unittest.TestCase):
         self.assertEqual(lifts(2), [])  # seconds are not repetitions
         self.assertEqual(lifts(0), [])
 
+class Round31(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def test_the_vendors_muscle_vocabulary_is_understood(self):
+        for title, tag, asked, muscle in (("Barbell Hip Thrust", "Gluteus", "Barbell hip thrust", "glutes"), ("Cable Shrug", "Trapezius", "Cable shrug", "traps"),
+                                          ("Seated Row", "Erector Spinae", "Seated row", "back")):
+            lib = [{"id": 1, "title": title, "mainMuscleGroupName": tag, "isLeftRight": 0}]
+            self.assertNotEqual(features.resolve_exercise(lib, asked, muscle)["confidence"], "low", tag)
+        full = [{"id": 1, "title": "Burpee Thrust", "mainMuscleGroupName": "Full Body", "isLeftRight": 0}]
+        self.assertEqual(features.resolve_exercise(full, "Burpee thrust", "glutes")["confidence"], "med")  # not a contradiction, not a confirmation
+
+    def test_a_boolean_is_never_a_day_index_or_a_day_count_over_rpc(self):
+        import asyncio
+        client = mock.Mock(data_dir=tempfile.mkdtemp(prefix="gym-r31-"))
+
+        def call(tool, args, patched, **kw):
+            with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), mock.patch.object(mcp_server, "_client", return_value=client), \
+                    mock.patch.object(mcp_server, "_require_auth"), mock.patch.object(mcp_server, patched, **kw) as spy:
+                try:
+                    asyncio.run(mcp_server.mcp.call_tool(tool, args))
+                except Exception:
+                    pass
+                return spy
+        program = {"days": [{"exercises": []}, {"exercises": []}]}
+        call("create_workout_from_program", {"program": program, "day_index": 1}, "apply_program", return_value={"ok": True}).assert_called_once()  # control
+        for bad in (True, False):
+            call("create_workout_from_program", {"program": program, "day_index": bad}, "apply_program", return_value={"ok": True}).assert_not_called()
+        spy = call("generate_program", {"days_per_week": 3}, "coach", wraps=mcp_server.coach)
+        self.assertTrue(spy.generate_program.called)  # control
+        spy = call("generate_program", {"days_per_week": True}, "coach", wraps=mcp_server.coach)
+        self.assertFalse(spy.generate_program.called)
+
+    def test_a_newer_session_with_no_completed_set_withholds_progression(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        template = SessionResult("1", date(2026, 10, 17), 1_790_000_000_000, "T", sets=tuple(SetResult("Bench", reps=10, load=100.0, target=10) for _ in range(3)))
+        failed = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Bench", reps=0, load=50.0, target=10) for _ in range(3)))
+        out = planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26), [template, failed])
+        self.assertIsNone(out[0].load)
+        self.assertIn("no completed set", out[0].load_basis)
+
+    def test_a_seconds_only_side_does_not_crash_the_planner(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        sets = (SetResult("Plank Row", reps=8, load=40.0, side="left", target=8), SetResult("Plank Row", reps=None, load=40.0, seconds=30, side="right"))
+        template = SessionResult("1", date(2026, 10, 17), 1_790_000_000_000, "T", sets=sets * 3)
+        out = planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26))
+        self.assertIsNone(out[0].load)
+
+    def test_a_pain_report_must_name_something_matchable(self):
+        import state_io
+        for bad in ("???", "\U0001F3CB\ufe0f", "\u2014", "\u200b\u200b", "__"):
+            for key in ("exercise", "avoid"):
+                with self.assertRaises(ValueError, msg=repr(bad)):
+                    state_io.validate_feedback({"pain": True, key: bad})
+        self.assertEqual(state_io.validate_feedback({"pain": True, "exercise": "Cable curl"})["exercise"], "Cable curl")
+
+    def test_local_state_stays_out_of_git_and_docker(self):
+        root = os.path.join(os.path.dirname(__file__), "..")
+        git = open(os.path.join(root, ".gitignore")).read().split()
+        docker = open(os.path.join(root, ".dockerignore")).read().split()
+        for pattern in ("coach_feedback.json*", "*.lock", "readiness.json"):
+            self.assertIn(pattern, git)
+            self.assertIn(pattern, docker)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

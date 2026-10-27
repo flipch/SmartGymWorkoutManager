@@ -240,6 +240,10 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
             out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None, note))
             continue
         last = anchor_load(performed)
+        if last is None:  # the sets that carry a load did not all count (a seconds-only side, a set without reps)
+            out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
+                                        "no completed set carries a usable load: choose a load that leaves the target RIR"))
+            continue
         newer_note = ""
         hit_all = bool(targets) and all((r.reps or 0) >= r.target for r in rows if r.target)
         newer = _newest_logged(name, [x for x in (sessions or []) if x.started_at_ms > template.started_at_ms and x.local_day <= day],
@@ -251,7 +255,11 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                                             f"a newer session ({nday.isoformat()}) has a side with no completed sets: choose a load that leaves the target RIR"))
                 continue
             nload = anchor_load(nsets)
-            if nload is not None and nload <= last:  # not heavier since this template: that is where the athlete is now,
+            if nload is None:  # the latest session logged a load but no completed set: that is not a success to build on
+                out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
+                                            f"a newer session ({nday.isoformat()}) logged this lift with no completed set: choose a load that leaves the target RIR"))
+                continue
+            if nload <= last:  # not heavier since this template: that is where the athlete is now,
                 ntargets = [x.target for x in nsets if x.target]  # and that session's result decides whether to progress
                 last, newer_note = nload, f"; a newer session ({nday.isoformat()}) is the latest evidence"
                 hit_all = bool(ntargets) and all((x.reps or 0) >= x.target for x in nsets if x.target)

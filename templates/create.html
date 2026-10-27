@@ -1313,8 +1313,13 @@ You must output a JSON object with the following structure:
                     const title = libEx ? libEx.title : (ex.title || "Unknown Exercise");
 
                     // Map sets — normalize comma decimal separator for weight (e.g. "11,5" → 11.5)
+                    const whole = (v, what, si) => {  // "8.9", "1e2" and "12oops" are mistakes, not 8, 1 and 12
+                        const text = String(v).trim();
+                        if (!/^-?\d+$/.test(text)) throw new Error(`exercise ${imported.length + 1} set ${si + 1}: ${what} must be a whole number`);
+                        return parseInt(text, 10);
+                    };
                     const setsParsed = ex.sets.map((s, si) => ({
-                        reps: parseInt(s.reps),
+                        reps: (s.reps === undefined || s.reps === null || s.reps === '') ? NaN : whole(s.reps, 'reps', si),
                         weight: (() => {
                             const w = parseFloat(String(s.weight ?? '').replace(',', '.'));
                             if (!Number.isFinite(w) || w < 0 || (w === 0 && String(s.unit || '').toLowerCase() !== 'sec')) {
@@ -1322,8 +1327,8 @@ You must output a JSON object with the following structure:
                             }
                             return w;
                         })(),
-                        mode: parseInt(s.mode || 1),
-                        rest: (s.rest === undefined || s.rest === null || Number.isNaN(parseInt(s.rest))) ? 60 : parseInt(s.rest),  // 0 s is a real rest
+                        mode: (s.mode === undefined || s.mode === null || s.mode === '' || s.mode === 0) ? 1 : whole(s.mode, 'mode', si),
+                        rest: (s.rest === undefined || s.rest === null || s.rest === '') ? 60 : whole(s.rest, 'rest', si),  // 0 s is a real rest
                         unit: String(s.unit || '').toLowerCase() === 'sec' ? 'sec' : 'reps'  // an exported timed set stays timed
                     }));
 
@@ -1535,7 +1540,9 @@ You must output a JSON object with the following structure:
 
 
     // --- STATS LOGIC ---
+    let statsSeq = 0;  // only the newest stats request may fill the modal
     window.openStats = async (groupId, title) => {
+        const mine = ++statsSeq;
         const modal = document.getElementById('stats-modal');
         const titleEl = document.getElementById('stats-modal-title');
         const tbody = document.getElementById('stats-table-body');
@@ -1557,6 +1564,7 @@ You must output a JSON object with the following structure:
             const summary = summarizeStats(json);
             exerciseStatsCache.set(numericGroupId, summary);
             applyStatsSummaryToMatchingExercises(numericGroupId, summary);
+            if (mine !== statsSeq) return;  // another exercise's history was opened meanwhile
 
             loading.classList.add('hidden');
 
@@ -1584,6 +1592,7 @@ You must output a JSON object with the following structure:
             }
 
         } catch (e) {
+            if (mine !== statsSeq) return;
             loading.classList.add('hidden');
             tbody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-red-400">Error loading stats</td></tr>`;
             console.error(e);

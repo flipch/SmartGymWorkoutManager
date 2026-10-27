@@ -973,11 +973,11 @@ _EQUIP_STOP = {"cable", "dual", "handle", "handles", "barbell", "rope", "tricep"
                "the", "with", "to", "of", "and", "for", "on", "at", "in", "a", "bar", "grip",
                "wide", "close", "neutral", "v", "straight"}
 _MUSCLE_ANCHOR = {
-    "chest": {"pecs", "chest"}, "back": {"lats", "back", "upper back", "mid back"},
+    "chest": {"pecs", "chest", "pectorals"}, "back": {"lats", "back", "upper back", "mid back", "trapezius", "erector spinae"},
     "shoulders": {"front delts", "side delts", "shoulders", "delts"}, "rear_delts": {"rear delts"},
-    "quads": {"quads", "quadriceps"}, "glutes": {"glutes"}, "hamstrings": {"hamstrings", "glutes"},
+    "quads": {"quads", "quadriceps"}, "glutes": {"glutes", "gluteus"}, "hamstrings": {"hamstrings", "glutes", "gluteus"},
     "biceps": {"biceps", "forearms"}, "triceps": {"triceps"}, "calves": {"calves"},
-    "abs": {"abs", "core"}, "traps": {"traps"},
+    "abs": {"abs", "core"}, "traps": {"traps", "trapezius"},
 }
 
 
@@ -1062,9 +1062,9 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
         # "Decline press" must not be saved as "Incline press" (or any other angle or direction)
         conf = "low"
     if anchor:  # the movement must train the muscle the coach named: "Leg extension" is not "Triceps extension"
-        if best[3] and best[3] not in anchor:
-            conf = "low"
-        elif not best[3] and conf == "high":
+        if best[3] and best[3] not in anchor and best[3] != "full body":
+            conf = "low"  # the device's own tag outranks the name (a title can say anything)
+        elif (not best[3] or best[3] == "full body") and conf == "high":
             conf = "med"
     return {"groupId": best[1], "matched_name": best[2], "muscle": best[3], "confidence": conf,
             "unilateral": best[5]}

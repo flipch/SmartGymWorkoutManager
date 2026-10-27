@@ -17,3 +17,5 @@ tests/fixtures/real/
 __pycache__/
 *.pyc
 .pytest_cache/
+coach_feedback.json*
+*.lock

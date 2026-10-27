@@ -322,7 +322,7 @@ def coaching_principles(topic: str = "") -> dict:
 
 
 @mcp.tool()
-def generate_program(goal: str = "general", days_per_week: int = 4,
+def generate_program(goal: str = "general", days_per_week: StrictInt = 4,
                      experience: str = "intermediate", readiness: dict = None) -> dict:
     """Generate a full weekly Speediance program tuned to the user.
     goal: muscle | strength | fatloss | general. days_per_week: 1-5.
@@ -357,7 +357,7 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
 
 
 @mcp.tool()
-def create_workout_from_program(program: dict, day_index: int = None,
+def create_workout_from_program(program: dict, day_index: StrictInt | None = None,
                                 name: str = None, dry_run: StrictBool = True, load_unit: str = None) -> dict:  # 0/'no'/'off' must not mean 'save'
     """Import a generated program (the `generate_program` result) into REAL Speediance workout
     templates. Resolves each exercise name to a library groupId, builds the sets payload, and

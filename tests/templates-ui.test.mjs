@@ -1247,3 +1247,40 @@ test('the coach page: an older request that fails does not replace the newer pro
     waiting[0].reject(new Error('offline')); await a;
     assert.match(doc.getElementById('out').innerHTML, /FATLOSS/);
 });
+
+// ----------------------------------------------------------------------------------------------- round 31
+test('an import refuses a malformed number instead of truncating it', async () => {
+    for (const bad of [8.9, '1e2', '12oops', '8.5']) {
+        const { ctx, doc } = editor(() => metaOf());
+        ctx.workoutData = [{ sentinel: true }];
+        await importJson(ctx, doc, { name: 'n', exercises: [{ id: 5, sets: [{ reps: bad, weight: 20, rest: 60 }] }] });
+        same(ctx.workoutData, [{ sentinel: true }]);  // nothing was imported
+    }
+    for (const bad of [{ rest: 30.5 }, { rest: '1e1' }, { mode: 1.5 }]) {
+        const { ctx, doc } = editor(() => metaOf());
+        ctx.workoutData = [{ sentinel: true }];
+        await importJson(ctx, doc, { name: 'n', exercises: [{ id: 5, sets: [{ reps: 8, weight: 20, ...bad }] }] });
+        same(ctx.workoutData, [{ sentinel: true }]);
+    }
+    const { ctx, doc } = editor(() => metaOf());
+    await importJson(ctx, doc, { name: 'n', exercises: [{ id: 5, sets: [{ reps: '8', weight: 20, rest: '45', mode: '2' }, { reps: 10, weight: 20, rest: 0 }] }] });
+    same(ctx.workoutData[0].sets.map((s) => [s.reps, s.rest, s.mode]), [[8, 45, 2], [10, 0, 1]]);
+});
+
+test('the stats modal shows the exercise it is titled for', async () => {
+    const src = read('create.html');
+    const doc = makeDocument();
+    const waiting = {};
+    const ctx = { document: doc, console: { error() {} }, esc: (s) => String(s), exerciseStatsCache: new Map(), summarizeStats: (j) => j, applyStatsSummaryToMatchingExercises() {},
+                  getStatsRows: (j) => j.rows, formatLastMaxWeight: (x) => String(x), window: {},
+                  fetch: (url) => new Promise((resolve) => { waiting[url.split('/').pop()] = () => resolve({ ok: true, json: async () => ({ rows: [{ dayStr: 'd' + url.split('/').pop(), maxWeight: 1, totalCapacity: 1 }] }) }); }) };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'let statsSeq', '    window.closeStatsModal'), ctx);
+    const bench = ctx.window.openStats(1, 'Bench');
+    const curl = ctx.window.openStats(2, 'Curl');
+    waiting['2'](); await curl;
+    waiting['1'](); await bench;
+    assert.match(doc.getElementById('stats-modal-title').innerHTML + doc.getElementById('stats-modal-title').innerText, /Curl/);
+    assert.match(doc.getElementById('stats-table-body').innerHTML, /d2/);
+    assert.doesNotMatch(doc.getElementById('stats-table-body').innerHTML, /d1/);
+});
