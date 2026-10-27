@@ -14,7 +14,7 @@ Design rules enforced here:
 import re
 from collections import Counter
 from datetime import date, datetime, timedelta
-from statistics import median
+from statistics import median, median_high, median_low
 
 import coach
 
@@ -106,6 +106,13 @@ def side_missing(sets) -> bool:
     return bool(sides) and done != {"left", "right"}  # logging only the left side is a half-done lift too
 
 
+def _lifted_median(loads) -> float:
+    """The median load, but never a load nobody lifted: when the two middle loads are far apart (an even ramp, 10 lb and
+    100 lb) the LOWER one stands, not their average."""
+    lo, hi = median_low(loads), median_high(loads)
+    return float(median(loads)) if hi <= lo * 1.25 else float(lo)
+
+
 def anchor_load(sets) -> float | None:
     """The load a progression is built on. One-sided sets keep their side: the WEAKER side's median is the anchor, so an
     asymmetric 20/40 history never prescribes a load the weaker side has not done (averaging would give 30)."""
@@ -117,7 +124,7 @@ def anchor_load(sets) -> float | None:
         by_side.setdefault(s.side, []).append(s.load)
     if not by_side:
         return None
-    medians = [float(median(v)) for v in by_side.values()]
+    medians = [_lifted_median(v) for v in by_side.values()]
     return min(medians)
 
 
@@ -220,7 +227,7 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
         performed = [r for r in rows if r.reps]
         targets = [r.target for r in rows if r.target]
         row_loads = [r.load for r in performed if r.load]
-        mid = float(median(row_loads)) if row_loads else None
+        mid = _lifted_median(row_loads) if row_loads else None
         # a ramp (12 x 20 lb, 10 x 40, 6 x 80) has no one rep target: take the one set(s) at the working load, not the first
         near = [r.target for r in rows if r.target and r.load and mid and abs(r.load - mid) <= 0.1 * mid]
         reps = Counter(near or targets).most_common(1)[0][0] if targets else None

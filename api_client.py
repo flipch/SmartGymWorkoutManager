@@ -634,7 +634,8 @@ class SpeedianceClient:
         url = f"{self.base_url}/api/app/accessories/list"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
-            return resp.json().get('data', [])
+            data = resp.json().get('data')
+            return [a for a in data if isinstance(a, dict)] if isinstance(data, list) else []  # null or a string is no accessory list
         except Exception as e:
             if str(e) == "Unauthorized": raise e
             print(f"Error fetching accessories: {e}")

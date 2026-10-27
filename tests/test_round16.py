@@ -2304,3 +2304,48 @@ class Round39(unittest.TestCase):
                 except Exception:
                     pass
         spy.get_training_detail.assert_not_called()
+
+    def test_an_even_ramp_anchors_on_a_load_that_was_lifted(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        self.assertEqual(planner._lifted_median([30.0, 34.0]), 32.0)  # close loads still average
+        self.assertEqual(planner._lifted_median([10.0, 100.0]), 10.0)  # far-apart loads do not
+        ramp = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=(
+            SetResult("Cable Row", reps=20, load=10.0, target=20), SetResult("Cable Row", reps=1, load=100.0, target=1)))
+        out = planner._from_template(ramp, {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}, 5.0, date(2026, 10, 26))[0]
+        self.assertLess(out.load, 15.0)  # not 56
+
+    def test_a_partial_readiness_post_does_not_overwrite_an_unreadable_stored_reading(self):
+        import features
+        d = tempfile.mkdtemp(prefix="gym-r40-")
+        features.save_readiness({"whoop_recovery": 10}, d)
+        path = features._readiness_path(d)
+        os.chmod(path, 0)
+        try:
+            if os.access(path, os.R_OK):
+                self.skipTest("running as a user that ignores file modes")
+            with self.assertRaises(OSError):
+                features.save_readiness({"sleep_hours": 9}, d)
+        finally:
+            os.chmod(path, 0o600)
+        self.assertEqual(features._load_readiness(d)["whoop_recovery"], 10)  # still there
+        with open(path, "w") as f:
+            f.write("{not json")
+        features.save_readiness({"sleep_hours": 9}, d)  # a damaged file is moved aside, then the post is stored
+        self.assertTrue([n for n in os.listdir(d) if ".corrupt-" in n])
+
+    def test_an_accessories_answer_that_is_not_a_list_of_objects_is_empty(self):
+        client = api_client.SpeedianceClient()
+        for data, expected in ((None, []), ("x", []), ({"a": 1}, []), ([1, "y", {"id": 1}], [{"id": 1}]), ([], [])):
+            with mock.patch.object(client, "_request", return_value=mock.Mock(json=lambda data=data: {"code": 0, "data": data})):
+                self.assertEqual(client.get_accessories(), expected, data)
+
+    def test_a_ramp_that_starts_heavy_takes_its_reps_from_the_lifted_load(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        ramp = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=(
+            SetResult("Cable Row", reps=1, load=100.0, target=1), SetResult("Cable Row", reps=20, load=10.0, target=20)))
+        out = planner._from_template(ramp, {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}, 5.0, date(2026, 10, 26))[0]
+        self.assertEqual(out.reps, 20)  # the target of the 10 lb set that the anchor is, not the first set's single rep

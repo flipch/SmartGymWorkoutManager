@@ -604,7 +604,24 @@ def save_readiness(payload, data_dir=None):
     keep = state_io.require_readiness(payload)  # a typo beside a valid field would otherwise drop the intended signal
     path = _readiness_path(data_dir)
     with state_io.file_lock(path + ".lock"):  # the web app and the MCP server both write: read-merge-write is one step
+        _settle_unreadable_readiness(path)
         return _merge_readiness(keep, path, data_dir)
+
+
+def _settle_unreadable_readiness(path):
+    """A stored reading that cannot be read must not be treated as empty and overwritten: an unreadable file (permissions,
+    I/O) stops the write; a damaged one is moved aside first, so a partial post cannot erase a red signal unseen."""
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path) as f:
+            if isinstance(json.load(f), dict):
+                return
+    except OSError:
+        raise
+    except ValueError:
+        pass
+    state_io.quarantine(path)
 
 
 def _merge_readiness(keep, path, data_dir):
