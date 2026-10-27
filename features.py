@@ -253,10 +253,16 @@ def _deep_insights(days=90, max_sessions=24):
     lifts.sort(key=lambda l: -abs(l["e1rm_delta"]))
 
     ratio = round(push / pull, 2) if pull else None
+    if not push and not pull:
+        verdict = "no_data"
+    elif push and not pull:
+        verdict = "push_biased"  # only pressing: the ratio is undefined, the imbalance is total
+    elif pull and not push:
+        verdict = "pull_biased"
+    else:
+        verdict = "push_biased" if ratio > 1.2 else "pull_biased" if ratio < 0.8 else "balanced"
     balance = {"push_sets": round(push), "pull_sets": round(pull), "push_pull_ratio": ratio,
-               "upper_sets": round(upper), "lower_sets": round(lower),
-               "verdict": ("push_biased" if ratio and ratio > 1.2 else
-                           "pull_biased" if ratio and ratio < 0.8 else "balanced")}
+               "upper_sets": round(upper), "lower_sets": round(lower), "verdict": verdict}
     below_2x = sorted(m for m in muscle_days if len(muscle_days[m]) / nweeks < 2)
 
     weekly = defaultdict(lambda: {"sessions": 0, "tonnage": 0, "calories": 0, "minutes": 0})
@@ -460,22 +466,23 @@ table{width:100%;border-collapse:collapse;font-size:.85rem}td{padding:4px 6px;bo
 <p class=foot>📅 Subscribe to your schedule: <a href="/calendar.ics">/calendar.ics</a> · <a href="/coach">AI Coach →</a> · <a href="/">← back to app</a></p>
 <script>
 const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function j(u){try{return await (await fetch(u)).json()}catch(e){return{}}}
+async function j(u){try{const r=await fetch(u); const b=await r.json(); return r.ok?b:{unavailable:(b&&(b.message||b.error))||('HTTP '+r.status)}}catch(e){return{unavailable:'network error'}}}
 function spark(series){const v=series.map(p=>p.e1rm),w=130,h=30,n=v.length;if(n<2)return'';
  const mn=Math.min(...v),mx=Math.max(...v),r=(mx-mn)||1;
  const pts=v.map((x,i)=>`${(i/(n-1))*w},${(h-3)-((x-mn)/r)*(h-8)}`).join(' ');
  return `<svg width=${w} height=${h} style="display:block;margin-top:6px"><polyline fill=none stroke=#58a6ff stroke-width=2 points="${pts}"/></svg>`;}
 (async()=>{
  const i=await j('/api/insights'), r=await j('/api/recovery'), U=i.unit||'';
- document.getElementById('badge').textContent = i.authenticated
-   ? (i.data_note||'') : 'Not logged in — set up in Settings to populate.';
+ document.getElementById('badge').textContent = i.unavailable
+   ? 'Could not load your insights ('+i.unavailable+'). The numbers below are not real zeros.'
+   : i.authenticated ? (i.data_note||'') : 'Not logged in — set up in Settings to populate.';
  const cards=[['current_streak_days','Day streak'],['sessions_last_7d','This week'],
   ['sessions_last_30d','Last 30 days'],['avg_sessions_per_week','Avg / week'],
   ['active_days','Active days'],['total_sessions','Total sessions']];
  document.getElementById('cards').innerHTML=cards.map(([k,l])=>
-  `<div class=card><div class=val>${esc(i[k]??'0')}</div><div class=lbl>${esc(l)}</div></div>`).join('');
- const cls=r.recommendation||'log_in';
- document.getElementById('rec').innerHTML=`<span class="pill ${esc(cls)}">${esc(cls.replace('_',' '))}</span><b>${esc(r.message||'')}</b>`;
+  `<div class=card><div class=val>${esc(i[k]??(i.unavailable?'–':'0'))}</div><div class=lbl>${esc(l)}</div></div>`).join('');
+ const cls=r.unavailable?'unavailable':(r.recommendation||'log_in');
+ document.getElementById('rec').innerHTML=`<span class="pill ${esc(cls)}">${esc(cls.replace('_',' '))}</span><b>${esc(r.unavailable?('Recovery could not be loaded ('+r.unavailable+')'):(r.message||''))}</b>`;
  if(!i.authenticated)return;
  let h='';
  // 1) volume vs landmarks
@@ -569,9 +576,7 @@ READINESS_KEYS = ("whoop_recovery", "hrv_vs_baseline", "rhr_delta_bpm",
 def save_readiness(payload, data_dir=None):
     """Persist a validated readiness payload (Whoop/Apple Health/subjective). Raises ValueError (field name only)
     for a bad value, so a typo can never reach the autoregulator."""
-    keep = state_io.validate_readiness(payload)
-    if not keep:
-        raise ValueError("no readiness signal supplied")
+    keep = state_io.require_readiness(payload)  # a typo beside a valid field would otherwise drop the intended signal
     path = _readiness_path(data_dir)
     with state_io.file_lock(path + ".lock"):  # the web app and the MCP server both write: read-merge-write is one step
         return _merge_readiness(keep, path, data_dir)
@@ -689,7 +694,7 @@ def coach_readiness():
 @features_bp.route('/api/coach/autoregulate', methods=['POST'])
 def coach_autoregulate():
     try:
-        readiness = state_io.validate_readiness(json_object(request.get_json(silent=True)))
+        readiness = state_io.require_readiness(json_object(request.get_json(silent=True)))
     except ValueError as e:
         return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
     return jsonify(coach.autoregulate(readiness))
@@ -1200,7 +1205,10 @@ async function gen(){
   const body={goal:$('goal').value,days_per_week:+$('days').value,experience:$('exp').value};
   const r={}; if($('whoop').value)r.whoop_recovery=+$('whoop').value; if($('sleep').value)r.sleep_hours=+$('sleep').value;
   if(Object.keys(r).length)body.readiness=r;
-  const p=await (await fetch('/api/coach/program',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  let resp,p;
+  try{ resp=await fetch('/api/coach/program',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); p=await resp.json(); }
+  catch(e){ $('out').innerHTML='<p class=warn>Could not reach the server.</p>'; return; }
+  if(!resp.ok||!p||!p.review){ $('out').innerHTML='<p class=warn>'+esc((p&&(p.message||p.error))||('HTTP '+resp.status))+'</p>'; return; }
   render(p);
 }
 function render(p){
@@ -1236,7 +1244,8 @@ async function saveDayOnce(i){
   try{ resp=await fetch('/api/coach/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({program:window.__P,day_index:i,dry_run:false})}); }
   catch(e){ el.innerHTML='<span class=warn>Network error</span>'; return; }
   if(resp.status===401){ el.innerHTML='<span class=warn>Log in at /settings to save to your Speediance account.</span>'; return; }
-  const d=await resp.json(); const r=(d.results&&d.results[0])||{};
+  let d; try{ d=await resp.json(); }catch(e){ el.innerHTML='<span class=warn>Unexpected answer (HTTP '+esc(resp.status)+'): check My Workouts before saving again.</span>'; return; }
+  const r=(d.results&&d.results[0])||{};
   if(r.created){
     let m=`<span class=ok>✓ Saved "${esc(r.name)}" (${esc(r.exercise_count)} exercises)</span>`;
     if(r.unresolved&&r.unresolved.length)m+=` <span class=warn>· not saved: ${r.unresolved.map(u=>esc(u.name)+(u.reason?' ('+esc(u.reason)+')':'')).join(', ')}</span>`;

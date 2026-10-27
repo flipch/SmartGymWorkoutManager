@@ -239,7 +239,7 @@ function bulkExport(detail) {
     const src = read('index.html');
     let blobText = null;
     const ctx = {
-        console, alert() {}, Date, JSON,
+        console, alert() {}, Date, JSON, accountUnit: 1,
         document: { createElement: () => ({ click() {} }), body: { appendChild() {}, removeChild() {} },
                     querySelectorAll: () => [], getElementById: () => ({ classList: { add() {}, remove() {} } }) },
         Blob: class { constructor(parts) { blobText = parts[0]; } },
@@ -257,6 +257,7 @@ test('a bulk export keeps Vita levels, zero rests and timed sets', () => {
     same(out[0].exercises[0].sets.map((s) => s.weight), [8, 3]);
     same(out[0].exercises[0].sets.map((s) => s.rest), [0, 45]);
     same(out[0].exercises[0].sets.map((s) => s.unit), ['sec', 'reps']);
+    assert.equal(out[0].weightUnit, 'lb');  // an export says which unit its weights are in
 });
 
 test('month navigation from the 31st lands in the adjacent month', () => {
@@ -357,7 +358,7 @@ function coachPage(fetchImpl) {
     const doc = makeDocument();
     const ctx = { document: doc, console, fetch: fetchImpl, window: {}, JSON, Number, Object, alert() {} };
     vm.createContext(ctx);
-    vm.runInContext(script + '\nglobalThis.api = { render, saveDay };', ctx);
+    vm.runInContext(script + '\nglobalThis.api = { render, saveDay, gen };', ctx);
     return { ctx, doc };
 }
 
@@ -397,7 +398,7 @@ function historyPage(fetchImpl) {
     const code = [
         between(src, 'const toMs', '\n') ,
         between(src, 'function fmtDateTime', '    function fmtWeight'),
-        between(src, 'async function openDetail', '    function renderDetail'),
+        between(src, 'let detailSeq', '    function renderDetail'),
     ].join('\n');
     vm.runInContext('let currentDetailPayload = null; let renderedDetail = null; function renderDetail(d, r) { renderedDetail = d; }\n' + code +
         '\nglobalThis.api = { fmtDateTime, openDetail, toMs, rendered: () => renderedDetail };', ctx);
@@ -550,4 +551,151 @@ test('workout history: seconds and milliseconds are the same moment', () => {
     vm.runInContext(between(src, 'const toMs', '\n') + '\nglobalThis.toMs = toMs;', ctx);
     assert.equal(ctx.toMs(1790000000), ctx.toMs(1790000000000));
     assert.equal(new Date(ctx.toMs(1790000000)).getFullYear(), 2026);
+});
+
+// ----------------------------------------------------------------------------------------------- round 20
+const planWith = (n) => Array.from({ length: n }, (_, i) => ({ internalId: i, groupId: 100 + i, title: 'old' + i, sets: [] }));
+
+test('an import written in the other weight unit is refused and changes nothing', async () => {
+    for (const [declared, accountUnit] of [['lb', 0], ['kg', 1]]) {
+        const { ctx, doc, calls } = editor(() => metaOf());
+        ctx.userUnit = accountUnit;
+        ctx.workoutData = planWith(2);
+        doc.getElementById('plan-name').value = 'keep me';
+        await importJson(ctx, doc, { name: 'x', weightUnit: declared, exercises: [{ id: 5, sets: [{ reps: 10, weight: 100, rest: 60 }] }] });
+        assert.equal(ctx.workoutData.length, 2, declared);
+        assert.equal(doc.getElementById('plan-name').value, 'keep me');
+        assert.ok(calls.some((c) => c[0] === 'alert' && /Nothing was imported/.test(c[1])), declared);
+    }
+    const { ctx, doc } = editor(() => metaOf());
+    ctx.userUnit = 1;
+    await importJson(ctx, doc, { name: 'x', weightUnit: 'LB', exercises: [{ id: 5, sets: [{ reps: 10, weight: 100, rest: 60 }] }] });
+    assert.equal(ctx.workoutData.length, 1);                       // same unit: accepted (case-insensitive)
+    await importJson(ctx, doc, { name: 'x', exercises: [{ id: 5, sets: [{ reps: 10, weight: 100, rest: 60 }] }] });
+    assert.equal(ctx.workoutData.length, 1);                       // an AI-written file with no unit is still accepted
+    await importJson(ctx, doc, { name: 'x', weightUnit: 'stone', exercises: [{ id: 5, sets: [{ reps: 10, weight: 1, rest: 60 }] }] });
+    assert.equal(ctx.workoutData[0].sets[0].weight, 100);          // an unknown unit changed nothing
+});
+
+test('an import that fails part-way leaves the current plan, its name and its metadata alone', async () => {
+    const { ctx, doc, calls } = editor(() => metaOf());
+    ctx.workoutData = planWith(3);
+    doc.getElementById('plan-name').value = 'keep me';
+    await importJson(ctx, doc, { name: 'new', exercises: [{ id: 5, sets: [{ reps: 10, weight: 5, rest: 60 }] }, { id: 6 }] });
+    assert.equal(ctx.workoutData.length, 3);
+    assert.equal(doc.getElementById('plan-name').value, 'keep me');
+    assert.ok(calls.some((c) => c[0] === 'alert' && /Error parsing JSON/.test(c[1])));
+    const down = editor((id) => (id === 6 ? { ...metaOf(), failed: true } : metaOf()));
+    down.ctx.workoutData = planWith(3);
+    await importJson(down.ctx, down.doc, { name: 'new', exercises: [{ id: 5, sets: [{ reps: 10, weight: 5 }] }, { id: 6, sets: [{ reps: 45, weight: 0, unit: 'sec' }] }] });
+    assert.equal(down.ctx.workoutData.length, 3);
+    assert.ok(down.calls.some((c) => c[0] === 'alert' && /could not be loaded/.test(c[1])));
+});
+
+test('adding an exercise while its details cannot be loaded adds nothing', async () => {
+    const { ctx, calls } = editor(() => ({ ...metaOf(), failed: true }));
+    const src = read('create.html');
+    vm.runInContext(between(src, 'async function addExerciseToPlan', '    // --- ').replace('async function addExerciseToPlan', 'globalThis.addExerciseToPlan = async function addExerciseToPlan'), ctx);
+    await ctx.addExerciseToPlan(7, 'Press', '');
+    assert.equal(ctx.workoutData.length, 0);
+    assert.ok(calls.some((c) => c[0] === 'alert' && /not added/.test(c[1])));
+});
+
+test('an export names its weight unit', () => {
+    const rows = [{ groupId: 1, title: 'T', selectedPresetId: -1, isUnilateral: false, sets: [{ reps: 10, weight: 100, rest: 60 }] }];
+    assert.equal(WorkoutLogic.buildExportJSON(rows, 'n', 1).weightUnit, 'lb');
+    assert.equal(WorkoutLogic.buildExportJSON(rows, 'n', 0).weightUnit, 'kg');
+    assert.equal(JSON.parse(JSON.stringify(WorkoutLogic.buildExportJSON(rows, 'n'))).weightUnit, undefined);
+    const src = read('create.html');
+    assert.match(src, /WorkoutLogic\.buildExportJSON\(data, name, userUnit\)/);
+});
+
+test('history: the newest session opened wins, whatever order the answers arrive in', async () => {
+    const waiting = {};
+    const { ctx } = historyPage((url) => new Promise((resolve) => { const id = Number(/detail\/(\d+)/.exec(url)[1]); waiting[id] = () => resolve({ ok: true, status: 200, json: async () => ({ detail: [id] }) }); }));
+    const a = ctx.api.openDetail({ trainingId: 1, type: 5, title: 'A', startTimestamp: 1 });
+    const b = ctx.api.openDetail({ trainingId: 2, type: 5, title: 'B', startTimestamp: 1 });
+    waiting[2](); await b;
+    waiting[1](); await a;
+    same(ctx.api.rendered(), { detail: [2] });
+});
+
+test('the coach page says why a program could not be generated', async () => {
+    for (const reply of [{ ok: false, status: 400, json: async () => ({ error: 'invalid_readiness', message: 'sleep_hours must be between 0 and 24' }) },
+                         { ok: false, status: 500, json: async () => { throw new Error('not json'); } }]) {
+        const { ctx, doc } = coachPage(async () => reply);
+        await ctx.api.gen();
+        assert.doesNotMatch(doc.getElementById('out').innerHTML, /Generating/);
+        assert.match(doc.getElementById('out').innerHTML, /sleep_hours|Could not reach/);
+    }
+});
+
+test('the coach page does not leave Saving… up when the answer is not JSON', async () => {
+    const { ctx, doc } = coachPage(async () => ({ ok: false, status: 502, json: async () => { throw new Error('<html>'); } }));
+    ctx.api.render(aProgram());
+    await ctx.api.saveDay(0);
+    assert.match(doc.getElementById('save0').innerHTML, /Unexpected answer \(HTTP 502\)/);
+});
+
+test('the insights page does not show an outage as zeros or as "not logged in"', async () => {
+    const py = fs.readFileSync(path.join(__dirname, '..', 'features.py'), 'utf8');
+    const html = between(py, '_INSIGHTS_HTML = """', '"""\n');
+    const script = between(html, '<script>', '</script>').slice('<script>'.length);
+    const doc = makeDocument();
+    const ctx = { document: doc, console, JSON, Number, Object, Math, Array,
+                  fetch: async () => ({ ok: false, status: 503, json: async () => ({ error: 'history_unavailable' }) }) };
+    vm.createContext(ctx);
+    vm.runInContext(script, ctx);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.match(doc.getElementById('badge').textContent, /Could not load your insights/);
+    assert.doesNotMatch(doc.getElementById('badge').textContent, /Not logged in/);
+    assert.doesNotMatch(doc.getElementById('cards').innerHTML, /val>0</);
+    assert.match(doc.getElementById('rec').innerHTML, /could not be loaded/);
+});
+
+test('browse and exercise pages show a failed load as an error, not as an empty list', async () => {
+    const down = async () => ({ ok: false, status: 502, json: async () => ({ error: 'upstream_error' }) });
+    const doc = makeDocument();
+    const ctx = { document: doc, console, fetch: down, window: { location: {} }, allCourses: [], coursesLoaded: false, programLoaded: false, allPrograms: [] };
+    vm.createContext(ctx);
+    vm.runInContext(between(read('browse.html'), 'async function fetchCourses', '    function ') + '\nglobalThis.fetchCourses = fetchCourses;', ctx);
+    await ctx.fetchCourses();
+    assert.equal(ctx.coursesLoaded, false);
+    assert.match(doc.getElementById('courseLoading').textContent, /Error/);
+    assert.match(read('exercise_detail.html'), /if \(!res\.ok\) throw new Error\(\(json && json\.error\)/);
+    const create = read('create.html');
+    assert.equal((create.match(/if \(!res\.ok\) throw new Error\('HTTP ' \+ res\.status\);/g) || []).length, 2);
+});
+
+test('an import with an unknown weight unit or an empty set list is refused with its reason', async () => {
+    const { ctx, doc, calls } = editor(() => metaOf());
+    ctx.userUnit = 0;
+    ctx.workoutData = planWith(1);
+    await importJson(ctx, doc, { name: 'x', weightUnit: 'stone', exercises: [{ id: 5, sets: [{ reps: 10, weight: 1 }] }] });
+    assert.ok(calls.some((c) => c[0] === 'alert' && /must be 'kg' or 'lb'/.test(c[1])));
+    await importJson(ctx, doc, { name: 'x', exercises: [{ id: 5, sets: [] }] });
+    assert.ok(calls.some((c) => c[0] === 'alert' && /no "sets" list/.test(c[1])));
+    assert.equal(ctx.workoutData.length, 1);
+    assert.equal(ctx.workoutData[0].title, 'old0');
+});
+
+test('history: a slow FAILED answer for an older session does not replace the newer session\'s detail', async () => {
+    const waiting = {};
+    const { ctx, doc } = historyPage((url) => new Promise((resolve) => { const id = Number(/detail\/(\d+)/.exec(url)[1]); waiting[id] = resolve; }));
+    const a = ctx.api.openDetail({ trainingId: 1, type: 5, title: 'A', startTimestamp: 1 });
+    const b = ctx.api.openDetail({ trainingId: 2, type: 5, title: 'B', startTimestamp: 1 });
+    waiting[2]({ ok: true, status: 200, json: async () => ({ detail: [2] }) }); await b;
+    waiting[1]({ ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }); await a;
+    assert.doesNotMatch(doc.getElementById('detailLoading').textContent, /history_unavailable/);
+    same(ctx.api.rendered(), { detail: [2] });
+});
+
+test('history: a slow network failure for an older session does not replace the newer session\'s detail', async () => {
+    const waiting = {};
+    const { ctx, doc } = historyPage((url) => new Promise((resolve, reject) => { const id = Number(/detail\/(\d+)/.exec(url)[1]); waiting[id] = { resolve, reject }; }));
+    const a = ctx.api.openDetail({ trainingId: 1, type: 5, title: 'A', startTimestamp: 1 });
+    const b = ctx.api.openDetail({ trainingId: 2, type: 5, title: 'B', startTimestamp: 1 });
+    waiting[2].resolve({ ok: true, status: 200, json: async () => ({ detail: [2] }) }); await b;
+    waiting[1].reject(new Error('network down')); await a;
+    assert.doesNotMatch(doc.getElementById('detailLoading').textContent, /network down/);
 });

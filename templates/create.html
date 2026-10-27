@@ -433,6 +433,10 @@
         const tempId = Date.now();
         try {
             const meta = await fetchExerciseMetadata(groupId);
+            if (meta.failed) {  // a one-sided or Vita exercise would be added as a plain bilateral one
+                alert('Could not load this exercise from Speediance, so it was not added. Try again.');
+                return;
+            }
             // Default Custom Settings
             const rules = WorkoutLogic.getRules({ selectedPresetId: -1, isUnilateral: meta.isUnilateral, isBarbell: meta.isBarbell }, userUnit);
 
@@ -498,7 +502,7 @@
     function lbsToKg(lbs)                           { return WorkoutLogic.lbsToKg(lbs); }
     function kgToLbs(kg)                            { return WorkoutLogic.kgToLbs(kg); }
     function parseImportedSets(sets, uni, expanded) { return WorkoutLogic.parseImportedSets(sets, uni, expanded); }
-    function buildExportJSON(data, name)            { return WorkoutLogic.buildExportJSON(data, name); }
+    function buildExportJSON(data, name)            { return WorkoutLogic.buildExportJSON(data, name, userUnit); }
 
     // Determine the goal unit for an exercise based on its completionMethod from the API.
     // Returns 'sec', 'kcal', 'reps', or null (null = fall back to per-set toggle).
@@ -600,6 +604,7 @@
         try {
             const res = await fetch(`/api/stats/${ex.groupId}`);
             const json = await res.json();
+            if (!res.ok) throw new Error('HTTP ' + res.status);
             const summary = summarizeStats(json);
             exerciseStatsCache.set(ex.groupId, summary);
             applyStatsSummaryToMatchingExercises(ex.groupId, summary);
@@ -1233,19 +1238,33 @@ You must output a JSON object with the following structure:
         const jsonStr = document.getElementById('import-json').value;
         try {
             const data = JSON.parse(jsonStr);
-            
-            if (data.name) {
-                document.getElementById('plan-name').value = data.name;
+
+            // Weights are never converted: refuse a file written in the other unit (a bare number would be 2.2x off)
+            const declared = String((data && data.weightUnit) ?? '').trim().toLowerCase();
+            if (declared !== '' && declared !== 'kg' && declared !== 'lb') {
+                alert("Nothing was imported: weightUnit must be 'kg' or 'lb'.");
+                return;
+            }
+            if (declared !== '' && (declared === 'lb') !== (userUnit === 1)) {
+                alert(`Nothing was imported: this workout is in ${declared}, but your account uses ${userUnit === 1 ? 'lb' : 'kg'}. Weights are not converted: change them in the file and remove "weightUnit", or re-export from an account in the same unit.`);
+                return;
             }
 
             if (data.exercises && Array.isArray(data.exercises)) {
-                // Clear existing
-                workoutData = [];
-                
+                // Build the whole plan first: a failure part-way must leave the current plan (and the screen) as they were
+                const imported = [];
+
                 // Process sequentially to keep order
                 for (const ex of data.exercises) {
+                    if (!ex || !Array.isArray(ex.sets) || ex.sets.length === 0) {
+                        throw new Error(`exercise ${imported.length + 1} has no "sets" list`);
+                    }
                     const groupId = ex.id;
                     const meta = await fetchExerciseMetadata(groupId);
+                    if (meta.failed) {  // default metadata would save a timed or one-sided exercise as plain reps
+                        alert('Nothing was imported: the exercise details could not be loaded from Speediance. Try again.');
+                        return;
+                    }
                     
                     // Lookup title from fullLibrary
                     const libEx = fullLibrary.find(e => e.id == groupId);
@@ -1272,7 +1291,7 @@ You must output a JSON object with the following structure:
                         ? parseInt(presetField)
                         : -1;
 
-                    workoutData.push({
+                    imported.push({
                         internalId: Date.now() + Math.random(),
                         groupId: parseInt(groupId),
                         title: title,
@@ -1292,6 +1311,10 @@ You must output a JSON object with the following structure:
                         auxiliaryMuscleGroupList: meta.auxiliaryMuscleGroupList
                     });
                 }
+                if (data.name) {
+                    document.getElementById('plan-name').value = data.name;
+                }
+                workoutData = imported;
                 renderBuilder();
                 closeImportModal();
                 alert("Workout imported successfully!");
@@ -1454,6 +1477,7 @@ You must output a JSON object with the following structure:
         try {
             const res = await fetch(`/api/stats/${groupId}`);
             const json = await res.json();
+            if (!res.ok) throw new Error('HTTP ' + res.status);
             const numericGroupId = parseInt(groupId, 10);
             const summary = summarizeStats(json);
             exerciseStatsCache.set(numericGroupId, summary);

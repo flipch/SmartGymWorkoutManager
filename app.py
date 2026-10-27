@@ -1,5 +1,5 @@
 from flask import Flask, abort, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, Response
-from api_client import SpeedianceClient, unit_is_confirmed
+from api_client import SpeedianceClient, UpstreamError, _require_ok, unit_is_confirmed
 from auth import load_token, install_flask_auth, install_flask_write_gate
 from features import init_features
 import media
@@ -718,8 +718,8 @@ def edit(code):
     try:
         # Load workout details via code
         workout = client.get_workout_detail(code)
-        library = client.get_library()
-        categories = client.get_categories()
+        library = client.get_library(strict=True)  # an outage must not open an editor that cannot add anything
+        categories = client.get_categories(strict=True)
     except Exception as e:
         if str(e) == "Unauthorized":
             client.logout()
@@ -849,6 +849,7 @@ def api_workout_history_detail(record_id):
         response = client._request('GET', target_url, headers=client._get_headers())
 
         if response.status_code == 200:
+            _require_ok(response, "training detail")  # HTTP 200 with a vendor error code is not a session
             return jsonify(response.json())
         status = 401 if response.status_code == 401 else 502
         return jsonify({"error": f"Speediance API Error: {response.status_code}", "type_requested": training_type}), status

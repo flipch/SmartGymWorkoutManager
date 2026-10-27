@@ -1053,6 +1053,60 @@ class Round19BatchB(unittest.TestCase):
             self.assertEqual(resp.status_code, 302)  # not a 500 page
 
 
+class Round20ServerSide(unittest.TestCase):
+    def test_every_readiness_entry_point_refuses_a_typo(self):
+        c = gym_app.app.test_client()
+        with mock.patch.object(features, "_fresh_readiness", return_value={}), mock.patch.object(features, "_client", mock.Mock(data_dir=tempfile.mkdtemp())):
+            for path in ("/api/coach/autoregulate", "/api/coach/program"):
+                body = {"whoop_recover": 5} if "autoregulate" in path else {"readiness": {"whoop_recover": 5}}
+                resp = c.post(path, headers=BASIC, json=body)
+                self.assertEqual((resp.status_code, resp.get_json()["error"]), (400, "invalid_readiness"), path)
+            self.assertEqual(c.post("/api/coach/autoregulate", headers=BASIC, json={}).status_code, 400)
+        with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), mock.patch.object(features, "_client", mock.Mock(data_dir=tempfile.mkdtemp())):
+            resp = c.post("/api/coach/readiness", headers=BASIC, json={"whoop_recover": 5, "sleep_hours": 8})
+            self.assertEqual(resp.status_code, 400)  # the typo must not be dropped while the sleep reading is saved
+            self.assertEqual(c.post("/api/coach/readiness", headers=BASIC, json={"whoop_recovery": 5, "sleep_hours": 8}).status_code, 200)
+
+    def test_one_sided_training_is_never_balanced(self):
+        def verdict(*names):
+            session = {"date": "2026-10-20", "exercises": [{"name": n, "sets": [{"reps": 10, "weight": 50}] * 3} for n in names]}
+            with mock.patch.object(features, "_detailed_records", return_value=[{"trainingId": 1}]), \
+                    mock.patch.object(features, "fetch_session_detail", return_value=session), mock.patch.object(features, "_history", return_value=[]):
+                return features._deep_insights()["balance"]
+        self.assertEqual(verdict("Bench Press")["verdict"], "push_biased")
+        self.assertEqual(verdict("Seated Row")["verdict"], "pull_biased")
+        self.assertEqual(verdict("Bench Press", "Seated Row")["verdict"], "balanced")
+        self.assertEqual(verdict("Leg Press")["verdict"], "no_data")
+
+    def test_a_vendor_error_inside_http_200_is_not_a_session_detail(self):
+        creds = {"token": "x", "user_id": "42", "unit": 1, "unit_confirmed": True, "region": "Global", "device_type": 1,
+                 "owned_accessories": [], "owned_devices": [], "custom_instruction": "", "allow_monster_moves": False}
+        with mock.patch.object(gym_app.client, "credentials", creds), mock.patch.object(gym_app.client, "load_config", return_value=creds):
+            for body, status in (({"code": 5001, "message": "internal"}, 502), ({"code": 0, "data": {"x": 1}}, 200)):
+                with mock.patch.object(gym_app.client, "_request", return_value=Resp(200, body)):
+                    resp = gym_app.app.test_client().get("/api/workout_history/detail/5?type=5", headers=BASIC)
+                self.assertEqual(resp.status_code, status, body)
+
+    def test_the_editor_page_reports_a_library_outage(self):
+        for down in (("library",), ("categories",)):
+            self.editor_with_outage(down)
+
+    def editor_with_outage(self, down):
+        creds = {"token": "x", "user_id": "42", "unit": 1, "unit_confirmed": True, "region": "Global", "device_type": 1,
+                 "owned_accessories": [], "owned_devices": [], "custom_instruction": "", "allow_monster_moves": False}
+
+        def lib(strict=False, **kw):
+            if strict:
+                raise api_client.UpstreamError("library")
+            return []
+        with mock.patch.object(gym_app.client, "credentials", creds), mock.patch.object(gym_app.client, "load_config", return_value=creds), \
+                mock.patch.object(gym_app.client, "get_workout_detail", return_value={"name": "n", "actionLibraryList": []}), \
+                mock.patch.object(gym_app.client, "get_library", side_effect=lib if "library" in down else lambda **kw: []), \
+                mock.patch.object(gym_app.client, "get_categories", side_effect=lib if "categories" in down else lambda **kw: []):
+            resp = gym_app.app.test_client().get("/edit/abc", headers=BASIC, follow_redirects=True)
+        self.assertIn("Error loading data", resp.get_data(as_text=True), down)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

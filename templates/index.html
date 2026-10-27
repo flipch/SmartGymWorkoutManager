@@ -160,6 +160,7 @@
 </style>
 
 <script>
+    const accountUnit = {{ unit | default(0) | int }};  // 0 kg, 1 lb: the unit the template API stores weights in
     let currentDate = new Date();
 
     // --- First Day of Week (0=Sunday, 1=Monday) stored in localStorage ---
@@ -227,6 +228,7 @@
                 if (!detail) return null;
                 return {
                     name: detail.name || 'Unknown',
+                    weightUnit: accountUnit === 1 ? 'lb' : 'kg',  // the account's unit: the template API stores weights in it
                     exercises: (detail.actionLibraryList || []).map(ex => {
                         const presetId = parseInt(ex.templatePresetId ?? -1);
                         const isRM = presetId !== -1;

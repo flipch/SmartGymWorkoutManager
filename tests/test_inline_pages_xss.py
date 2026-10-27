@@ -67,7 +67,7 @@ globalThis.document = {getElementById: el};
 globalThis.window = {};
 globalThis.PWNED = 0;
 const DATA = %(data)s;
-globalThis.fetch = async (u, o) => ({status: DATA.__status || 200, json: async () => DATA[u.split('?')[0]] ?? DATA.__default ?? {}});
+globalThis.fetch = async (u, o) => ({status: DATA.__status || 200, ok: (DATA.__status || 200) < 400, json: async () => DATA[u.split('?')[0]] ?? DATA.__default ?? {}});
 vm.runInThisContext(%(script)s);
 (async () => {
   %(driver)s

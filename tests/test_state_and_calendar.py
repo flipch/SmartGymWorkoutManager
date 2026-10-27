@@ -222,9 +222,12 @@ class FeedbackStore(unittest.TestCase):
 class ReadinessStore(unittest.TestCase):
     def test_round_trip_is_validated_and_stamped(self):
         d = fresh_dir()
-        keep = features.save_readiness({"whoop_recovery": 55, "junk": 1}, d)
+        keep = features.save_readiness({"whoop_recovery": 55}, d)
         self.assertEqual(set(keep), {"whoop_recovery", "updated", "field_updated"})
         self.assertEqual(features._load_readiness(d), keep)
+        with self.assertRaises(ValueError):  # a typo beside a valid field is not silently dropped
+            features.save_readiness({"whoop_recovery": 56, "junk": 1}, d)
+        self.assertEqual(features._load_readiness(d)["whoop_recovery"], 55)
 
     def test_invalid_does_not_overwrite_the_previous_reading(self):
         d = fresh_dir()

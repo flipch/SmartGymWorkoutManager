@@ -176,6 +176,7 @@
             const resp = await fetch('/api/browse/courses');
             if (resp.status === 401) { window.location.href = '/settings'; return; }
             const data = await resp.json();
+            if (!resp.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));  // never "no courses"
             allCourses = data.courses || [];
             coursesLoaded = true;
 
@@ -345,6 +346,7 @@
             const resp = await fetch('/api/browse/programs?page=1');
             if (resp.status === 401) { window.location.href = '/settings'; return; }
             const data = await resp.json();
+            if (!resp.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));  // never "no programs"
             allPrograms = data.programs || [];
             programLoaded = true;
             const visiblePrograms = allPrograms.filter(p => passesAllFilters(p));

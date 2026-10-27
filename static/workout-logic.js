@@ -137,11 +137,13 @@ function parseImportedSets(sets, isUnilateral, alreadyExpanded) {
  * Build the JSON export object from workoutData.
  * @param {Array} workoutData
  * @param {string} planName
+ * @param {number} unit - 0 kg, 1 lb: the unit `weight` was typed in
  * @returns {Object}
  */
-function buildExportJSON(workoutData, planName) {
+function buildExportJSON(workoutData, planName, unit) {
     return {
         name: planName || 'Custom Workout',
+        weightUnit: unit === 1 ? 'lb' : unit === 0 ? 'kg' : undefined,  // the numbers are NOT convertible without it
         exercises: workoutData.map(ex => ({
             id: ex.groupId,
             title: ex.title,

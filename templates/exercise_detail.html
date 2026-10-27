@@ -312,6 +312,7 @@
         try {
             const res = await fetch(`/api/stats/${exerciseId}`);
             const json = await res.json();
+            if (!res.ok) throw new Error((json && json.error) || ('HTTP ' + res.status));  // never "No history found"
             const rows = getExerciseStatsRows(json);
 
             loading.classList.add('hidden');

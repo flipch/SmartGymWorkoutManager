@@ -254,7 +254,9 @@
         });
     }
 
+    let detailSeq = 0;
     async function openDetail(rec) {
+        const seq = ++detailSeq;  // only the newest request may draw: an older answer must not replace this session's detail
         const modal = document.getElementById('detailModal');
         modal.classList.remove('hidden');
         modal.classList.add('flex');
@@ -273,12 +275,14 @@
         try {
             const resp = await fetch(`/api/history/detail/${rec.trainingId}?type=${apiType}`);
             const data = await resp.json();
+            if (seq !== detailSeq) return;
             if (!resp.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));  // never "no breakdown available"
             currentDetailPayload = { summary: rec, detail: data };
             document.getElementById('detailFooter').classList.remove('hidden');
             document.getElementById('detailLoading').classList.add('hidden');
             renderDetail(data, rec);
         } catch (err) {
+            if (seq !== detailSeq) return;
             console.error('Error fetching detail:', err);
             document.getElementById('detailLoading').textContent = 'Error loading details: ' + err.message;
         }
