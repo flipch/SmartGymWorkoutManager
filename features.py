@@ -1271,9 +1271,10 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
         raise ValueError(f"name must be 1-{name_limit} characters" + (" (the day's label is added to each workout)" if len(targets) > 1 else ""))
     if load_unit is not None and load_unit not in ("kg", "lb"):
         raise ValueError("load_unit must be 'kg' or 'lb'")
-    if load_unit is None and any(x > 0 for _, d in targets for x in _program_loads(d)):
+    program_loads = [x for _, d in targets for x in _program_loads(d)]  # every day is checked (a bool load raises), not just up to the first positive one
+    if load_unit is None and any(x > 0 for x in program_loads):
         raise ValueError("this program has loads: say whether they are in 'kg' or 'lb' (load_unit)")
-    if any(x > 0 for _, d in targets for x in _program_loads(d)) and not _unit_confirmed(client):
+    if any(x > 0 for x in program_loads) and not _unit_confirmed(client):
         raise ValueError("the account's unit (kg or lb) has not been confirmed: choose it on /settings once, "
                          "then loads can be saved")  # the vendor does not expose it, and a wrong guess is 2.2x
     library = client.get_library(strict=True) or []

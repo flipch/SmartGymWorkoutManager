@@ -2936,3 +2936,38 @@ class Round52(unittest.TestCase):
         ramp = tuple([SetResult(name, reps=want, load=10.0, target=want)] * 2 + [SetResult(name, reps=1, load=100.0, target=1)] * 2)
         plan = planner._from_catalog([SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "T", sets=ramp)], self.AUTO, "muscle", 3, "intermediate", day, 10.0, [])[1]
         self.assertIsNotNone(next(x for x in plan if x.name == name).load)
+
+
+class Round53(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def test_the_newer_session_guard_reads_the_sets_at_the_working_load(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        template = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T", sets=tuple(SetResult("Bench", reps=10, load=100.0, target=10) for _ in range(3)))
+        newer = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=(
+            SetResult("Bench", reps=10, load=20.0, target=10), SetResult("Bench", reps=1, load=100.0, target=10),
+            SetResult("Bench", reps=1, load=100.0, target=10), SetResult("Bench", reps=10, load=100.0, target=10)))
+        out = planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26), [template, newer])[0]
+        self.assertIsNone(out.load)  # median 5.5 over all sets, but the working-load sets managed 1, 1 and 10
+        self.assertIn("far from", out.load_basis)
+
+    def test_every_program_day_is_checked_for_a_bool_load_not_just_up_to_the_first_positive_one(self):
+        client = mock.Mock(data_dir=tempfile.mkdtemp(prefix="gym-r53-"), credentials={"token": "x", "unit": 1, "unit_confirmed": True})
+        client.get_library.return_value = []
+        day = lambda load: {"name": "D", "exercises": [{"name": "Press", "primary": "chest", "sets": 2, "reps": 8, "load": load, "rest_sec": 60}]}
+        program = {"goal_label": "G", "days": [day(60), day(True)]}
+        with self.assertRaises(ValueError) as ctx:
+            features.apply_program(client, program, None, None, dry_run=True, load_unit=None)
+        self.assertIn("must be a number", str(ctx.exception))
+
+    def test_a_course_schedule_answered_with_an_html_error_page_is_an_upstream_error(self):
+        with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-r53-")}):
+            client = api_client.SpeedianceClient()
+        client.save_config("1", "tok", "Global", 0, "", 1, False, [], [])
+        bad = Resp(502, None, text="<html>Bad gateway</html>")
+        client._request = lambda method, url, **kw: bad
+        with self.assertRaises(api_client.UpstreamError):
+            client.schedule_course("2026-10-27", 5, 1)
+        self.assertEqual(client.last_debug_info["status"], 502)

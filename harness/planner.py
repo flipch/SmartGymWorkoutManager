@@ -296,7 +296,7 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                 out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
                                             f"a newer session ({nday.isoformat()}) logged this lift as a timed exercise (seconds): choose a load that leaves the target RIR"))
                 continue
-            nreps = sorted(x.reps for x in nsets if x.reps)
+            nreps = _working_reps(nsets)  # the sets at the working load, as the other two guards read them
             if nload <= last and _mid(nreps) < 0.3 * (reps or 0):  # 1 or 2 reps of a 10-rep prescription is not a load to plan on
                 out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
                                             f"a newer session ({nday.isoformat()}) managed about {_mid(nreps)} rep(s) per set, far from the {reps} prescribed: "

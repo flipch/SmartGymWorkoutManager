@@ -778,10 +778,14 @@ class SpeedianceClient:
         }
         try:
             resp = self._request('POST', url, headers=self._get_headers(), json=payload)
+            try:
+                body = resp.json() if resp.content else None
+            except ValueError:  # a proxy's HTML error page: the status check below reports it
+                body = None
             self.last_debug_info = {
                 "url": url, "method": "POST",
                 "request_body": payload,
-                "response_body": resp.json() if resp.content else None,
+                "response_body": body,
                 "status": resp.status_code,
             }
             _require_ok(resp, "course schedule")
