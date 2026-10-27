@@ -251,9 +251,9 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                                             f"a newer session ({nday.isoformat()}) has a side with no completed sets: choose a load that leaves the target RIR"))
                 continue
             nload = anchor_load(nsets)
-            if nload is not None and nload < last:  # lighter since this template: that is where the athlete is now,
+            if nload is not None and nload <= last:  # not heavier since this template: that is where the athlete is now,
                 ntargets = [x.target for x in nsets if x.target]  # and that session's result decides whether to progress
-                last, newer_note = nload, f"; a newer session ({nday.isoformat()}) logged less"
+                last, newer_note = nload, f"; a newer session ({nday.isoformat()}) is the latest evidence"
                 hit_all = bool(ntargets) and all((x.reps or 0) >= x.target for x in nsets if x.target)
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
                                 allow_increase=age < LAYOFF_DAYS, step=_grid(performed))

@@ -1850,6 +1850,55 @@ class Round29(unittest.TestCase):
             self.assertEqual(features._summarize_session(record, detail, "kg")["exercises"][0]["timer"], timer, cm)
 
 
+class Round30(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def test_plural_movement_words_still_count_as_the_movement(self):
+        lib = [{"id": 1, "title": "Cable Chest Fly", "mainMuscleGroupName": "chest", "isLeftRight": 0}]
+        for asked in ("Cable Chest Presses", "Cable Chest Press"):
+            self.assertEqual(features.resolve_exercise(lib, asked, "chest")["confidence"], "low", asked)
+        self.assertEqual(features._movement_tokens("Chest Presses"), {"press"})
+        self.assertEqual(features._movement_tokens("Biceps Curls"), {"curl"})
+
+    def test_a_two_handed_request_is_not_filled_by_a_one_sided_exercise(self):
+        lib = [{"id": 1, "title": "Single Arm Cable Chest Press", "mainMuscleGroupName": "chest", "isLeftRight": 1}]
+        self.assertEqual(features.resolve_exercise(lib, "Dual-Handle Cable Chest Press", "chest", False)["confidence"], "low")
+        self.assertNotEqual(features.resolve_exercise(lib, "Single Arm Cable Chest Press", "chest", True)["confidence"], "low")
+        self.assertNotEqual(features.resolve_exercise(lib, "One-Arm Cable Chest Press", "chest", False)["confidence"], "low")
+        self.assertNotEqual(features.resolve_exercise(lib, "Cable Chest Press", "chest", True)["confidence"], "low")  # the caller said one-sided
+        bilateral = [{"id": 2, "title": "Cable Chest Press", "mainMuscleGroupName": "chest", "isLeftRight": 0}]
+        self.assertEqual(features.resolve_exercise(bilateral, "Single Arm Cable Chest Press", "chest", True)["confidence"], "low")
+
+    def test_a_newer_session_at_the_same_load_that_missed_its_reps_stops_progression(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        template = SessionResult("1", date(2026, 10, 17), 1_790_000_000_000, "T", sets=tuple(SetResult("Bench", reps=10, load=100.0, target=10) for _ in range(3)))
+        missed = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Bench", reps=4, load=100.0, target=10) for _ in range(3)))
+        out = planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26), [template, missed])
+        self.assertLessEqual(out[0].load, 100.0)
+        self.assertIn("not every set", out[0].load_basis)
+        heavier = SessionResult("3", date(2026, 10, 25), 1_792_100_000_000, "Other", sets=tuple(SetResult("Bench", reps=10, load=120.0, target=10) for _ in range(3)))
+        out = planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26), [template, heavier])
+        self.assertGreaterEqual(out[0].load, 100.0)  # a heavier newer session does not lower the anchor
+
+    def test_timed_sets_make_no_strength_estimate(self):
+        from datetime import datetime
+        def lifts(completion_method):
+            recs, summaries = [], []
+            for day in (20, 22):
+                rec = {"trainingId": day, "startTimestamp": int(datetime(2026, 10, day).timestamp() * 1000), "title": "T", "type": 5}
+                detail = [{"actionLibraryName": "Cable Row", "completionMethod": completion_method, "totalCapacity": 6000,
+                           "finishedReps": [{"finishedCount": 10, "targetCount": 10, "time": 60, "capacity": 600,
+                                             "trainingInfoDetail": {"weights": [60.0] * 10}}]}]
+                recs.append(rec); summaries.append(features._summarize_session(rec, detail, "lb"))
+            with mock.patch.object(features, "_detailed_records", return_value=recs), \
+                    mock.patch.object(features, "fetch_session_detail", side_effect=summaries):
+                return features._deep_insights()["lifts"]
+        self.assertTrue(lifts(1))  # the control: a rep-based row gets an e1RM series
+        self.assertEqual(lifts(2), [])  # seconds are not repetitions
+        self.assertEqual(lifts(0), [])
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

@@ -1225,3 +1225,25 @@ test('the workout history page: a failed search leaves nothing exportable', asyn
 test('the history detail shows a Row/Ski timed set as a duration', () => {
     assert.match(read('history.html'), /const isTimer = ex\.completionMethod === 0 \|\| ex\.completionMethod === 2;/);
 });
+
+// ----------------------------------------------------------------------------------------------- round 30
+test('the coach page keeps the newest request\'s program, whichever answer arrives last', async () => {
+    const waiting = [];
+    const { ctx, doc } = coachPage(() => new Promise((resolve) => waiting.push(resolve)));
+    const a = ctx.api.gen();
+    const b = ctx.api.gen();
+    waiting[1]({ ok: true, status: 200, json: async () => aProgram({ goal_label: 'FATLOSS' }) }); await b;
+    waiting[0]({ ok: true, status: 200, json: async () => aProgram({ goal_label: 'STRENGTH' }) }); await a;
+    assert.match(doc.getElementById('out').innerHTML, /FATLOSS/);
+    assert.doesNotMatch(doc.getElementById('out').innerHTML, /STRENGTH/);
+});
+
+test('the coach page: an older request that fails does not replace the newer program', async () => {
+    const waiting = [];
+    const { ctx, doc } = coachPage(() => new Promise((resolve, reject) => waiting.push({ resolve, reject })));
+    const a = ctx.api.gen();
+    const b = ctx.api.gen();
+    waiting[1].resolve({ ok: true, status: 200, json: async () => aProgram({ goal_label: 'FATLOSS' }) }); await b;
+    waiting[0].reject(new Error('offline')); await a;
+    assert.match(doc.getElementById('out').innerHTML, /FATLOSS/);
+});

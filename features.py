@@ -215,7 +215,7 @@ def _deep_insights(days=90, max_sessions=24):
             for s in ex.get("sets", []):
                 w, reps = _set_weight(s), (s.get("reps") or 0)
                 mw = max(mw, w)
-                if w > 0 and reps > 0 and not s.get("weight_note"):  # a drop set's reps were not all at the peak: no e1RM from it
+                if w > 0 and reps > 0 and not s.get("weight_note") and not ex.get("timer"):  # a drop set's reps were not all at the peak: no e1RM from it
                     e = _epley(w, reps)
                     if best is None or e > best:
                         best = e
@@ -999,8 +999,7 @@ def _movement_tokens(s):
     out = set()
     for t in text.split():
         t = {"flye": "fly", "flyes": "fly", "flies": "fly", "flys": "fly"}.get(t, t)
-        if t.endswith("s") and not t.endswith("ss") and len(t) > 3:
-            t = t[:-1]
+        t = coach._stem(t)  # presses -> press, flies -> fly, raises -> raise
         if t in _MOVEMENT:
             out.add(t)
     return out
@@ -1020,6 +1019,7 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
         return None
     coach_variant = _variant_tokens(name)
     coach_movement = _movement_tokens(name)
+    req_uni = bool(unilateral) or bool(re.search(r"\b(single|one[- ]arm|one[- ]leg|unilateral|alternating)\b", (name or "").lower()))
     anchor = _MUSCLE_ANCHOR.get((goal_muscle or "").lower(), set())
     if not anchor:  # no muscle given: what the NAME itself says ("Leg extension" is quads) must still match the library entry
         anchor = _MUSCLE_ANCHOR.get((coach.classify_exercise(name)[0] or "").lower(), set())
@@ -1046,7 +1046,7 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
             score -= 0.10
         key = (score, -len(lib_tokens))
         if best is None or key > best[0]:
-            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1, _variant_tokens(title) != coach_variant or bool(coach_movement and _movement_tokens(title) != coach_movement))
+            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1, _variant_tokens(title) != coach_variant or bool(coach_movement and _movement_tokens(title) != coach_movement), is_uni != req_uni)
     if best is None:
         cands = sorted((len(_norm_tokens(ex.get("title") or "")), ex.get("id"), ex.get("title"))
                        for ex in library if isinstance(ex, dict) and ex.get("id")
@@ -1058,7 +1058,7 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
         return None
     score = best[4]
     conf = "high" if score >= 1.0 else "med" if score >= 0.55 else "low"
-    if best[6]:  # a different angle, direction or movement ("Decline press", "Chest fly" for a press)
+    if best[6] or best[7]:  # a one-sided exercise for a two-handed request (or the reverse) is a different load; a different angle, direction or movement ("Decline press", "Chest fly" for a press)
         # "Decline press" must not be saved as "Incline press" (or any other angle or direction)
         conf = "low"
     if anchor:  # the movement must train the muscle the coach named: "Leg extension" is not "Triceps extension"
@@ -1309,14 +1309,17 @@ a{color:#58a6ff}
 <script>
 const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const $=id=>document.getElementById(id);
+let genSeq=0;
 async function gen(){
+  const mine=++genSeq;
   $('out').innerHTML='<p class=muted>Generating…</p>';
   const body={goal:$('goal').value,days_per_week:+$('days').value,experience:$('exp').value};
   const r={}; if($('whoop').value)r.whoop_recovery=+$('whoop').value; if($('sleep').value)r.sleep_hours=+$('sleep').value;
   if(Object.keys(r).length)body.readiness=r;
   let resp,p;
   try{ resp=await fetch('/api/coach/program',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); p=await resp.json(); }
-  catch(e){ $('out').innerHTML='<p class=warn>Could not reach the server.</p>'; return; }
+  catch(e){ if(mine!==genSeq)return; $('out').innerHTML='<p class=warn>Could not reach the server.</p>'; return; }
+  if(mine!==genSeq)return;  // a newer request was started: its answer is the one on screen
   if(!resp.ok||!p||!p.review){ $('out').innerHTML='<p class=warn>'+esc((p&&(p.message||p.error))||('HTTP '+resp.status))+'</p>'; return; }
   render(p);
 }
