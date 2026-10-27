@@ -274,7 +274,7 @@ def recovery_recommendation() -> dict:
         c = _client(); _require_auth(c)
         end = date.today(); start = end - timedelta(days=21)
         recs = c.get_training_history(start.isoformat(), end.isoformat())
-        return recovery_advice(_session_dates(recs if isinstance(recs, list) else []), date.today())
+        return recovery_advice(_session_dates(recs if isinstance(recs, list) else []), date.today(), len(recs) if isinstance(recs, list) else 0)
     return _safe(run)
 
 
@@ -427,12 +427,12 @@ def autoregulate(whoop_recovery: float = None, hrv_vs_baseline: str = None,
 def log_feedback(rpe: float = None, difficulty: str = None, completion: str = None,
                  soreness: int = None, pain: bool = None, avoid: str = None,
                  exercise: str = None, note: str = None) -> dict:
-    """Tell the coach how a session went — this PERSISTS and adapts future programs in real
-    time (the next generate_program automatically reflects it). Provide any subset:
-    rpe (1-10), difficulty (too_easy|ok|too_hard), completion (missed|as_prescribed|exceeded),
-    soreness (1-5), pain (true → flags `exercise` to avoid), avoid (exercise name to drop),
-    exercise (which lift this is about), note (free text). Returns the updated profile and how
-    the next program will change."""
+    """Tell the coach how a session went — this PERSISTS. rpe, difficulty, soreness, pain and avoid
+    adapt the next generate_program; completion (missed|as_prescribed|exceeded) and note are recorded
+    in the log but do not change a program yet. Provide any subset: rpe (1-10),
+    difficulty (too_easy|ok|too_hard), soreness (1-5), pain (true → flags `exercise` to avoid),
+    avoid (exercise name to drop), exercise (which lift this is about). Returns the updated profile
+    and how the next program will change."""
     def run():
         c = _client()
         payload = {k: v for k, v in {

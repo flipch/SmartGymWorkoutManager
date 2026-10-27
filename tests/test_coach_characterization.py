@@ -25,7 +25,7 @@ READINESS_CASES = [
     {"whoop_recovery": 20, "sleep_hours": 8, "subjective": 5},
 ]
 PROGRAM_CASES = [("muscle", 4, "intermediate"), ("strength", 3, "beginner"), ("fatloss", 5, "advanced"),
-                 ("general", 2, "intermediate"), ("muscle", 1, "beginner"), ("nonsense", 9, "nobody")]
+                 ("general", 2, "intermediate"), ("muscle", 1, "beginner")]
 
 
 def program_summary(goal, days, exp):

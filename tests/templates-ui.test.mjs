@@ -1147,3 +1147,27 @@ test('an imported exercise id that is not a number never becomes a fetch path', 
     await ctx.f('451234567890123');
     assert.deepEqual(fetched, ['/api/exercise/451234567890123']);
 });
+
+// ----------------------------------------------------------------------------------------------- round 27
+test('only the newest import lands, whichever finishes last', async () => {
+    const gates = [];
+    const { ctx, doc } = editor(() => new Promise((resolve) => gates.push(resolve)));
+    const first = importJson(ctx, doc, { name: 'a', exercises: [{ id: 5, sets: [{ reps: 10, weight: 100, rest: 60 }] }] });
+    const second = importJson(ctx, doc, { name: 'b', exercises: [{ id: 6, sets: [{ reps: 10, weight: 20, rest: 60 }] }] });
+    while (gates.length < 2) await new Promise((r) => setTimeout(r, 1));
+    gates[1](metaOf()); await second;
+    gates[0](metaOf()); await first;
+    same(ctx.workoutData.map((e) => e.sets[0].weight), [20]);
+});
+
+test('an imported exercise takes its goal unit from the exercise, not from the file', async () => {
+    const timed = editor(() => metaOf({ completionMethod: 2 }));
+    await importJson(timed.ctx, timed.doc, { name: 'n', exercises: [{ id: 5, sets: [{ reps: 60, weight: 20 }] }] });
+    assert.equal(timed.ctx.workoutData[0].sets[0].unit, 'sec');
+    const repBased = editor(() => metaOf({ completionMethod: 1 }));
+    await importJson(repBased.ctx, repBased.doc, { name: 'n', exercises: [{ id: 5, sets: [{ reps: 10, weight: 20, unit: 'sec' }] }] });
+    assert.equal(repBased.ctx.workoutData[0].sets[0].unit, 'reps');
+    const free = editor(() => metaOf());
+    await importJson(free.ctx, free.doc, { name: 'n', exercises: [{ id: 5, sets: [{ reps: 60, weight: 20, unit: 'sec' }] }] });
+    assert.equal(free.ctx.workoutData[0].sets[0].unit, 'sec');  // no forced unit: the file's choice stands
+});

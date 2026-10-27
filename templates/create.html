@@ -334,6 +334,7 @@
     }
 
     let templateLoading = false;  // adding or saving while the existing template is still loading would overwrite it with a partial plan
+    let importSeq = 0;  // only the newest import may replace the plan
     let templateLoadFailed = false;  // a template that could not be loaded must never be saved over: the plan on screen is not the saved one
     function editorBlocker() {
         if (templateLoading) return 'The workout is still loading: wait a moment, then try again.';
@@ -1262,6 +1263,7 @@ You must output a JSON object with the following structure:
         const jsonStr = document.getElementById('import-json').value;
         const blocked = editorBlocker();
         if (blocked) { alert(blocked); return; }
+        const mySeq = ++importSeq;
         try {
             let data = JSON.parse(jsonStr);
             if (Array.isArray(data)) {  // the dashboard export is a list of workouts; one of them can be imported at a time
@@ -1328,6 +1330,8 @@ You must output a JSON object with the following structure:
                     // AI-generated or manual JSON without the flag will be expanded as before.
                     const alreadyExpanded = !!ex.isUnilateralExpanded;
                     const finalSets = parseImportedSets(setsParsed, meta.isUnilateral, alreadyExpanded);
+                    const goalUnit = WorkoutLogic.getSetGoalUnit({ completionMethod: meta.completionMethod, selectCompletionMethod: meta.selectCompletionMethod });
+                    if (goalUnit === 'sec' || goalUnit === 'reps') finalSets.forEach(s => { s.unit = goalUnit; });  // the exercise decides, whatever the file says
 
                     // Determine the preset: use the exported preset field if present, else default to Custom (-1).
                     const presetField = (ex.preset !== undefined && ex.preset !== null) ? ex.preset : ex.presetId;  // the AI prompt asks for presetId
@@ -1374,6 +1378,7 @@ You must output a JSON object with the following structure:
                 if (data.name) {
                     document.getElementById('plan-name').value = data.name;
                 }
+                if (mySeq !== importSeq) return;  // a newer import was started while this one was fetching: it wins
                 workoutData = imported;
                 renderBuilder();
                 closeImportModal();

@@ -24,6 +24,9 @@ from .normalize import session_header, session_with_sets
 from .speediance import DETAIL_ENDPOINT, SpeedianceNano
 
 
+NEWER_DETAIL_MAX = 3  # sessions newer than the chosen template whose sets are read (the protection against an old, too-heavy anchor)
+
+
 def sessions_from_records(records: list[dict], details: dict[int, list], tz: str, unit: str | None) -> list[SessionResult]:
     """Headers for every record; per-set detail where we have it (newest first)."""
     out = []
@@ -46,6 +49,11 @@ def load_live(now: datetime, tz: str, days: int, detail_n: int, unit: str | None
     if title is not None:
         newest = planner.newest_with_title(headers, title)
         wanted += [r for r in records if str(r.get("trainingId")) == newest.source_id]
+        started = {h.source_id: h.started_at_ms for h in headers}  # a newer session may say the old template's load is too heavy
+        newer = sorted((r for r in records if r.get("type") in DETAIL_ENDPOINT and r not in wanted
+                        and started.get(str(r.get("trainingId")), 0) > newest.started_at_ms),
+                       key=lambda r: started.get(str(r.get("trainingId")), 0), reverse=True)
+        wanted += newer[:NEWER_DETAIL_MAX]
     others = sorted((r for r in records if r.get("type") in DETAIL_ENDPOINT and r not in wanted),
                     key=lambda r: r.get("startTimestamp") or 0, reverse=True)
     wanted += others[: max(0, detail_n - len(wanted))]

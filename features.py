@@ -329,7 +329,7 @@ def api_recovery():
         recs = _history(21)
     except HistoryUnavailable as err:
         return _history_unavailable_response(err)
-    return jsonify({"authenticated": True, **recovery_advice(_session_dates(recs), date.today())})
+    return jsonify({"authenticated": True, **recovery_advice(_session_dates(recs), date.today(), len(recs) if isinstance(recs, list) else 0)})
 
 
 # --------------------------------------------------- Feature 2: iCal feed

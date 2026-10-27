@@ -7,6 +7,8 @@ from statistics import median
 
 from .errors import SchemaDrift
 from .localday import DEFAULT_TZ, local_day
+import math
+
 from .model import SessionResult, SetResult
 
 SOURCE = "speediance"
@@ -29,11 +31,11 @@ def _first_nonzero_weights(set_row: dict) -> list:
 def set_load(set_row: dict) -> float | None:
     """Representative working load for one set: median of positive per-rep loads (robust to
     chains/eccentric mid-set changes); else capacity/reps; else None. Unit is NOT inferred here."""
-    weights = [w for w in _first_nonzero_weights(set_row) if w > 0]
+    weights = [w for w in _first_nonzero_weights(set_row) if w > 0 and math.isfinite(w)]
     if weights:
         return float(median(weights))
     reps, capacity = set_row.get("finishedCount") or 0, set_row.get("capacity") or 0
-    if reps and capacity:
+    if isinstance(reps, (int, float)) and isinstance(capacity, (int, float)) and reps > 0 and capacity > 0 and math.isfinite(capacity):
         return round(capacity / reps, 2)
     return None
 

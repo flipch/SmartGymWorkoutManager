@@ -103,7 +103,7 @@ def side_missing(sets) -> bool:
     """A one-sided exercise where one side logged no completed set."""
     sides = {s.side for s in sets if s.side}
     done = {s.side for s in sets if s.side and s.load and (s.reps or getattr(s, "seconds", None))}
-    return bool(sides) and sides != done
+    return bool(sides) and done != {"left", "right"}  # logging only the left side is a half-done lift too
 
 
 def anchor_load(sets) -> float | None:
@@ -221,7 +221,8 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
         reps = Counter(targets).most_common(1)[0][0] if targets else None
         n_sets = len(targets) or len(rows)
         if auto["volume_pct"] < 0:
-            n_sets = max(1, round(n_sets * (1 + auto["volume_pct"] / 100.0)))
+            pair = 2 if any(r.side for r in rows) else 1  # a one-sided lift is saved in left/right pairs
+            n_sets = pair * max(1, round(n_sets / pair * (1 + auto["volume_pct"] / 100.0)))
         loads = [r.load for r in performed if r.load]
         if too_old:
             out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,

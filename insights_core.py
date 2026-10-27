@@ -61,8 +61,11 @@ def summarize(dates, today: date) -> dict:
     }
 
 
-def recovery_advice(dates, today: date) -> dict:
+def recovery_advice(dates, today: date, records_seen: int = 0) -> dict:
     days = _usable(dates, today)
+    if (records_seen or dates) and not days:  # history came back, but no record has a usable date: that is not "rested"
+        return {"recommendation": "unknown", "message": "Training history came back but no record had a usable date, so recovery cannot be judged.",
+                "days_since_last": None, "sessions_last_7d": 0}
     last7 = in_last(days, today, 7)
     days_since = (today - days[-1]).days if days else None
     if days_since is None or days_since >= 3:

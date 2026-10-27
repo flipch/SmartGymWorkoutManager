@@ -7,6 +7,7 @@ Rules (from the pre-mortem / skeptic review, enforced server-side rather than in
   * optional absolute cap and optional known-exercise whitelist (both need user-supplied facts, so default off);
   * readiness inputs older than `max_age_h` do not count.
 """
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterable
@@ -41,7 +42,11 @@ def validate_exercises(exercises: Iterable[ProposedExercise], *, max_jump_pct: f
             out.append(Violation("mode_not_allowed", ex.name, f"mode {ex.mode!r} not in {sorted(allowed_modes)}"))
         if known_exercises is not None and ex.name not in known_exercises:
             out.append(Violation("unknown_exercise", ex.name, "not in the user's exercise library"))
-        if ex.load is not None:
+        if ex.load is not None and not (isinstance(ex.load, (int, float)) and math.isfinite(ex.load) and ex.load > 0):
+            out.append(Violation("bad_load", ex.name, f"load {ex.load!r} is not a positive finite number"))
+        elif ex.last_load is not None and not (isinstance(ex.last_load, (int, float)) and math.isfinite(ex.last_load) and ex.last_load > 0):
+            out.append(Violation("bad_load", ex.name, f"last logged load {ex.last_load!r} is not a positive finite number"))
+        elif ex.load is not None:
             if ex.last_load is None:
                 out.append(Violation("unanchored_load", ex.name, "load proposed without a logged load to anchor it"))
             elif ex.load > ex.last_load * (1 + max_jump_pct / 100.0) + 1e-9:

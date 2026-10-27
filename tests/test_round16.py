@@ -1656,6 +1656,82 @@ class Round26(unittest.TestCase):
         self.assertNotIn("first_var.coach.name", html)
 
 
+class Round27(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def test_logging_only_one_side_is_a_half_done_lift(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        left_only = [SetResult("Split Squat", reps=8, load=40.0, side="left", target=8)] * 3
+        self.assertTrue(planner.side_missing(left_only))
+        self.assertIsNone(planner.anchor_load(left_only))
+        template = SessionResult("1", date(2026, 10, 20), 1_791_000_000_000, "T", sets=tuple(left_only))
+        out = planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26))
+        self.assertIsNone(out[0].load)
+        both = left_only + [SetResult("Split Squat", reps=8, load=40.0, side="right", target=8)] * 3
+        self.assertFalse(planner.side_missing(both))
+
+    def test_a_reduced_one_sided_session_keeps_whole_pairs(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        sets = tuple(SetResult("Split Squat", reps=8, load=40.0, side=side, target=8) for side in ("left", "right") for _ in range(4))
+        template = SessionResult("1", date(2026, 10, 20), 1_791_000_000_000, "T", sets=sets)
+        out = planner._from_template(template, {**self.AUTO, "volume_pct": -40}, 5.0, date(2026, 10, 26))
+        self.assertEqual(out[0].sets % 2, 0)
+        self.assertGreaterEqual(out[0].sets, 2)
+
+    def test_the_live_tracer_reads_the_sessions_newer_than_the_template(self):
+        from datetime import datetime, timezone
+        from harness import tracer
+        day = lambda d: int(datetime(2026, 10, d, 12, tzinfo=timezone.utc).timestamp() * 1000)
+        records = [{"trainingId": 1, "startTimestamp": day(10), "title": "Push", "type": 5},
+                   {"trainingId": 2, "startTimestamp": day(20), "title": "Pull", "type": 5},
+                   {"trainingId": 3, "startTimestamp": day(5), "title": "Legs", "type": 5}]
+        fetched = []
+
+        class Stub:
+            def __init__(self, **kw): pass
+            def history(self, a, b): return records
+            def detail(self, tid, typ):
+                fetched.append(tid)
+                return []
+        with mock.patch.object(tracer, "SpeedianceNano", Stub):
+            tracer.load_live(datetime(2026, 10, 26, 7, tzinfo=timezone.utc), "UTC", 60, 1, "lb", "Push")
+        self.assertEqual(sorted(fetched), [1, 2])  # the template, and the newer session; not the older Legs
+
+    def test_negative_and_non_finite_loads_are_bad_history(self):
+        from harness import interlocks, normalize
+        from harness.model import ProposedExercise
+        self.assertIsNone(normalize.set_load({"finishedCount": 8, "capacity": -320}))
+        self.assertIsNone(normalize.set_load({"finishedCount": 8, "capacity": float("inf")}))
+        self.assertIsNone(normalize.set_load({"finishedCount": -8, "capacity": 320}))
+        self.assertEqual(normalize.set_load({"finishedCount": 8, "capacity": 320}), 40.0)
+        self.assertEqual(normalize.set_load({"trainingInfoDetail": {"weights": [float("inf"), float("inf"), 20]}}), 20.0)
+        for load, last in ((-44.0, -40.0), (float("nan"), 40.0), (float("inf"), float("inf")), (0.0, 40.0), (44.0, -40.0)):
+            ex_ = ProposedExercise("Bench", 3, 8, 2, "standard", load, "x", last_load=last)
+            self.assertTrue(any(v.code == "bad_load" for v in interlocks.validate_exercises([ex_])), (load, last))
+        ok = ProposedExercise("Bench", 3, 8, 2, "standard", 42.0, "x", last_load=40.0)
+        self.assertEqual(interlocks.validate_exercises([ok]), [])
+
+    def test_recovery_with_undatable_history_is_unknown_not_rested(self):
+        from datetime import date
+        import insights_core
+        got = insights_core.recovery_advice([], date(2026, 10, 26), records_seen=2)
+        self.assertEqual(got["recommendation"], "unknown")
+        self.assertEqual(insights_core.recovery_advice([], date(2026, 10, 26))["recommendation"], "train")  # truly no history
+
+    def test_a_typo_in_the_program_request_is_an_error_not_a_different_program(self):
+        import coach
+        for kw in ({"goal": "strenth"}, {"experience": "beginer"}, {"days_per_week": 9}, {"days_per_week": 0}, {"days_per_week": "3"}, {"days_per_week": True}):
+            with self.assertRaises(ValueError, msg=str(kw)):
+                coach.generate_program(**kw)
+        self.assertEqual(coach.generate_program(goal="strength", days_per_week=3, experience="beginner")["days_per_week"], 3)
+        resp = gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"goal": "strenth"})
+        self.assertEqual(resp.status_code, 400)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

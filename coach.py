@@ -349,9 +349,12 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
     feedback: optional derived feedback profile → adapts volume/RIR and avoids exercises.
     Returns a structured dict (JSON-serialisable).
     """
-    goal = goal if goal in GOALS else "general"
-    days_per_week = max(1, min(5, int(days_per_week)))
-    experience = experience if experience in EXPERIENCE else "intermediate"
+    if goal not in GOALS:
+        raise ValueError(f"unknown goal {goal!r}: use one of {', '.join(GOALS)}")  # a typo must not become a different program
+    if experience not in EXPERIENCE:
+        raise ValueError(f"unknown experience {experience!r}: use one of {', '.join(EXPERIENCE)}")
+    if isinstance(days_per_week, bool) or not isinstance(days_per_week, int) or not 1 <= days_per_week <= 5:
+        raise ValueError("days_per_week must be a whole number from 1 to 5")
     g = GOALS[goal]
     exp = EXPERIENCE[experience]
     one_rm = one_rm or {}
