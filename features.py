@@ -990,7 +990,7 @@ _MUSCLE_ANCHOR = {
 }
 
 
-_VARIANT = {"incline", "decline", "reverse", "overhead", "front", "rear", "lateral"}  # change the movement, not just the gear
+_VARIANT = {"incline", "decline", "reverse", "overhead", "front", "rear", "lateral", "upright", "side", "sumo", "curtsy"}  # change the movement, not just the gear
 
 
 def _variant_tokens(s):

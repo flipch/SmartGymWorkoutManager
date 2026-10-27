@@ -257,7 +257,7 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                 out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
                                             f"a newer session ({nday.isoformat()}) logged this lift with no completed set: choose a load that leaves the target RIR"))
                 continue
-            if nload <= last and not any(x.reps for x in nsets):  # logged as a timed exercise: no evidence for a rep prescription
+            if not any(x.reps for x in nsets):  # logged as a timed exercise, whatever its load: no evidence for a rep prescription
                 out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
                                             f"a newer session ({nday.isoformat()}) logged this lift as a timed exercise (seconds): choose a load that leaves the target RIR"))
                 continue

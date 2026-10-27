@@ -1260,6 +1260,7 @@ You must output a JSON object with the following structure:
     };
 
     window.closeImportModal = () => {
+        importSeq++;  // Cancel (or a finished import) must also stop an import that is still fetching: a late one would replace edits made since
         document.getElementById('import-modal').classList.add('hidden');
         document.getElementById('import-modal').classList.remove('flex');
     };

@@ -2180,3 +2180,33 @@ class Round36(unittest.TestCase):
         for _ in range(200_000):
             deep_bad = [deep_bad]
         self.assertFalse(features._all_finite(deep_bad))
+
+
+class Round37(unittest.TestCase):
+    def test_plural_names_ending_in_ches_shes_xes_are_the_same_exercise(self):
+        import coach
+        for plural, single in (("Cable crunches", "Cable crunch"), ("Dumbbell benches", "Dumbbell bench"), ("Box squats", "Box squat"), ("Boxes", "Box")):
+            self.assertEqual(coach._norm_name(plural), coach._norm_name(single), plural)
+        base = coach.generate_program(goal="muscle", days_per_week=4)
+        crunch = next(e["name"] for d in base["days"] for e in d["exercises"] if "crunch" in e["name"].lower())
+        program = coach.generate_program(goal="muscle", days_per_week=4, feedback={"avoid": [crunch.lower() + "es" if crunch.lower().endswith("ch") else crunch.lower() + "es"]})
+        self.assertFalse([e for d in program["days"] for e in d["exercises"] if "crunch" in e["name"].lower()])
+        self.assertEqual(program["avoid_unmatched"], [])
+
+    def test_a_different_side_upright_or_sumo_movement_is_not_a_high_confidence_match(self):
+        lib = [{"id": 1, "title": "Single-Arm Upright Row", "mainMuscleGroupName": "trapezius", "isLeftRight": 1},
+               {"id": 2, "title": "Cable Side Lunge", "mainMuscleGroupName": "quadriceps", "isLeftRight": 0},
+               {"id": 3, "title": "Sumo Deadlift", "mainMuscleGroupName": "hamstrings", "isLeftRight": 0}]
+        for name, muscle in (("Single-arm row", "back"), ("Lunge", "quads"), ("Deadlift", "hamstrings")):
+            self.assertEqual(features.resolve_exercise(lib, name, muscle, name.startswith("Single"))["confidence"], "low", name)
+        self.assertNotEqual(features.resolve_exercise(lib, "Cable Side Lunge", "quads")["confidence"], "low")  # the control: its own name
+
+    def test_heavier_timed_only_newer_evidence_does_not_progress_a_rep_prescription(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        template = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T", sets=tuple(SetResult("Cable Row", reps=10, load=80.0, target=10) for _ in range(3)))
+        for load in (79.0, 80.0, 81.0, 100.0):
+            timed = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Cable Row", reps=0, seconds=45, load=load) for _ in range(3)))
+            out = planner._from_template(template, {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}, 5.0, date(2026, 10, 26), [template, timed])
+            self.assertIsNone(out[0].load, load)

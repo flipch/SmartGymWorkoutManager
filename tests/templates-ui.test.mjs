@@ -1402,3 +1402,20 @@ test('two exercises added together cannot take the plan past 50', async () => {
     await Promise.all([ctx.addExerciseToPlan(7, 'A', ''), ctx.addExerciseToPlan(8, 'B', '')]);  // both pass the first check at 49
     assert.equal(ctx.workoutData.length, 50);
 });
+
+test('cancelling the import dialog stops an import that is still fetching', async () => {
+    let release;
+    const slow = new Promise((r) => { release = r; });
+    const { ctx, doc } = editor(() => slow.then(() => metaOf()));
+    const src = read('create.html');
+    vm.runInContext(between(src, 'window.closeImportModal = () =>', '\n    };\n') + '\n};\nglobalThis.closeImportModal = window.closeImportModal;', ctx);  // the real one, not the stub
+    ctx.workoutData = [{ sentinel: true }];
+    doc.getElementById('plan-name').value = 'mine';
+    const importing = importJson(ctx, doc, { name: 'Theirs', exercises: [{ id: 6, sets: [{ reps: 10, weight: 20 }] }] });
+    ctx.window.closeImportModal();  // Cancel
+    ctx.workoutData[0].edited = true;  // an edit made after the cancel
+    release();
+    await importing;
+    same(ctx.workoutData, [{ sentinel: true, edited: true }]);
+    assert.equal(doc.getElementById('plan-name').value, 'mine');
+});
