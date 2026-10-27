@@ -147,7 +147,7 @@ class AccessJwt:
         self.audience = audience
         self._key_for = key_for or self._default_key_for()
 
-    FETCH_COOLDOWN_S = 30  # after a failed key fetch, refuse without fetching again (forged tokens must not amplify into fetches)
+    FETCH_COOLDOWN_S = 30  # after the key ENDPOINT failed, do not refetch for this long while no keys are cached
 
     def _default_key_for(self):
         import time
@@ -156,11 +156,14 @@ class AccessJwt:
         state = {"retry_at": 0.0}
 
         def key_for(token):
-            if time.monotonic() < state["retry_at"]:
+            # Only an unreachable endpoint with nothing cached cools down. A token naming an unknown kid must NOT: that is
+            # attacker-controlled, and would lock the real user out (PyJWT rate-limits its own unknown-kid refresh).
+            cached = client.jwk_set_cache is not None and client.jwk_set_cache.get() is not None
+            if not cached and time.monotonic() < state["retry_at"]:
                 raise OSError("signing keys unavailable (cooling down)")
             try:
                 return client.get_signing_key_from_jwt(token).key
-            except Exception:
+            except jwt.PyJWKClientConnectionError:
                 state["retry_at"] = time.monotonic() + self.FETCH_COOLDOWN_S
                 raise
         return key_for

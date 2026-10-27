@@ -256,18 +256,40 @@ class CloudflareAccessAssertion(unittest.TestCase):
         self.assertEqual(calls, [], "claims that cannot pass must not reach the key lookup")
         self.assertEqual(access.email(self.jwt()), self.EMAIL)
         self.assertEqual(len(calls), 1)
-        # the real key lookup: one failed fetch, then refusals without a second fetch until the cooldown ends
+        # the real key lookup: an unreachable endpoint with nothing cached fetches once, then refuses until the cooldown ends
         import jwt as pyjwt
         fetches = []
 
-        def fail(self_, *a, **k):
+        def down(self_, *a, **k):
             fetches.append(1)
-            raise pyjwt.PyJWKClientError("down")
-        with patch.object(pyjwt.PyJWKClient, "get_signing_key_from_jwt", fail):
+            raise pyjwt.PyJWKClientConnectionError("down")
+        with patch.object(pyjwt.PyJWKClient, "fetch_data", down):
             real = auth.AccessJwt(self.TEAM, self.AUD, [self.EMAIL])
             for _ in range(5):
                 self.assertIsNone(real.email(self.jwt()))
         self.assertEqual(len(fetches), 1)
+
+    def test_a_forged_unknown_kid_cannot_lock_the_real_user_out(self):
+        import json as _json
+        import jwt as pyjwt
+        from jwt.algorithms import RSAAlgorithm
+        jwk = _json.loads(RSAAlgorithm.to_jwk(self.key.public_key()))
+        jwk.update({"kid": "real", "use": "sig", "alg": "RS256"})
+        with patch.object(pyjwt.PyJWKClient, "fetch_data", lambda self_: {"keys": [jwk]}):
+            real = auth.AccessJwt(self.TEAM, self.AUD, [self.EMAIL])
+            good = lambda: pyjwt.encode(self.claims(), self.key, algorithm="RS256", headers={"kid": "real"})
+            forged = pyjwt.encode(self.claims(), self.other, algorithm="RS256", headers={"kid": "unknown"})
+            self.assertEqual(real.email(good()), self.EMAIL)
+            self.assertIsNone(real.email(forged))  # passes the pre-filter, misses the kid
+            self.assertEqual(real.email(good()), self.EMAIL, "one forged request must not lock the real user out")
+            for _ in range(10):
+                self.assertIsNone(real.email(forged))
+                self.assertEqual(real.email(good()), self.EMAIL)
+
+    def claims(self):
+        import time
+        now = int(time.time())
+        return {"iss": f"https://{self.TEAM}.cloudflareaccess.com", "aud": [self.AUD], "email": self.EMAIL, "iat": now, "exp": now + 300}
 
 
 class TunnelIsolation(unittest.TestCase):
