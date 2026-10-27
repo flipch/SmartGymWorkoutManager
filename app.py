@@ -2,6 +2,7 @@ from flask import Flask, abort, render_template, request, redirect, url_for, fla
 from api_client import SpeedianceClient, UpstreamError, _require_ok, unit_is_confirmed
 from auth import load_token, install_flask_auth, install_flask_write_gate
 from features import init_features
+import onboarding
 import media
 from insights_core import json_object, valid_iso_date, valid_record_id
 import json
@@ -151,6 +152,30 @@ def warn_when_the_unit_is_unset(response):
     return response
 
 
+def _wants_json():
+    """The Settings page saves with fetch and marks it so; a plain form post keeps the flash and redirect."""
+    return request.headers.get("X-Requested-With") == "fetch"
+
+
+def _reply(ok, message, status=200, **extra):
+    """One answer for both callers: JSON (with the setup status, never the token) for the page's fetch, else flash + redirect."""
+    if _wants_json():
+        return jsonify({"ok": ok, "message": message, "status": onboarding.setup_status(client.credentials), **extra}), status
+    flash(message, "success" if ok else "error")
+    return redirect(url_for('settings'))
+
+
+def _save(**changes):
+    """save_config with every stored setting kept except the ones named. A route that changes one thing must not lose another."""
+    creds = client.credentials
+    args = {"user_id": creds.get('user_id'), "token": creds.get('token'), "region": creds.get('region'),
+            "unit": creds.get('unit', 0), "custom_instruction": creds.get('custom_instruction', ''),
+            "device_type": creds.get('device_type', 1), "allow_monster_moves": creds.get('allow_monster_moves', False),
+            "owned_accessories": creds.get('owned_accessories', []), "owned_devices": creds.get('owned_devices', [])}
+    args.update(changes)
+    client.save_config(**args)
+
+
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
     if request.method == 'POST':
@@ -159,41 +184,45 @@ def settings():
             device_type = int(request.form.get('device_type', client.credentials.get('device_type', 1)))
             unit = int(request.form.get('unit', client.credentials.get('unit', 0)))
         except (TypeError, ValueError):
-            flash("Invalid settings value.", "error")
-            return redirect(url_for('settings'))
+            return _reply(False, "Invalid settings value.", 400)
         if unit not in (0, 1) or device_type not in (1, 2):
-            flash("Invalid settings value.", "error")
-            return redirect(url_for('settings'))
+            return _reply(False, "Invalid settings value.", 400)
         allow_monster_moves = bool(request.form.get('allow_monster_moves'))
         client.save_config(
             request.form.get('user_id') or client.credentials.get('user_id'),
             request.form.get('token') or client.credentials.get('token'),
             request.form.get('region', 'Global'),
             unit,  # an omitted field keeps the unit
-            request.form.get('custom_instruction', ''),
+            request.form.get('custom_instruction', client.credentials.get('custom_instruction', '')),  # an omitted field keeps it
             device_type,
             allow_monster_moves,
             client.credentials.get('owned_accessories', []),
             client.credentials.get('owned_devices', []),
             unit_confirmed=True if 'unit' in request.form else None,
         )
+        if _wants_json():
+            return _reply(True, "Settings saved.")
         flash("Settings saved!", "success")
         return redirect(url_for('index'))
-    
+
     creds = client.load_config()
     # Ensure new fields exist for older configs
     if 'owned_accessories' not in creds:
         creds['owned_accessories'] = []
     if 'owned_devices' not in creds:
         creds['owned_devices'] = []
-    accessories = []
+    accessories, state, error = [], 'signed_out', ''
     if creds.get('token'):
         try:
             accessories = client.get_accessories()
-        except Exception:
-            pass
+            state = 'ok' if accessories else 'none'
+        except Exception as e:  # the exception text is not shown: it can carry vendor text
+            state = 'error'
+            error = "Your Speediance session has expired. Log in again." if str(e) == "Unauthorized" else "Speediance could not be reached."
+    setup = onboarding.build_view(creds, accessories, state, error, rerun=request.args.get('setup') == '1',
+                                  requested_step=request.args.get('step'))
     shown = {**creds, "token_set": bool(creds.get("token")), "token": ""}  # the token never leaves the server
-    return render_template('settings.html', creds=shown, accessories=accessories)
+    return render_template('settings.html', creds=shown, setup=setup)
 
 @app.route('/settings/custom_instruction', methods=['POST'])
 def update_custom_instruction():
@@ -203,91 +232,71 @@ def update_custom_instruction():
     instruction = data.get('instruction', '')
     if not isinstance(instruction, str) or len(instruction) > 4000:
         return jsonify({"status": "error", "message": "instruction must be text of at most 4000 characters"}), 400
-    
+
     # Update only the instruction, keep other settings
-    creds = client.credentials
-    client.save_config(
-        creds.get('user_id'),
-        creds.get('token'),
-        creds.get('region'),
-        creds.get('unit', 0),
-        instruction,
-        creds.get('device_type', 1),
-        creds.get('allow_monster_moves', False),
-        creds.get('owned_accessories', []),
-        creds.get('owned_devices', []),
-    )
+    _save(custom_instruction=instruction)
     return jsonify({"status": "success"})
 
 @app.route('/settings/unit', methods=['POST'])
 def update_unit():
     unit = request.form.get('unit')
     if unit not in ('0', '1'):
-        flash("Choose metric or imperial.", "error")
-        return redirect(url_for('settings'))
+        return _reply(False, "Choose metric or imperial.", 400)
     success, msg = client.update_unit(unit)
     if success:
-        flash("Unit preference updated!", "success")
-    else:
-        flash(f"Error updating unit: {msg}", "error")
-    return redirect(url_for('settings'))
+        return _reply(True, "Unit preference updated!", unit=int(unit))
+    return _reply(False, f"Error updating unit: {str(msg)[:200]}", 502)
 
 @app.route('/settings/accessories', methods=['POST'])
 def update_accessories():
-    selected = request.form.getlist('accessories')
     try:
-        owned = [int(x) for x in selected]
+        ticked = [int(x) for x in request.form.getlist('accessories')]
+        shown = request.form.get('visible')  # the ids the form listed: the others keep their state
+        visible = None if shown is None else [int(x) for x in shown.split(',') if x.strip()]
     except ValueError:
-        flash("Accessory settings were not saved: unknown value.", "error")
-        return redirect(url_for('settings'))
-    creds = client.credentials
-    client.save_config(
-        creds.get('user_id'),
-        creds.get('token'),
-        creds.get('region'),
-        creds.get('unit', 0),
-        creds.get('custom_instruction', ''),
-        creds.get('device_type', 1),
-        creds.get('allow_monster_moves', False),
-        owned,
-        creds.get('owned_devices', []),
-    )
-    flash("Accessory settings updated!", "success")
-    return redirect(url_for('settings'))
+        return _reply(False, "Accessory settings were not saved: unknown value.", 400)
+    owned = onboarding.merge_accessories(client.credentials.get('owned_accessories', []), ticked, visible)
+    _save(owned_accessories=owned)
+    return _reply(True, "Accessory settings updated!", count=len(owned))
 
 @app.route('/settings/owned_devices', methods=['POST'])
 def update_owned_devices():
-    selected = request.form.getlist('owned_devices')
     try:
-        owned = [int(x) for x in selected]
+        owned = [int(x) for x in request.form.getlist('owned_devices')]
     except ValueError:
-        flash("Device settings were not saved: unknown value.", "error")
-        return redirect(url_for('settings'))
+        return _reply(False, "Device settings were not saved: unknown value.", 400)
+    _save(owned_devices=owned)
+    return _reply(True, "Owned devices updated!")
+
+@app.route('/settings/machine', methods=['POST'])
+def update_machine():
+    """Which machine the person has: it sets the owned device and which accessory generation the Settings page offers."""
+    machine = onboarding.machine_by_key(request.form.get('machine'))
+    if machine is None:
+        return _reply(False, "Choose one of the listed machines.", 400)
     creds = client.credentials
-    client.save_config(
-        creds.get('user_id'),
-        creds.get('token'),
-        creds.get('region'),
-        creds.get('unit', 0),
-        creds.get('custom_instruction', ''),
-        creds.get('device_type', 1),
-        creds.get('allow_monster_moves', False),
-        creds.get('owned_accessories', []),
-        owned,
-    )
-    flash("Owned devices updated!", "success")
-    return redirect(url_for('settings'))
+    owned = onboarding.devices_after_machine(creds.get('owned_devices'), creds.get('machine_generation'), machine)
+    _save(owned_devices=owned, machine_generation=machine["key"])
+    return _reply(True, f"Machine saved: {machine['label']}.", machine=machine["label"])
+
+@app.route('/settings/onboarding/finish', methods=['POST'])
+def finish_onboarding():
+    """Mark the first-run flow finished, once there is a login, a machine and a confirmed unit."""
+    missing = onboarding.finish_problems(client.credentials)
+    if missing:
+        return _reply(False, "Setup is not finished yet: " + ", ".join(missing) + " still to do.", 400, missing=missing)
+    _save(onboarding_done=True)
+    return _reply(True, "Setup finished.")
 
 @app.route('/login', methods=['POST'])
 def login():
     email = request.form.get('email')
     password = request.form.get('password')
     region = request.form.get('region', 'Global')
-    
+
     if not email or not password:
-        flash("Email and password required", "error")
-        return redirect(url_for('settings'))
-    
+        return _reply(False, "Email and password required", 400)
+
     # Update client region before login attempt; a failed login must leave the old region (and so the stored token's host)
     previous = (client.region, client.host, client.base_url)
     client.region = region
@@ -298,17 +307,17 @@ def login():
     if not success:
         client.region, client.host, client.base_url = previous
     if success:
+        if _wants_json():
+            return _reply(True, "Login successful!")
         flash("Login successful!", "success")
-        return redirect(url_for('index'))
+        return redirect(url_for('settings') if request.form.get('next') == 'settings' else url_for('index'))  # only this one fixed target
     else:
-        flash(message, "error")
-        return redirect(url_for('settings'))
+        return _reply(False, message, 400)
 
 @app.route('/logout', methods=['POST'])
 def logout():
     client.logout()
-    flash("Logged out successfully", "success")
-    return redirect(url_for('settings'))
+    return _reply(True, "Logged out successfully")
 
 @app.route('/settings/preload', methods=['POST'])
 def preload_assets():

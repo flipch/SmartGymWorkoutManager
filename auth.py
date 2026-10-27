@@ -72,13 +72,14 @@ def install_flask_auth(app, token: str | None):
 # Default-deny: every unsafe-method Flask endpoint needs GYM_ALLOW_WRITES=1 UNLESS it is listed here. A new route is
 # therefore gated until someone consciously decides it only touches local state. Only list endpoints that never change
 # the Speediance account's workouts/schedule/preferences:
-#   * pure compute / local files: the coach endpoints, accessories, owned devices, custom instruction
+#   * pure compute / local files: the coach endpoints, accessories, owned devices, machine, first-run setup, custom instruction
 #   * coach.apply: gates its own real saves (dry_run defaults to true and a real save needs writes enabled)
 #   * login / settings: (re)establish this app's own session on request of the signed-in user (CSRF-checked)
 LOCAL_ONLY_ENDPOINTS = frozenset({
     "features.coach_apply", "features.coach_autoregulate", "features.coach_critique", "features.coach_feedback",
     "features.coach_program", "features.coach_readiness",
     "update_custom_instruction", "update_accessories", "update_owned_devices", "login", "settings",
+    "update_machine", "finish_onboarding",  # first-run setup: this app's own config file only
     "preload_assets", "refresh_library",  # local media/library cache only
 })
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

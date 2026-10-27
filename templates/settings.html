@@ -1,177 +1,589 @@
 {% extends "layout.html" %}
 {% block content %}
-<div class="max-w-md mx-auto bg-gray-800 p-8 rounded-lg">
-    
-    <h2 class="text-2xl font-bold text-white mb-6">Account Login</h2>
-    {% if creds.token_set %}
-        <div class="bg-green-900/30 border border-green-600 p-4 rounded mb-4">
-            <p class="text-green-400 mb-2">Logged in as User ID: {{ creds.user_id }}</p>
-            <form method="post" action="/logout"><button type="submit" class="block w-full text-center bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Logout</button></form>
-        </div>
-    {% else %}
-        <form action="/login" method="POST" class="mb-4 pb-4 border-b border-gray-700">
-            <div class="mb-4">
-                <label class="block text-sm font-bold mb-2 text-gray-300">Region</label>
-                <select name="region" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600">
-                    <option value="Global" {% if creds.region != 'EU' %}selected{% endif %}>Global (USA/Asia)</option>
-                    <option value="EU" {% if creds.region == 'EU' %}selected{% endif %}>Europe</option>
-                </select>
-            </div>
-            <div class="mb-4">
-                <label class="block text-sm font-bold mb-2 text-gray-300">Email</label>
-                <input type="email" name="email" required class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600">
-            </div>
-            <div class="mb-6">
-                <label class="block text-sm font-bold mb-2 text-gray-300">Password</label>
-                <input type="password" name="password" required class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600">
-            </div>
-            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Login</button>
-        </form>
-    {% endif %}
+{# Settings. A person who has not finished setup (or who picked "Edit setup") gets the five-step flow; everyone else gets
+   a status card and three sections. Both use the same forms, and every save is a fetch with a plain form post as fallback. #}
+{% set st = setup.status %}
+{% set acc = setup.accessories %}
 
-    <form action="/settings/unit" method="POST" class="mb-4 pb-4 border-b border-gray-700">
-        <label class="block text-sm font-bold mb-2 text-gray-300">Unit System</label>
-        <div class="flex gap-2">
-            <select name="unit" class="flex-grow p-2 bg-gray-700 rounded text-white border border-gray-600">
-                {% set unit_known = creds.unit_confirmed or creds.unit == 1 %}
-                {% if not unit_known %}<option value="" selected disabled>Not set: choose yours</option>{% endif %}
-                <option value="0" {% if unit_known and creds.unit == 0 %}selected{% endif %}>Metric (KG)</option>
-                <option value="1" {% if creds.unit == 1 %}selected{% endif %}>Imperial (LBS)</option>
-            </select>
-            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Save</button>
-        </div>
-    </form>
+{% macro cls(kind) -%}
+{%- if kind == 'primary' -%}inline-flex items-center justify-center min-h-[44px] px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50 disabled:cursor-not-allowed
+{%- elif kind == 'secondary' -%}inline-flex items-center justify-center min-h-[44px] px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 border border-gray-600 text-gray-100 font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300
+{%- elif kind == 'danger' -%}inline-flex items-center justify-center min-h-[44px] px-4 py-2 rounded bg-red-700 hover:bg-red-800 text-white font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300
+{%- elif kind == 'field' -%}w-full min-h-[44px] p-2 bg-gray-700 rounded text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400
+{%- elif kind == 'choice' -%}flex items-center gap-3 p-3 min-h-[44px] bg-gray-700 rounded border border-gray-600 cursor-pointer hover:bg-gray-600 has-[:checked]:border-blue-400 has-[:checked]:bg-gray-600 focus-within:ring-2 focus-within:ring-blue-400
+{%- elif kind == 'section' -%}bg-gray-800 rounded-lg border border-gray-700 scroll-mt-4
+{%- elif kind == 'summary' -%}flex items-center gap-2 min-h-[44px] px-4 sm:px-6 py-3 text-lg font-bold text-white cursor-pointer select-none rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400
+{%- endif -%}
+{%- endmacro %}
 
-    <div class="mb-4 pb-4 border-b border-gray-700">
-        <label class="block text-sm font-bold mb-2 text-gray-300">First Day of Week</label>
-        <select id="firstDayOfWeek" onchange="localStorage.setItem('firstDayOfWeek', this.value)" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600">
-            <option value="1">Monday</option>
-            <option value="0">Sunday</option>
+{% macro feedback(id) -%}
+<p id="fb-{{ id }}" role="status" aria-live="polite" class="text-sm mt-3 min-h-[1.25rem]"></p>
+{%- endmacro %}
+
+{% macro chevron() -%}
+<svg class="w-4 h-4 flex-shrink-0 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+{%- endmacro %}
+
+{% macro login_form() -%}
+<form action="/login" method="POST" data-save="login" onsubmit="return submitSetupForm(event)">
+    <input type="hidden" name="next" value="settings">
+    <div class="mb-4">
+        <label for="login-region" class="block text-sm font-bold mb-2 text-gray-300">Region</label>
+        <select id="login-region" name="region" class="{{ cls('field') }}">
+            <option value="Global" {% if creds.region != 'EU' %}selected{% endif %}>Global (USA/Asia)</option>
+            <option value="EU" {% if creds.region == 'EU' %}selected{% endif %}>Europe</option>
         </select>
     </div>
-    <script>
-        document.getElementById('firstDayOfWeek').value = localStorage.getItem('firstDayOfWeek') || '1';
-    </script>
+    <div class="mb-4">
+        <label for="login-email" class="block text-sm font-bold mb-2 text-gray-300">Speediance email</label>
+        <input id="login-email" type="email" name="email" required autocomplete="username" class="{{ cls('field') }}">
+    </div>
+    <div class="mb-4">
+        <label for="login-password" class="block text-sm font-bold mb-2 text-gray-300">Password</label>
+        <input id="login-password" type="password" name="password" required autocomplete="current-password" class="{{ cls('field') }}">
+    </div>
+    <button type="submit" class="{{ cls('primary') }} w-full sm:w-auto">Log in</button>
+    {{ feedback('login') }}
+</form>
+{%- endmacro %}
 
-    <form action="/settings/owned_devices" method="POST" class="mb-4 pb-4 border-b border-gray-700">
-        <label class="block text-sm font-bold mb-3 text-gray-300">Owned Devices</label>
-        <p class="text-xs text-gray-500 mb-3">Select the devices you own. Workouts for unchecked devices will be hidden on the Browse page.</p>
-        <div class="grid grid-cols-3 gap-2 mb-3">
-            <label class="flex items-center gap-2 p-2 bg-gray-700 rounded border border-gray-600 cursor-pointer hover:bg-gray-600 transition">
-                <input type="checkbox" name="owned_devices" value="1" class="h-4 w-4 flex-shrink-0"
-                    {% if 1 in creds.owned_devices %}checked{% endif %}>
-                <span class="text-sm text-gray-200">Gym Monster</span>
-            </label>
-            <label class="flex items-center gap-2 p-2 bg-gray-700 rounded border border-gray-600 cursor-pointer hover:bg-gray-600 transition">
-                <input type="checkbox" name="owned_devices" value="2" class="h-4 w-4 flex-shrink-0"
-                    {% if 2 in creds.owned_devices %}checked{% endif %}>
-                <span class="text-sm text-gray-200">Gym Pal</span>
-            </label>
-            <label class="flex items-center gap-2 p-2 bg-gray-700 rounded border border-gray-600 cursor-pointer hover:bg-gray-600 transition">
-                <input type="checkbox" name="owned_devices" value="3" class="h-4 w-4 flex-shrink-0"
-                    {% if 3 in creds.owned_devices %}checked{% endif %}>
-                <span class="text-sm text-gray-200">Velonix</span>
-            </label>
-        </div>
-        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Save Devices</button>
-    </form>
-
-    {% if accessories %}
-    <form action="/settings/accessories" method="POST" class="mb-4 pb-4 border-b border-gray-700">
-        <label class="block text-sm font-bold mb-3 text-gray-300">Owned Accessories</label>
-        <p class="text-xs text-gray-500 mb-3">Select the accessories you own. Workouts and exercises requiring unchecked accessories will be hidden across all pages.</p>
-        <div class="grid grid-cols-2 gap-2 mb-3">
-            {% for acc in accessories %}
-            <label class="flex items-center gap-2 p-2 bg-gray-700 rounded border border-gray-600 cursor-pointer hover:bg-gray-600 transition">
-                <input type="checkbox" name="accessories" value="{{ acc.id }}" class="h-4 w-4 flex-shrink-0"
-                    {% if acc.id in creds.owned_accessories %}checked{% endif %}>
-                {% if acc.img %}
-                <img src="{{ acc.img }}" alt="" class="w-8 h-8 object-contain flex-shrink-0">
-                {% endif %}
-                <span class="min-w-0 truncate">
-                    <span class="text-sm text-gray-200">{{ acc.name }}</span>
-                    {# the vendor lists one entry per machine generation (Monster 1/2/2S, 3/3S, Ultra): say which #}
-                    {% if acc.deviceCodes is string and acc.deviceCodes %}<span class="block text-xs text-gray-400" data-generation>{{ acc.deviceCodes.split(',')|reverse|join(' · ')|replace('monsterultra', 'Ultra')|replace('monster', 'Monster ') }}</span>{% endif %}
-                </span>
+{% macro machine_picker(button_label) -%}
+<form action="/settings/machine" method="POST" data-save="machine" onsubmit="return submitSetupForm(event)">
+    <fieldset class="border-0 p-0 m-0 min-w-0">
+        <legend class="text-sm font-bold mb-2 text-gray-300">Which machine do you have?</legend>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {% for m in setup.machines %}
+            <label class="{{ cls('choice') }}">
+                <input type="radio" name="machine" value="{{ m.key }}" data-label="{{ m.label }}" class="h-5 w-5 flex-shrink-0" onchange="machineChanged(this)" {% if m.selected %}checked{% endif %}>
+                <span class="text-sm text-gray-100">{{ m.label }}</span>
             </label>
             {% endfor %}
         </div>
-        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Save Accessories</button>
-    </form>
+    </fieldset>
+    {% if not setup.machine_key and setup.machine_label %}
+    <p class="text-xs text-gray-400 mt-2">Now set to {{ setup.machine_label }}, without a generation. Choose yours to filter accessories.</p>
     {% endif %}
+    <div class="mt-4"><button type="submit" class="{{ cls('primary') }} w-full sm:w-auto">{{ button_label }}</button></div>
+    {{ feedback('machine') }}
+</form>
+{%- endmacro %}
 
-    <details class="mb-4 group">
-        <summary class="text-xl font-bold text-white mb-4 cursor-pointer flex items-center select-none">
-            <svg class="w-4 h-4 mr-2 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-            Manual Config (Token/Region)
-        </summary>
-        <div class="pl-6 border-l-2 border-gray-700">
-            <p class="text-sm text-gray-400 mb-4">
-                These values are automatically filled when you log in above. You only need to change them manually if you are debugging or using a captured token.
-            </p>
-            <form method="POST">
-                <div class="mb-4">
-                    <label class="block text-sm font-bold mb-2 text-gray-300">Region</label>
-                    <select name="region" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600">
-                        <option value="Global" {% if creds.region != 'EU' %}selected{% endif %}>Global (USA/Asia)</option>
-                        <option value="EU" {% if creds.region == 'EU' %}selected{% endif %}>Europe</option>
-                    </select>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-sm font-bold mb-2 text-gray-300">App User ID</label>
-                    <input type="text" name="user_id" value="{{ creds.user_id }}" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 font-mono text-sm">
-                </div>
-                <div class="mb-6">
-                    <label class="block text-sm font-bold mb-2 text-gray-300">Token (MD5)</label>
-                    <input type="password" name="token" value="" autocomplete="off" placeholder="{% if creds.token_set %}Saved — leave blank to keep it{% else %}Paste a token{% endif %}" class="w-full p-2 bg-gray-700 rounded text-white border border-gray-600 font-mono text-sm">
-                    <p class="text-xs text-gray-500 mt-2">You can find this in the header of a logged request (e.g. via PCAPdroid or Charles Proxy).</p>
-                </div>
-                <!-- Preserve existing values on save -->
-                <input type="hidden" name="device_type" value="{{ creds.device_type }}">
-                {% if creds.allow_monster_moves %}<input type="hidden" name="allow_monster_moves" value="on">{% endif %}
-                <input type="hidden" name="custom_instruction" value="{{ creds.custom_instruction }}">
-                
-                <button type="submit" class="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded border border-gray-600">Save Manual Config</button>
-            </form>
+{% macro unit_picker(button_label) -%}
+<form action="/settings/unit" method="POST" data-save="unit" onsubmit="return submitSetupForm(event)">
+    <fieldset class="border-0 p-0 m-0 min-w-0">
+        <legend class="text-sm font-bold mb-2 text-gray-300">Weight unit</legend>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <label class="{{ cls('choice') }}">
+                <input type="radio" name="unit" value="1" class="h-5 w-5 flex-shrink-0" {% if setup.unit_known and creds.unit == 1 %}checked{% endif %}>
+                <span class="text-sm text-gray-100">Imperial (lb)</span>
+            </label>
+            <label class="{{ cls('choice') }}">
+                <input type="radio" name="unit" value="0" class="h-5 w-5 flex-shrink-0" {% if setup.unit_known and creds.unit == 0 %}checked{% endif %}>
+                <span class="text-sm text-gray-100">Metric (kg)</span>
+            </label>
         </div>
-    </details>
+    </fieldset>
+    <p id="unit-state" class="text-sm mt-2 {% if setup.unit_known %}text-green-400{% else %}text-amber-300{% endif %}">{% if setup.unit_known %}Saved: {{ setup.unit_label }}{% else %}Not set: choose yours{% endif %}</p>
+    <p class="text-xs text-gray-400 mt-2">Weights you save use this unit exactly as typed. Nothing is converted if you change it later, so 50 saved as lb stays a 50. It is also set on your Speediance account.</p>
+    <div class="mt-4"><button type="submit" class="{{ cls('primary') }} w-full sm:w-auto">{{ button_label }}</button></div>
+    {{ feedback('unit') }}
+</form>
+{%- endmacro %}
 
-    <details class="mt-8 pt-8 border-t border-gray-700 group">
-        <summary class="text-xl font-bold text-white mb-4 cursor-pointer flex items-center select-none">
-            <svg class="w-4 h-4 mr-2 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-            Offline Content (Preload)
-        </summary>
-        <div class="pl-6 border-l-2 border-gray-700">
-            <div class="bg-blue-900/30 border border-blue-600 p-4 rounded mb-4">
-                <p class="text-blue-200 text-sm font-bold mb-2">ℹ️ Automatic Caching Active</p>
-                <p class="text-gray-300 text-sm">
-                    The app automatically caches images and videos as you browse the library. 
-                    This ensures you only download what you view, saving bandwidth and avoiding unnecessary requests to Speediance servers.
-                </p>
-            </div>
-
-            <div class="bg-red-900/30 border border-red-600 p-4 rounded mb-4">
-                <p class="text-red-200 text-sm font-bold mb-2">⚠️ Warning: High Bandwidth Usage</p>
-                <p class="text-gray-300 text-sm mb-2">
-                    The "Download All Assets" button below will attempt to download the <strong>entire library (>100 GB)</strong> at once.
-                </p>
-                <p class="text-gray-300 text-sm">
-                    <strong>Do not use this unless absolutely necessary.</strong> 
-                    Downloading this amount of data in a short time may trigger security alerts and could lead to your <strong>account being blocked</strong> by Speediance.
-                </p>
-            </div>
-
-            <form method="post" action="/settings/preload" target="_blank"><button type="submit" class="block w-full text-center bg-gray-700 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors border border-gray-600">
-                Download All Assets (Not Recommended)
-            </button></form>
-        </div>
-    </details>
-
-    <div class="mt-8 pt-8 border-t border-gray-700 text-center">
-        <p class="text-xs text-gray-500">
-            Disclaimer: This is an unofficial tool and is not affiliated with, endorsed by, or connected to Speediance. 
-            Use at your own risk.
-        </p>
-    </div>
+{% macro accessory_picker(button_label, skip_label) -%}
+{% if setup.accessories.state == 'signed_out' %}
+<p class="text-sm text-gray-300">Log in first. Your accessories come from your Speediance account.</p>
+{% elif setup.accessories.state == 'error' %}
+<div class="bg-red-900/30 border border-red-600 p-4 rounded" role="alert">
+    <p class="text-red-200 text-sm font-bold mb-1">Could not load your accessories.</p>
+    <p class="text-gray-300 text-sm mb-3">{{ setup.accessories.error }}</p>
+    <a href="" class="{{ cls('secondary') }}">Try again</a>
 </div>
+{% elif setup.accessories.state == 'none' %}
+<div class="bg-gray-700/50 border border-gray-600 p-4 rounded" role="status">
+    <p class="text-gray-100 text-sm font-bold mb-1">Speediance returned no accessories.</p>
+    <p class="text-gray-300 text-sm mb-3">Either the service is not answering right now or your account lists none. You can skip this and come back to it in Settings.</p>
+    <a href="" class="{{ cls('secondary') }}">Try again</a>
+</div>
+{% else %}
+<form action="/settings/accessories" method="POST" data-save="accessories" onsubmit="return submitSetupForm(event)">
+    <p class="text-xs text-gray-400 mb-3">Tick the accessories you own. Workouts that need an accessory you did not tick are hidden on Browse. Speediance lists one entry per machine generation, so only your machine's are shown.</p>
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+        <label class="inline-flex items-center gap-2 min-h-[44px] text-sm text-gray-200 cursor-pointer">
+            <input type="checkbox" id="show-all-generations" class="h-5 w-5" onchange="applyAccessoryFilter()">
+            Show all generations
+        </label>
+        <p id="acc-note" class="text-xs text-gray-400" role="status" aria-live="polite"></p>
+    </div>
+    <div id="accessory-list">
+        {% for group in setup.accessories.groups %}
+        <fieldset data-acc-group class="border-0 p-0 m-0 mb-4 min-w-0">
+            <legend class="text-sm font-bold mb-2 text-gray-300">{{ group.title }}</legend>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {% for a in group.entries %}
+                <label data-acc data-machines="{{ a.machines }}" class="{{ cls('choice') }}">
+                    <input type="checkbox" name="accessories" value="{{ a.id }}" class="h-5 w-5 flex-shrink-0" {% if a.owned %}checked{% endif %}>
+                    {% if a.img %}<img src="{{ a.img }}" alt="" loading="lazy" class="w-10 h-10 object-contain flex-shrink-0">{% endif %}
+                    <span class="min-w-0">
+                        <span class="text-sm text-gray-100 break-words">{{ a.name }}</span>
+                        {# the vendor lists one entry per machine generation (Monster 1/2/2S, 3/3S, Ultra): say which #}
+                        {% if a.label %}<span class="block text-xs text-gray-400" data-generation>{{ a.label }}</span>{% endif %}
+                    </span>
+                </label>
+                {% endfor %}
+            </div>
+        </fieldset>
+        {% endfor %}
+    </div>
+    <div class="mt-4 flex flex-wrap gap-2">
+        <button type="submit" class="{{ cls('primary') }} w-full sm:w-auto">{{ button_label }}</button>
+        {% if skip_label %}<button type="button" class="{{ cls('secondary') }} w-full sm:w-auto" onclick="skipAccessories()">{{ skip_label }}</button>{% endif %}
+    </div>
+    {{ feedback('accessories') }}
+</form>
+{% endif %}
+{%- endmacro %}
+
+<div class="max-w-2xl mx-auto space-y-4">
+
+{% if setup.wizard %}
+{# ------------------------------------------------------------------------------------------------ first-run setup #}
+<noscript><style>[data-step-panel]{display:block !important}</style></noscript>
+<div id="wizard" class="{{ cls('section') }} p-4 sm:p-6">
+    <h1 class="text-2xl font-bold text-white">Set up Smart Gym</h1>
+    <p class="text-sm text-gray-400 mt-1">{% if setup.first_run %}Five short steps, once. You can change any of it later in Settings.{% else %}Review each step. Your current choices are filled in.{% endif %}</p>
+    <p id="step-counter" class="text-sm font-bold text-blue-300 mt-4" aria-live="polite">Step {{ setup.step }} of {{ setup.steps }}</p>
+    <ol class="flex gap-2 mt-2 mb-6" aria-label="Setup progress">
+        {% for label in ['Account', 'Machine', 'Unit', 'Accessories', 'Done'] %}
+        <li data-progress="{{ loop.index }}" class="flex-1 text-center text-xs py-1 rounded {% if loop.index == setup.step %}bg-blue-600 text-white{% else %}bg-gray-700 text-gray-300{% endif %}" {% if loop.index == setup.step %}aria-current="step"{% endif %}>
+            <span class="hidden sm:inline">{{ loop.index }}. </span>{{ label }}
+        </li>
+        {% endfor %}
+    </ol>
+
+    <section data-step-panel="1" class="{% if setup.step != 1 %}hidden{% endif %}" aria-labelledby="step-heading-1">
+        <h2 id="step-heading-1" tabindex="-1" class="text-xl font-bold text-white mb-1 focus:outline-none">1. Connect your Speediance account</h2>
+        <p class="text-sm text-gray-400 mb-4">Use the same email and password as the Speediance app. The app passes them to Speediance and keeps only a session token, never your password.</p>
+        {% if creds.token_set %}
+        <div class="bg-green-900/30 border border-green-600 p-4 rounded mb-4">
+            <p class="text-green-300">Logged in as User ID: {{ creds.user_id }}</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <button type="button" class="{{ cls('primary') }} w-full sm:w-auto" onclick="goStep(2)">Continue</button>
+            <form method="post" action="/logout" data-save="logout" onsubmit="return submitSetupForm(event)" class="w-full sm:w-auto"><button type="submit" class="{{ cls('secondary') }} w-full">Use a different account</button></form>
+        </div>
+        {{ feedback('logout') }}
+        {% else %}
+        {{ login_form() }}
+        {% endif %}
+    </section>
+
+    <section data-step-panel="2" class="{% if setup.step != 2 %}hidden{% endif %}" aria-labelledby="step-heading-2">
+        <h2 id="step-heading-2" tabindex="-1" class="text-xl font-bold text-white mb-1 focus:outline-none">2. Your machine</h2>
+        <p class="text-sm text-gray-400 mb-4">This sets which workouts Browse shows and which accessories you are offered next.</p>
+        {{ machine_picker('Save and continue') }}
+        <div class="mt-3"><button type="button" class="{{ cls('secondary') }}" onclick="goStep(1)">Back</button></div>
+    </section>
+
+    <section data-step-panel="3" class="{% if setup.step != 3 %}hidden{% endif %}" aria-labelledby="step-heading-3">
+        <h2 id="step-heading-3" tabindex="-1" class="text-xl font-bold text-white mb-1 focus:outline-none">3. Weight unit</h2>
+        <p class="text-sm text-gray-400 mb-4">Pick this on purpose: no weight can be saved until you do.</p>
+        {{ unit_picker('Save and continue') }}
+        <div class="mt-3"><button type="button" class="{{ cls('secondary') }}" onclick="goStep(2)">Back</button></div>
+    </section>
+
+    <section data-step-panel="4" class="{% if setup.step != 4 %}hidden{% endif %}" aria-labelledby="step-heading-4">
+        <h2 id="step-heading-4" tabindex="-1" class="text-xl font-bold text-white mb-1 focus:outline-none">4. Accessories</h2>
+        {{ accessory_picker('Save and continue', 'Skip for now') }}
+        <div class="mt-3 flex flex-wrap gap-2">
+            <button type="button" class="{{ cls('secondary') }}" onclick="goStep(3)">Back</button>
+            {% if acc.state != 'ok' %}<button type="button" class="{{ cls('primary') }}" onclick="skipAccessories()">Continue without accessories</button>{% endif %}
+        </div>
+        {{ feedback('finish') }}
+    </section>
+
+    <section data-step-panel="5" class="{% if setup.step != 5 %}hidden{% endif %}" aria-labelledby="step-heading-5">
+        <h2 id="step-heading-5" tabindex="-1" class="text-xl font-bold text-white mb-1 focus:outline-none">5. You're set</h2>
+        <dl class="grid grid-cols-1 sm:grid-cols-2 gap-3 my-4 text-sm">
+            <div class="bg-gray-700/60 rounded p-3"><dt class="text-xs text-gray-400">Account</dt><dd id="sum-account" class="text-gray-100">{% if creds.token_set %}User ID {{ creds.user_id }}{% else %}Not logged in{% endif %}</dd></div>
+            <div class="bg-gray-700/60 rounded p-3"><dt class="text-xs text-gray-400">Machine</dt><dd id="sum-machine" class="text-gray-100">{{ setup.machine_label or 'Not set' }}</dd></div>
+            <div class="bg-gray-700/60 rounded p-3"><dt class="text-xs text-gray-400">Weight unit</dt><dd id="sum-unit" class="text-gray-100">{{ setup.unit_label or 'Not set' }}</dd></div>
+            <div class="bg-gray-700/60 rounded p-3"><dt class="text-xs text-gray-400">Accessories ticked</dt><dd id="sum-accessories" class="text-gray-100">{{ acc.owned_count }}</dd></div>
+        </dl>
+        <div class="flex flex-wrap gap-2">
+            <a href="/browse" class="{{ cls('primary') }} w-full sm:w-auto">Browse workouts</a>
+            <a href="/settings" class="{{ cls('secondary') }} w-full sm:w-auto">Open Settings</a>
+        </div>
+    </section>
+
+    {% if not setup.first_run %}<p class="mt-6 text-sm"><a href="/settings" class="text-blue-300 hover:underline">Leave setup without changes</a></p>{% endif %}
+</div>
+
+{% else %}
+{# ------------------------------------------------------------------------------------------------ the settings page #}
+<section id="status-card" class="{{ cls('section') }} p-4 sm:p-6" aria-labelledby="status-title">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+            <h1 id="status-title" class="text-2xl font-bold text-white">Settings</h1>
+            <p id="status-headline" class="text-sm mt-1 {% if st.complete %}text-green-400{% else %}text-amber-300{% endif %}">{% if st.complete %}All set.{% else %}One thing left.{% endif %}</p>
+        </div>
+        <a href="/settings?setup=1" class="{{ cls('secondary') }}">Edit setup</a>
+    </div>
+    <dl class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 text-sm">
+        <div class="bg-gray-700/60 rounded p-3 min-w-0"><dt class="text-xs text-gray-400">Account</dt><dd id="status-account" class="text-gray-100 break-words">{% if creds.token_set %}User ID {{ creds.user_id }}{% else %}Not logged in{% endif %}</dd></div>
+        <div class="bg-gray-700/60 rounded p-3 min-w-0"><dt class="text-xs text-gray-400">Machine</dt><dd id="status-machine" class="text-gray-100 break-words">{{ setup.machine_label or 'Not set' }}</dd></div>
+        <div class="bg-gray-700/60 rounded p-3 min-w-0"><dt class="text-xs text-gray-400">Weight unit</dt><dd id="status-unit" class="text-gray-100">{{ setup.unit_label or 'Not set' }}</dd></div>
+    </dl>
+    <div id="status-todo" class="mt-4 flex flex-wrap items-center gap-3 bg-amber-900/30 border border-amber-600 rounded p-3 {% if st.complete %}hidden{% endif %}">
+        <p id="status-message" class="text-sm text-amber-100 flex-1 min-w-0">{{ st.message }}</p>
+        <a id="status-action" href="#{{ st.anchor }}" class="{{ cls('primary') }}">{{ st.action }}</a>
+    </div>
+</section>
+
+<details id="account" open class="group {{ cls('section') }}">
+    <summary class="{{ cls('summary') }}">{{ chevron() }} Account</summary>
+    <div class="px-4 sm:px-6 pb-6">
+        {% if creds.token_set %}
+        <div class="bg-green-900/30 border border-green-600 p-4 rounded mb-4">
+            <p class="text-green-300">Logged in as User ID: {{ creds.user_id }}</p>
+        </div>
+        <form method="post" action="/logout" data-save="logout" onsubmit="return submitSetupForm(event)"><button type="submit" class="{{ cls('danger') }} w-full sm:w-auto">Logout</button></form>
+        {{ feedback('logout') }}
+        {% else %}
+        {{ login_form() }}
+        {% endif %}
+    </div>
+</details>
+
+<details id="machine" open class="group {{ cls('section') }}">
+    <summary class="{{ cls('summary') }}">{{ chevron() }} Machine and unit</summary>
+    <div class="px-4 sm:px-6 pb-6 space-y-6">
+        {{ machine_picker('Save machine') }}
+        <div id="unit" class="pt-6 border-t border-gray-700 scroll-mt-4">{{ unit_picker('Save unit') }}</div>
+        <div class="pt-6 border-t border-gray-700">
+            <label for="firstDayOfWeek" class="block text-sm font-bold mb-2 text-gray-300">First day of week</label>
+            <select id="firstDayOfWeek" onchange="try { localStorage.setItem('firstDayOfWeek', this.value) } catch (e) {}" class="{{ cls('field') }}">
+                <option value="1">Monday</option>
+                <option value="0">Sunday</option>
+            </select>
+            <p class="text-xs text-gray-500 mt-1">Kept in this browser only.</p>
+        </div>
+        <details class="group pt-6 border-t border-gray-700">
+            <summary class="text-sm font-bold text-gray-300 cursor-pointer min-h-[44px] flex items-center gap-2">{{ chevron() }} I own more than one Speediance device</summary>
+            <form action="/settings/owned_devices" method="POST" data-save="devices" onsubmit="return submitSetupForm(event)" class="mt-3">
+                <p class="text-xs text-gray-400 mb-3">Workouts for a device you do not tick are hidden on Browse. Choosing a machine above sets its device for you.</p>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+                    {% for d in setup.devices %}
+                    <label class="{{ cls('choice') }}">
+                        <input type="checkbox" name="owned_devices" value="{{ d.id }}" class="h-5 w-5 flex-shrink-0" {% if d.owned %}checked{% endif %}>
+                        <span class="text-sm text-gray-100">{{ d.label }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <button type="submit" class="{{ cls('secondary') }} w-full sm:w-auto">Save devices</button>
+                {{ feedback('devices') }}
+            </form>
+        </details>
+    </div>
+</details>
+
+<details id="accessories" open class="group {{ cls('section') }}">
+    <summary class="{{ cls('summary') }}">{{ chevron() }} Accessories</summary>
+    <div class="px-4 sm:px-6 pb-6">
+        {{ accessory_picker('Save accessories', '') }}
+    </div>
+</details>
+{% endif %}
+
+{# ------------------------------------------------------------------------------------------------ advanced #}
+<details id="advanced" class="group {{ cls('section') }}">
+    <summary class="{{ cls('summary') }}">{{ chevron() }} Advanced</summary>
+    <div class="px-4 sm:px-6 pb-6 space-y-3">
+        <details class="group border border-gray-700 rounded">
+            <summary class="flex items-center gap-2 min-h-[44px] px-3 text-sm font-bold text-gray-200 cursor-pointer select-none">{{ chevron() }} Manual Config (Token/Region)</summary>
+            <div class="px-3 pb-4">
+                <p class="text-sm text-gray-400 mb-4">
+                    These values are filled in when you log in. Change them by hand only if you are debugging or using a captured token.
+                </p>
+                <form method="POST" action="/settings" data-save="manual" onsubmit="return submitSetupForm(event)">
+                    <div class="mb-4">
+                        <label for="manual-region" class="block text-sm font-bold mb-2 text-gray-300">Region</label>
+                        <select id="manual-region" name="region" class="{{ cls('field') }}">
+                            <option value="Global" {% if creds.region != 'EU' %}selected{% endif %}>Global (USA/Asia)</option>
+                            <option value="EU" {% if creds.region == 'EU' %}selected{% endif %}>Europe</option>
+                        </select>
+                    </div>
+                    <div class="mb-4">
+                        <label for="manual-user" class="block text-sm font-bold mb-2 text-gray-300">App User ID</label>
+                        <input id="manual-user" type="text" name="user_id" value="{{ creds.user_id }}" class="{{ cls('field') }} font-mono text-sm">
+                    </div>
+                    <div class="mb-6">
+                        <label for="manual-token" class="block text-sm font-bold mb-2 text-gray-300">Token (MD5)</label>
+                        <input id="manual-token" type="password" name="token" value="" autocomplete="off" placeholder="{% if creds.token_set %}Saved — leave blank to keep it{% else %}Paste a token{% endif %}" class="{{ cls('field') }} font-mono text-sm">
+                        <p class="text-xs text-gray-500 mt-2">You can find this in the header of a logged request (e.g. via PCAPdroid or Charles Proxy).</p>
+                    </div>
+                    <!-- Preserve existing values on save -->
+                    <input type="hidden" name="device_type" value="{{ creds.device_type }}">
+                    {% if creds.allow_monster_moves %}<input type="hidden" name="allow_monster_moves" value="on">{% endif %}
+                    <button type="submit" class="{{ cls('secondary') }} w-full">Save Manual Config</button>
+                    {{ feedback('manual') }}
+                </form>
+            </div>
+        </details>
+
+        <details class="group border border-gray-700 rounded">
+            <summary class="flex items-center gap-2 min-h-[44px] px-3 text-sm font-bold text-gray-200 cursor-pointer select-none">{{ chevron() }} Custom instructions</summary>
+            <div class="px-3 pb-4">
+                <p class="text-sm text-gray-400 mb-3">Standing notes for the AI Coach, for example an injury to avoid. The Create Plan page uses the same text.</p>
+                <label for="custom-instruction" class="sr-only">Custom instructions</label>
+                <textarea id="custom-instruction" maxlength="4000" rows="4" class="{{ cls('field') }} font-mono text-sm" placeholder="e.g. I have a knee injury, avoid jumps.">{{ creds.custom_instruction }}</textarea>
+                <div class="mt-3"><button type="button" class="{{ cls('secondary') }} w-full sm:w-auto" onclick="saveInstruction()">Save instructions</button></div>
+                {{ feedback('instruction') }}
+            </div>
+        </details>
+
+        <details class="group border border-gray-700 rounded">
+            <summary class="flex items-center gap-2 min-h-[44px] px-3 text-sm font-bold text-gray-200 cursor-pointer select-none">{{ chevron() }} Offline Content (Preload)</summary>
+            <div class="px-3 pb-4">
+                <div class="bg-blue-900/30 border border-blue-600 p-4 rounded mb-4">
+                    <p class="text-blue-200 text-sm font-bold mb-2">ℹ️ Automatic Caching Active</p>
+                    <p class="text-gray-300 text-sm">
+                        The app automatically caches images and videos as you browse the library.
+                        This ensures you only download what you view, saving bandwidth and avoiding unnecessary requests to Speediance servers.
+                    </p>
+                </div>
+
+                <div class="bg-red-900/30 border border-red-600 p-4 rounded mb-4">
+                    <p class="text-red-200 text-sm font-bold mb-2">⚠️ Warning: High Bandwidth Usage</p>
+                    <p class="text-gray-300 text-sm mb-2">
+                        The "Download All Assets" button below will attempt to download the <strong>entire library (>100 GB)</strong> at once.
+                    </p>
+                    <p class="text-gray-300 text-sm">
+                        <strong>Do not use this unless absolutely necessary.</strong>
+                        Downloading this amount of data in a short time may trigger security alerts and could lead to your <strong>account being blocked</strong> by Speediance.
+                    </p>
+                </div>
+
+                <form method="post" action="/settings/preload" target="_blank"><button type="submit" class="block w-full text-center bg-gray-700 hover:bg-red-700 text-white font-bold py-2 px-4 min-h-[44px] rounded transition-colors border border-gray-600">
+                    Download All Assets (Not Recommended)
+                </button></form>
+            </div>
+        </details>
+    </div>
+</details>
+
+<p class="pt-4 text-center text-xs text-gray-500">
+    Disclaimer: This is an unofficial tool and is not affiliated with, endorsed by, or connected to Speediance.
+    Use at your own risk.
+</p>
+</div>
+
+<script>
+const SETUP = {{ {
+    'wizard': setup.wizard, 'firstRun': setup.first_run, 'step': setup.step,
+    'machine': setup.machine_key, 'machineLabel': setup.machine_label, 'unitKnown': setup.unit_known,
+    'accessoryCount': acc.owned_count, 'loggedIn': creds.token_set, 'userId': creds.user_id
+}|tojson }};
+</script>
+<script>
+// settings-js:begin
+const STEP_COUNT = 5;
+const state = { step: SETUP.step, machine: SETUP.machine, machineLabel: SETUP.machineLabel, ownedCount: SETUP.accessoryCount };
+
+function setHidden(el, hidden) {
+    if (!el) return;
+    if (hidden) el.classList.add('hidden'); else el.classList.remove('hidden');
+}
+
+/** The text to show when a save failed: our own JSON message if there is one, else a sentence for the status code. */
+function failureMessage(status, bodyText) {
+    let data = null;
+    try { data = JSON.parse(bodyText); } catch (e) { data = null; }
+    if (data && typeof data.message === 'string' && data.message) return data.message.slice(0, 300);
+    if (status === 401) return 'Your session expired. Reload the page and sign in again.';
+    if (status === 403) return 'The server refused this change.';
+    return 'The request failed (' + status + ').';
+}
+
+/** POST a form body the way the page does. Never throws: a network error, a plain-text 401 and an HTML 500 are all {ok: false}. */
+async function sendForm(url, params) {
+    let res;
+    try {
+        res = await fetch(url, { method: 'POST', headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' }, body: params });
+    } catch (e) {
+        return { ok: false, status: 0, data: null, message: 'Could not reach the server. Check your connection and try again.' };
+    }
+    let text = '';
+    try { text = await res.text(); } catch (e) { text = ''; }
+    let data = null;
+    try { data = JSON.parse(text); } catch (e) { data = null; }
+    const good = res.status >= 200 && res.status < 300 && !!data && data.ok !== false;
+    return { ok: good, status: res.status, data: data, message: good ? (data.message || 'Saved.') : failureMessage(res.status, text) };
+}
+
+/** Which accessory rows to show for a machine. machinesList: the space separated machine keys of each row. */
+function accessoryVisibility(machinesList, machine, showAll) {
+    const all = machinesList.map(function () { return true; });
+    if (showAll || !machine) return { visible: all, fellBack: false, unfiltered: true, hidden: 0 };
+    const fits = machinesList.map(function (m) { return String(m || '').split(' ').indexOf(machine) >= 0; });
+    if (!fits.some(Boolean)) return { visible: all, fellBack: true, unfiltered: false, hidden: 0 };
+    return { visible: fits, fellBack: false, unfiltered: false, hidden: fits.filter(function (x) { return !x; }).length };
+}
+
+/** The form fields for an accessory save: ticked ids, and the ids that were on screen (the rest keep their state). */
+function collectAccessories(items) {
+    const shown = items.filter(function (i) { return !i.hidden; });
+    return { ticked: shown.filter(function (i) { return i.checked; }).map(function (i) { return i.value; }), visible: shown.map(function (i) { return i.value; }) };
+}
+
+function setFeedback(id, ok, message) {
+    const el = document.getElementById('fb-' + id);
+    if (!el) return;
+    el.textContent = message;  // text, never markup: the message can carry vendor words
+    el.className = 'text-sm mt-3 min-h-[1.25rem] ' + (ok ? 'text-green-400' : 'text-red-300');
+}
+
+function renderStatus(st) {
+    if (!st) return;
+    const set = function (id, text) { const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('status-account', st.logged_in ? 'User ID ' + st.user_id : 'Not logged in');
+    set('status-machine', st.machine || 'Not set');
+    set('status-unit', st.unit || 'Not set');
+    set('status-headline', st.complete ? 'All set.' : 'One thing left.');
+    set('status-message', st.message);
+    set('status-action', st.action);
+    const head = document.getElementById('status-headline');
+    if (head) head.className = 'text-sm mt-1 ' + (st.complete ? 'text-green-400' : 'text-amber-300');
+    const action = document.getElementById('status-action');
+    if (action) action.href = '#' + st.anchor;
+    setHidden(document.getElementById('status-todo'), !!st.complete);
+}
+
+function applyAccessoryFilter() {
+    const rows = Array.from(document.querySelectorAll('[data-acc]'));
+    if (!rows.length) return;
+    const toggle = document.getElementById('show-all-generations');
+    const showAll = !!(toggle && toggle.checked);
+    const res = accessoryVisibility(rows.map(function (r) { return r.dataset.machines; }), state.machine, showAll);
+    rows.forEach(function (r, i) { setHidden(r, !res.visible[i]); });
+    Array.from(document.querySelectorAll('[data-acc-group]')).forEach(function (g) {
+        setHidden(g, !Array.from(g.querySelectorAll('[data-acc]')).some(function (r) { return !r.classList.contains('hidden'); }));
+    });
+    Array.from(document.querySelectorAll('[data-generation]')).forEach(function (l) { setHidden(l, !(res.unfiltered || res.fellBack)); });
+    const note = document.getElementById('acc-note');
+    if (!note) return;
+    if (!state.machine) note.textContent = 'Choose your machine to see only its accessories.';
+    else if (res.fellBack) note.textContent = 'Speediance does not label any accessory for ' + state.machineLabel + ', so all are shown.';
+    else if (showAll) note.textContent = 'Showing every generation.';
+    else note.textContent = 'Showing ' + state.machineLabel + ' accessories (' + res.hidden + ' for other machines hidden).';
+}
+
+function machineChanged(radio) {
+    state.machine = radio.value;
+    state.machineLabel = radio.dataset.label;
+    applyAccessoryFilter();
+}
+
+function goStep(n) {
+    n = Math.max(1, Math.min(STEP_COUNT, n));
+    state.step = n;
+    Array.from(document.querySelectorAll('[data-step-panel]')).forEach(function (p) { setHidden(p, Number(p.dataset.stepPanel) !== n); });
+    Array.from(document.querySelectorAll('[data-progress]')).forEach(function (li) {
+        const on = Number(li.dataset.progress) === n;
+        li.className = 'flex-1 text-center text-xs py-1 rounded ' + (on ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300');
+        if (on) li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+    });
+    const counter = document.getElementById('step-counter');
+    if (counter) counter.textContent = 'Step ' + n + ' of ' + STEP_COUNT;
+    if (n === 4) applyAccessoryFilter();
+    const heading = document.getElementById('step-heading-' + n);
+    if (heading) heading.focus();
+}
+
+function fillSummary(st) {
+    const set = function (id, text) { const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('sum-account', st && st.logged_in ? 'User ID ' + st.user_id : 'Not logged in');
+    set('sum-machine', (st && st.machine) || 'Not set');
+    set('sum-unit', (st && st.unit) || 'Not set');
+    set('sum-accessories', String(state.ownedCount));
+}
+
+/** Where the page goes after a login or logout: the same page, at the right step when setup is open. */
+function reloadTarget(kind) {
+    if (!SETUP.wizard) return '/settings';
+    const rerun = !SETUP.firstRun;
+    if (kind === 'login') return '/settings?' + (rerun ? 'setup=1&' : '') + 'step=2';
+    return '/settings' + (rerun ? '?setup=1' : '');
+}
+
+async function finishSetup() {
+    const r = await sendForm('/settings/onboarding/finish', new URLSearchParams());
+    if (!r.ok) { setFeedback('finish', false, r.message); return false; }
+    fillSummary(r.data.status);
+    goStep(5);
+    return true;
+}
+
+function skipAccessories() { return finishSetup(); }
+
+async function handleSaved(kind, r) {
+    renderStatus(r.data.status);
+    if (kind === 'login' || kind === 'logout' || kind === 'manual') { window.location.href = reloadTarget(kind); return; }
+    if (kind === 'machine') {
+                applyAccessoryFilter();
+        if (SETUP.wizard) goStep(3);
+    } else if (kind === 'unit') {
+        const el = document.getElementById('unit-state');
+        if (el) { el.textContent = 'Saved: ' + (r.data.status && r.data.status.unit || ''); el.className = 'text-sm mt-2 text-green-400'; }
+        if (SETUP.wizard) goStep(4);
+    } else if (kind === 'accessories') {
+        state.ownedCount = r.data.count;
+        if (SETUP.wizard) await finishSetup();
+    }
+}
+
+async function submitSetupForm(ev) {
+    ev.preventDefault();
+    const form = ev.target;
+    const kind = form.dataset.save;
+    const params = new URLSearchParams(new FormData(form));
+    if (kind === 'accessories') {
+        const picked = collectAccessories(Array.from(form.querySelectorAll('input[name="accessories"]')).map(function (box) {
+            return { value: box.value, checked: box.checked, hidden: !!(box.closest('[data-acc]') && box.closest('[data-acc]').classList.contains('hidden')) };
+        }));
+        params.delete('accessories');
+        picked.ticked.forEach(function (id) { params.append('accessories', id); });
+        params.set('visible', picked.visible.join(','));
+    }
+    const button = form.querySelector('button[type="submit"]');
+    if (button) button.disabled = true;
+    setFeedback(kind, true, 'Saving…');
+    const r = await sendForm(form.action, params);
+    if (button) button.disabled = false;
+    setFeedback(kind, r.ok, r.message);
+    if (r.ok) await handleSaved(kind, r);
+    return false;
+}
+
+async function saveInstruction() {
+    const box = document.getElementById('custom-instruction');
+    setFeedback('instruction', true, 'Saving…');
+    let res;
+    try {
+        res = await fetch('/settings/custom_instruction', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify({ instruction: box.value }) });
+    } catch (e) {
+        setFeedback('instruction', false, 'Could not reach the server. Check your connection and try again.');
+        return;
+    }
+    const text = await res.text();
+    setFeedback('instruction', res.ok, res.ok ? 'Instructions saved.' : failureMessage(res.status, text));
+}
+// settings-js:end
+
+(function init() {
+    try { const d = document.getElementById('firstDayOfWeek'); if (d) d.value = localStorage.getItem('firstDayOfWeek') || '1'; } catch (e) {}
+    if (SETUP.wizard) goStep(SETUP.step);
+    applyAccessoryFilter();
+})();
+</script>
 {% endblock %}

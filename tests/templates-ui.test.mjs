@@ -1475,3 +1475,225 @@ test('the same workout booked on two days can be moved from both at once', async
     release({ success: true });
     await first;
 });
+
+// ----------------------------------------------------------------------------------------------- the Settings page
+/** The real script of templates/settings.html, with a small DOM of named elements and a scripted fetch. */
+function settingsPage(setup = {}, answers = []) {
+    const src = read('settings.html');
+    const els = {};
+    const calls = [];
+    const mk = (id, over = {}) => els[id] = {
+        id, textContent: '', className: '', href: '', dataset: {}, classes: new Set(),
+        classList: { add: (c) => els[id].classes.add(c), remove: (c) => els[id].classes.delete(c), contains: (c) => els[id].classes.has(c) },
+        setAttribute() {}, removeAttribute() {}, focus() { calls.push(['focus', id]); }, ...over,
+    };
+    const lists = { '[data-acc]': [], '[data-acc-group]': [], '[data-generation]': [], '[data-step-panel]': [], '[data-progress]': [] };
+    const document = {
+        getElementById: (id) => els[id] ?? null,
+        querySelectorAll: (sel) => lists[sel] ?? [],
+    };
+    class FakeFormData extends Array { constructor(form) { super(); (form.fields || []).forEach((f) => this.push(f)); } }
+    const requests = [];
+    const queue = [...answers];
+    const fetch = async (url, opts) => {
+        requests.push({ url, body: opts.body && opts.body.toString(), headers: opts.headers });
+        const next = queue.shift();
+        if (next instanceof Error) throw next;
+        return { status: next.status, text: async () => next.text };
+    };
+    const ctx = {
+        SETUP: { wizard: false, firstRun: false, step: 1, machine: '', machineLabel: null, unitKnown: false, accessoryCount: 0, loggedIn: true, userId: '42', ...setup },
+        document, fetch, URLSearchParams, FormData: FakeFormData, window: { location: { href: '' } }, console,
+    };
+    vm.createContext(ctx);
+    const script = between(src, '// settings-js:begin', '// settings-js:end');
+    assert.ok(!script.includes('{{'), 'no template expression inside the tested script');
+    vm.runInContext(script + '\nglobalThis.__state = state;', ctx);
+    return { ctx, els, mk, lists, calls, requests, state: ctx.__state };
+}
+const reply = (status, body) => ({ status, text: JSON.stringify(body) });
+
+test('settings: a failed save says why, whatever the body is', () => {
+    const { ctx } = settingsPage();
+    assert.equal(ctx.failureMessage(403, JSON.stringify({ error: 'writes_disabled', message: 'Set GYM_ALLOW_WRITES=1 to let this app change your Speediance account.' })),
+        'Set GYM_ALLOW_WRITES=1 to let this app change your Speediance account.');
+    assert.match(ctx.failureMessage(401, 'Authentication required'), /session expired/);
+    assert.match(ctx.failureMessage(403, '<html>no</html>'), /refused/);
+    assert.equal(ctx.failureMessage(500, '<html>boom</html>'), 'The request failed (500).');
+    assert.equal(ctx.failureMessage(400, JSON.stringify({ message: 'x'.repeat(900) })).length, 300);
+    assert.equal(ctx.failureMessage(502, JSON.stringify({ message: 42 })), 'The request failed (502).');
+    assert.equal(ctx.failureMessage(500, ''), 'The request failed (500).');
+});
+
+test('settings: sendForm marks the request and never throws', async () => {
+    const page = settingsPage({}, [reply(200, { ok: true, message: 'Done' }), new Error('offline'), { status: 401, text: 'Authentication required' },
+        { status: 500, text: '<html>' }, reply(200, { ok: false, message: 'Nope' }), { status: 200, text: 'not json' }]);
+    const run = (u) => page.ctx.sendForm(u, new URLSearchParams({ a: '1' }));
+    const ok = await run('/x');
+    same([ok.ok, ok.message], [true, 'Done']);
+    assert.equal(page.requests[0].headers['X-Requested-With'], 'fetch');
+    assert.equal(page.requests[0].body, 'a=1');
+    const offline = await run('/x');
+    same([offline.ok, offline.status], [false, 0]);
+    assert.match(offline.message, /Could not reach/);
+    assert.match((await run('/x')).message, /session expired/);
+    assert.equal((await run('/x')).message, 'The request failed (500).');
+    same((await run('/x')).ok, false);  // a 200 that says ok:false is a failure
+    same((await run('/x')).ok, false);  // a 200 that is not JSON is a failure
+});
+
+test('settings: the accessory filter shows one machine, everything, or falls back to everything', () => {
+    const { ctx } = settingsPage();
+    const rows = ['monster12 ultra', 'monster3', 'ultra', '', undefined, 'monster12  ultra'];
+    same(ctx.accessoryVisibility(rows, 'ultra', false).visible, [true, false, true, false, false, true]);
+    same(ctx.accessoryVisibility(rows, 'ultra', false).hidden, 3);
+    same(ctx.accessoryVisibility(rows, 'ultra', true).visible, rows.map(() => true));
+    same(ctx.accessoryVisibility(rows, '', false).visible, rows.map(() => true));  // no machine chosen: no filtering
+    const none = ctx.accessoryVisibility(['monster3', 'monster12'], 'gympal', false);
+    same([none.fellBack, none.visible], [true, [true, true]]);  // nothing fits: show all rather than an empty list
+    assert.equal(ctx.accessoryVisibility(rows, 'ultra', false).fellBack, false);
+    assert.equal(ctx.accessoryVisibility(rows, 'ultra', false).unfiltered, false);
+});
+
+test('settings: a save sends the ticked ids that were on screen and says which were on screen', () => {
+    const { ctx } = settingsPage();
+    const out = ctx.collectAccessories([
+        { value: '1', checked: true, hidden: false }, { value: '2', checked: false, hidden: false },
+        { value: '3', checked: true, hidden: true }, { value: '4', checked: false, hidden: true },
+    ]);
+    same(out, { ticked: ['1'], visible: ['1', '2'] });
+    same(ctx.collectAccessories([]), { ticked: [], visible: [] });
+});
+
+test('settings: the status card is rewritten as text, never as markup', () => {
+    const { ctx, mk } = settingsPage();
+    for (const id of ['status-account', 'status-machine', 'status-unit', 'status-headline', 'status-message', 'status-action', 'status-todo']) mk(id);
+    ctx.renderStatus({ logged_in: true, user_id: '42', machine: '<img src=x onerror=alert(1)>', unit: null, complete: false,
+                       message: 'Your weight unit is not set.', action: 'Choose your unit', anchor: 'unit' });
+    const el = (id) => ctx.document.getElementById(id);
+    assert.equal(el('status-machine').textContent, '<img src=x onerror=alert(1)>');
+    assert.equal(el('status-machine').innerHTML, undefined);
+    assert.equal(el('status-unit').textContent, 'Not set');
+    assert.equal(el('status-action').href, '#unit');
+    assert.equal(el('status-todo').classes.has('hidden'), false);
+    ctx.renderStatus({ logged_in: true, user_id: '42', machine: 'M', unit: 'Imperial (lb)', complete: true, message: 'All set.', action: '', anchor: '' });
+    assert.equal(el('status-todo').classes.has('hidden'), true);
+    assert.equal(el('status-headline').textContent, 'All set.');
+    ctx.renderStatus(undefined);  // an answer without a status leaves the card alone
+});
+
+test('settings: feedback is plain text and styled by outcome', () => {
+    const { ctx, mk } = settingsPage();
+    mk('fb-unit');
+    ctx.setFeedback('unit', false, '<b>bad</b>');
+    assert.equal(ctx.document.getElementById('fb-unit').textContent, '<b>bad</b>');
+    assert.match(ctx.document.getElementById('fb-unit').className, /red/);
+    ctx.setFeedback('unit', true, 'ok');
+    assert.match(ctx.document.getElementById('fb-unit').className, /green/);
+    ctx.setFeedback('missing', true, 'ignored');  // no element: no crash
+});
+
+function accessoryForm(page, boxes) {
+    const rows = boxes.map((b) => ({ classList: { contains: (c) => c === 'hidden' && !!b.hidden } }));
+    return {
+        action: '/settings/accessories', dataset: { save: 'accessories' },
+        fields: boxes.filter((b) => b.checked).map((b) => ['accessories', b.value]).concat([['visible', 'stale']]),
+        querySelectorAll: () => boxes.map((b, i) => ({ value: b.value, checked: b.checked, closest: () => rows[i] })),
+        querySelector: () => page.button,
+    };
+}
+
+test('settings: saving accessories posts the ticked visible ids and the visible list, and stays on the page in the sections', async () => {
+    const page = settingsPage({}, [reply(200, { ok: true, message: 'Accessory settings updated!', count: 3, status: { complete: true } })]);
+    page.mk('fb-accessories');
+    page.button = { disabled: false };
+    const form = accessoryForm(page, [{ value: '1', checked: true }, { value: '2', checked: false }, { value: '3', checked: true, hidden: true }]);
+    const out = await page.ctx.submitSetupForm({ preventDefault() { page.calls.push('prevented'); }, target: form });
+    assert.equal(out, false);
+    assert.equal(page.requests.length, 1);
+    const body = new URLSearchParams(page.requests[0].body);
+    same(body.getAll('accessories'), ['1']);
+    assert.equal(body.get('visible'), '1,2');
+    assert.equal(page.button.disabled, false);
+    assert.equal(page.ctx.document.getElementById('fb-accessories').textContent, 'Accessory settings updated!');
+    assert.equal(page.state.ownedCount, 3);
+    assert.ok(page.calls.includes('prevented'));
+});
+
+test('settings: a refused save shows the server message and does not move on', async () => {
+    const page = settingsPage({ wizard: true, firstRun: true, step: 3 }, [reply(403, { error: 'writes_disabled', message: 'Set GYM_ALLOW_WRITES=1 to let this app change your Speediance account.' })]);
+    page.mk('fb-unit'); page.mk('step-counter');
+    page.button = { disabled: false };
+    const form = { action: '/settings/unit', dataset: { save: 'unit' }, fields: [['unit', '1']], querySelectorAll: () => [], querySelector: () => page.button };
+    await page.ctx.submitSetupForm({ preventDefault() {}, target: form });
+    assert.match(page.ctx.document.getElementById('fb-unit').textContent, /GYM_ALLOW_WRITES/);
+    assert.equal(page.state.step, 3);
+    assert.equal(page.button.disabled, false);  // the button is usable again
+});
+
+test('settings: in setup, a saved machine, unit and accessories walk the steps and finish', async () => {
+    const page = settingsPage({ wizard: true, firstRun: true, step: 2 }, [
+        reply(200, { ok: true, message: 'Machine saved', status: { complete: false } }),
+        reply(200, { ok: true, message: 'Unit saved', status: { complete: false, unit: 'Imperial (lb)' } }),
+        reply(200, { ok: true, message: 'Accessories saved', count: 2, status: {} }),
+        reply(200, { ok: true, message: 'Setup finished.', status: { logged_in: true, user_id: '42', machine: 'Gym Monster Ultra', unit: 'Imperial (lb)' } }),
+    ]);
+    for (const id of ['fb-machine', 'fb-unit', 'fb-accessories', 'unit-state', 'step-counter', 'sum-account', 'sum-machine', 'sum-unit', 'sum-accessories']) page.mk(id);
+    page.button = { disabled: false };
+    const send = (action, save, fields) => page.ctx.submitSetupForm({ preventDefault() {}, target: { action, dataset: { save }, fields, querySelectorAll: () => [], querySelector: () => page.button } });
+    await send('/settings/machine', 'machine', [['machine', 'ultra']]);
+    assert.equal(page.state.step, 3);
+    await send('/settings/unit', 'unit', [['unit', '1']]);
+    assert.equal(page.state.step, 4);
+    assert.equal(page.ctx.document.getElementById('unit-state').textContent, 'Saved: Imperial (lb)');
+    await send('/settings/accessories', 'accessories', []);
+    assert.equal(page.state.step, 5);
+    same(page.requests.map((r) => r.url), ['/settings/machine', '/settings/unit', '/settings/accessories', '/settings/onboarding/finish']);
+    assert.equal(page.ctx.document.getElementById('sum-machine').textContent, 'Gym Monster Ultra');
+    assert.equal(page.ctx.document.getElementById('sum-accessories').textContent, '2');
+    assert.equal(page.ctx.document.getElementById('step-counter').textContent, 'Step 5 of 5');
+});
+
+test('settings: a setup that cannot be finished stays on the accessories step and says what is missing', async () => {
+    const page = settingsPage({ wizard: true, firstRun: true, step: 4 }, [reply(400, { ok: false, message: 'Setup is not finished yet: unit still to do.', missing: ['unit'] })]);
+    page.mk('fb-finish'); page.mk('step-counter');
+    assert.equal(await page.ctx.skipAccessories(), false);
+    assert.equal(page.state.step, 4);
+    assert.match(page.ctx.document.getElementById('fb-finish').textContent, /unit still to do/);
+});
+
+test('settings: after a login the page reloads at the machine step, and "edit setup" stays in setup', async () => {
+    for (const [setup, expected] of [[{ wizard: true, firstRun: true }, '/settings?step=2'], [{ wizard: true, firstRun: false }, '/settings?setup=1&step=2'], [{ wizard: false }, '/settings']]) {
+        const page = settingsPage(setup, [reply(200, { ok: true, message: 'Login successful!', status: { complete: false } })]);
+        page.mk('fb-login');
+        const form = { action: '/login', dataset: { save: 'login' }, fields: [['email', 'a@b.c'], ['password', 'p']], querySelectorAll: () => [], querySelector: () => null };
+        await page.ctx.submitSetupForm({ preventDefault() {}, target: form });
+        assert.equal(page.ctx.window.location.href, expected);
+    }
+    assert.equal(settingsPage({ wizard: true, firstRun: false }).ctx.reloadTarget('logout'), '/settings?setup=1');
+    assert.equal(settingsPage({ wizard: true, firstRun: true }).ctx.reloadTarget('logout'), '/settings');
+});
+
+test('settings: choosing a machine filters the list at once and an unlabelled machine falls back to all', () => {
+    const page = settingsPage({ machine: 'ultra', machineLabel: 'Gym Monster Ultra' });
+    const rows = ['monster12', 'ultra'].map((m) => {
+        const r = { dataset: { machines: m }, hiddenFlag: false };
+        r.classList = { add: () => { r.hiddenFlag = true; }, remove: () => { r.hiddenFlag = false; }, contains: () => r.hiddenFlag };
+        return r;
+    });
+    page.lists['[data-acc]'] = rows;
+    page.mk('show-all-generations', { checked: false });
+    page.mk('acc-note');
+    const note = () => page.ctx.document.getElementById('acc-note').textContent;
+    page.ctx.applyAccessoryFilter();
+    same(rows.map((r) => r.hiddenFlag), [true, false]);
+    assert.match(note(), /Gym Monster Ultra accessories \(1 for other machines hidden\)/);
+    page.ctx.machineChanged({ value: 'monster12', dataset: { label: 'Gym Monster 1 / 2 / 2S' } });
+    same(rows.map((r) => r.hiddenFlag), [false, true]);
+    page.ctx.machineChanged({ value: 'gympal', dataset: { label: 'Gym Pal' } });
+    same(rows.map((r) => r.hiddenFlag), [false, false]);
+    assert.match(note(), /does not label any accessory for Gym Pal, so all are shown/);
+    page.ctx.document.getElementById('show-all-generations').checked = true;
+    page.ctx.applyAccessoryFilter();
+    assert.match(note(), /every generation/);
+});

@@ -355,11 +355,12 @@ class SpeedianceClient:
             "owned_devices": [],
         }
 
-    def save_config(self, user_id, token, region="Global", unit=0, custom_instruction="", device_type=1, allow_monster_moves=False, owned_accessories=None, owned_devices=None, unit_confirmed=None):
+    def save_config(self, user_id, token, region="Global", unit=0, custom_instruction="", device_type=1, allow_monster_moves=False, owned_accessories=None, owned_devices=None, unit_confirmed=None, onboarding_done=None, machine_generation=None):
         previous = getattr(self, "credentials", None) or {}
         confirmed = previous.get("unit_confirmed") is True if unit_confirmed is None else unit_confirmed is True
         old_user = str(previous.get("user_id") or "")
-        if old_user and old_user != str(user_id) and unit_confirmed is not True:
+        another_account = bool(old_user) and old_user != str(user_id) and unit_confirmed is not True
+        if another_account:
             unit, confirmed = 0, False  # another account: its unit is unknown until someone chooses it
         self.credentials = {
             "user_id": user_id,
@@ -373,6 +374,17 @@ class SpeedianceClient:
             "owned_accessories": owned_accessories or [],
             "owned_devices": owned_devices or [],
         }
+        # First-run setup. Every caller above saves positionally and knows nothing of these two keys, so None means "keep
+        # what the file had", and a file that never had them stays without them (a missing onboarding_done is what lets an
+        # older config skip the first-run flow; writing False would force it).
+        if onboarding_done is None and "onboarding_done" in previous:
+            onboarding_done = False if another_account else previous["onboarding_done"]  # a new account is set up again
+        if isinstance(onboarding_done, bool):
+            self.credentials["onboarding_done"] = onboarding_done
+        if machine_generation is None:
+            machine_generation = previous.get("machine_generation")
+        if isinstance(machine_generation, str) and machine_generation:
+            self.credentials["machine_generation"] = machine_generation
         self.region = region
         self.device_type = int(device_type)
         self.allow_monster_moves = bool(allow_monster_moves)

@@ -22,6 +22,10 @@ os.environ.pop("GYM_AUTH_DISABLED", None)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import app as gym_app  # noqa: E402
+from onboarding import build_view  # noqa: E402
+
+SETTINGS_CREDS = {"token_set": False, "region": "Global", "user_id": "", "unit": 0, "device_type": 1,
+                  "custom_instruction": "", "allow_monster_moves": False, "owned_accessories": [], "owned_devices": []}
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 TEMPLATES = os.path.join(ROOT, "templates")
@@ -265,14 +269,17 @@ class InlineScriptsParse(unittest.TestCase):
                         "categories": [], "device_type": 1, "allow_monster_moves": False},
         "library.html": {"exercises": [], "categories": [], "device_type": 1, "allow_monster_moves": False,
                          "owned_accessories": [], "owned_devices": []},
-        "settings.html": {"creds": {"token_set": False, "region": "Global", "user_id": "", "unit": 0,
-                                    "device_type": 1, "custom_instruction": "", "allow_monster_moves": False,
-                                    "owned_accessories": [], "owned_devices": []}, "accessories": []},
+        # the Settings page has two modes with different scripts: first-run setup, and the sections once it is done
+        "settings.html#wizard": {"creds": SETTINGS_CREDS, "setup": build_view(SETTINGS_CREDS, [], "signed_out")},
+        "settings.html#sections": {"creds": {**SETTINGS_CREDS, "token_set": True, "unit_confirmed": True, "onboarding_done": True,
+                                             "owned_devices": [1]},
+                                   "setup": build_view({**SETTINGS_CREDS, "token": "x", "unit_confirmed": True, "onboarding_done": True,
+                                                        "owned_devices": [1]}, [{"id": 1, "name": "Rope", "type": 0}], "ok")},
     }
 
     def test_every_page_script_is_valid_javascript(self):
         for name, ctx in self.CASES.items():
-            page = render(name, **ctx)
+            page = render(name.split("#")[0], **ctx)
             scripts = collect(page).scripts
             self.assertTrue(scripts, name)
             for i, code in enumerate(scripts):
