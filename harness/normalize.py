@@ -28,13 +28,20 @@ def _first_nonzero_weights(set_row: dict) -> list:
     return []
 
 
+def _count(value):
+    """A rep count or duration the machine could have produced: finite and not negative, else None (never evidence)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return value
+
+
 def set_load(set_row: dict) -> float | None:
     """Representative working load for one set: median of positive per-rep loads (robust to
     chains/eccentric mid-set changes); else capacity/reps; else None. Unit is NOT inferred here."""
     weights = [w for w in _first_nonzero_weights(set_row) if w > 0 and math.isfinite(w)]
     if weights:
         return float(median(weights))
-    reps, capacity = set_row.get("finishedCount") or 0, set_row.get("capacity") or 0
+    reps, capacity = _count(set_row.get("finishedCount")) or 0, set_row.get("capacity") or 0
     if isinstance(reps, (int, float)) and isinstance(capacity, (int, float)) and reps > 0 and capacity > 0 and math.isfinite(capacity):
         return round(capacity / reps, 2)
     return None
@@ -68,10 +75,10 @@ def session_with_sets(record: dict, detail, tz: str = DEFAULT_TZ, unit: str | No
             if not isinstance(row, dict):
                 raise SchemaDrift(SOURCE, "set row was not an object")
             timed = ex.get("completionMethod") in (0, 2)  # timer-based exercise (2 = Row/Ski timed in the editor): reps are not meaningful
-            reps = None if timed else (row.get("finishedCount") or None)
+            reps = None if timed else (_count(row.get("finishedCount")) or None)
             sets.append(SetResult(exercise=name, reps=reps, load=set_load(row),
-                                  seconds=row.get("time") if timed else None, unit=unit,
-                                  target=None if timed else (row.get("targetCount") or None),
+                                  seconds=_count(row.get("time")) if timed else None, unit=unit,
+                                  target=None if timed else (_count(row.get("targetCount")) or None),
                                   side={1: "left", 2: "right"}.get(row.get("leftRight"))))  # a duration is not a rep target
     header = session_header(record, tz)
     return SessionResult(header.source_id, header.local_day, header.started_at_ms, header.title,

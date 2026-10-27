@@ -1997,6 +1997,36 @@ class Round32(unittest.TestCase):
         self.assertIn("(TYPE_MAP[r.type] || {}).detailType != null", html)
 
 
+class Round33(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def test_an_impossible_completion_count_is_never_evidence(self):
+        from harness import normalize
+        record = {"trainingId": 1, "startTimestamp": 1_790_000_000_000, "title": "T"}
+        for bad in (-1, float("nan"), float("inf"), True, "8", None):
+            detail = [{"actionLibraryName": "Bench", "completionMethod": 1,
+                       "finishedReps": [{"finishedCount": bad, "targetCount": 8, "capacity": 640, "trainingInfoDetail": {"weights": [80.0]}}]}]
+            got = normalize.session_with_sets(record, detail).sets[0]
+            self.assertIsNone(got.reps, repr(bad))
+        detail = [{"actionLibraryName": "Bench", "completionMethod": 1, "finishedReps": [{"finishedCount": 8, "targetCount": float("inf"), "trainingInfoDetail": {"weights": [80.0]}}]}]
+        got = normalize.session_with_sets(record, detail).sets[0]
+        self.assertEqual((got.reps, got.target), (8, None))
+        timed = [{"actionLibraryName": "Row", "completionMethod": 2, "finishedReps": [{"time": float("nan"), "trainingInfoDetail": {"weights": [80.0]}}]}]
+        self.assertIsNone(normalize.session_with_sets(record, timed).sets[0].seconds)
+
+    def test_a_timed_history_does_not_anchor_a_rep_prescription(self):
+        from datetime import date, datetime, timezone
+        from harness import planner
+        from harness.model import Reading, SessionResult, SetResult
+        timed = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Cable chest press", reps=None, load=80.0, seconds=30) for _ in range(3)))
+        now = datetime(2026, 10, 26, 7, tzinfo=timezone.utc)
+        plan = planner.todays_plan(sessions=[timed], readings=[Reading("subjective", 4, "manual", now)], now=now, tz="UTC", days_per_week=1, goal="muscle")
+        press = [e for e in plan.exercises if e.name.lower() == "cable chest press"]
+        for e in press:
+            self.assertIsNone(e.load)
+            self.assertIn("timed", e.load_basis)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

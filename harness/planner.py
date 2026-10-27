@@ -288,6 +288,10 @@ def _from_catalog(sessions: list[SessionResult], auto: dict, goal: str, days_per
                                         "no logged history for this exercise: choose a load that leaves the target RIR"))
             continue
         last, logged, last_day = anchor
+        if not any(x.reps for x in logged):  # logged as a timed exercise (seconds): that is no evidence for a rep prescription
+            out.append(ProposedExercise(ex["name"], sets, ex["reps"], max(ex["rir"], auto["rir_min"]), mode, None,
+                                        f"last logged on {last_day.isoformat()} as a timed exercise (seconds): choose a load that leaves the target RIR"))
+            continue
         hit_all = all(x.reps is not None and x.reps >= ex["reps"] for x in logged)
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
                                 allow_increase=(day - last_day).days < LAYOFF_DAYS, step=_grid(logged))

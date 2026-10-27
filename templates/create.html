@@ -1291,6 +1291,10 @@ You must output a JSON object with the following structure:
                 alert('Nothing was imported: the file has no exercises.');
                 return;
             }
+            if (data.exercises && Array.isArray(data.exercises) && data.exercises.length > 50) {
+                alert('Nothing was imported: Speediance limits custom workouts to 50 exercises.');
+                return;
+            }
             if (data.exercises && Array.isArray(data.exercises)) {
                 let adjusted = 0;
                 // Build the whole plan first: a failure part-way must leave the current plan (and the screen) as they were
@@ -1335,13 +1339,6 @@ You must output a JSON object with the following structure:
                         unit: String(s.unit || '').toLowerCase() === 'sec' ? 'sec' : 'reps'  // an exported timed set stays timed
                     }));
 
-                    setsParsed.forEach((st, si) => {  // targets, rests and modes the editor itself could not produce
-                        const at = `exercise ${imported.length + 1} set ${si + 1}`;
-                        if (!Number.isInteger(st.reps) || st.reps < 1 || st.reps > 3600) throw new Error(`${at}: reps must be a whole number from 1 to 3600`);
-                        if (st.rest < 0 || st.rest > 3600) throw new Error(`${at}: rest must be from 0 to 3600 seconds`);
-                        if (st.mode < 1 || st.mode > 5) throw new Error(`${at}: mode must be from 1 to 5`);
-                    });
-
                     // Handle Unilateral: expand L/R pairs if not already expanded.
                     // Exports from this app include `isUnilateralExpanded: true`, so we don't double them.
                     // AI-generated or manual JSON without the flag will be expanded as before.
@@ -1349,6 +1346,14 @@ You must output a JSON object with the following structure:
                     const finalSets = parseImportedSets(setsParsed, meta.isUnilateral, alreadyExpanded);
                     const goalUnit = WorkoutLogic.getSetGoalUnit({ completionMethod: meta.completionMethod, selectCompletionMethod: meta.selectCompletionMethod });
                     if (goalUnit === 'sec' || goalUnit === 'reps') finalSets.forEach(s => { s.unit = goalUnit; });  // the exercise decides, whatever the file says
+                    if (finalSets.length > 20) throw new Error(`exercise ${imported.length + 1}: at most 20 sets (left and right count separately)`);
+                    finalSets.forEach((st, si) => {  // the limits the server will enforce on save, for the unit the exercise really has
+                        const at = `exercise ${imported.length + 1} set ${si + 1}`;
+                        const maxReps = st.unit === 'sec' ? 3600 : 99;
+                        if (!Number.isInteger(st.reps) || st.reps < 1 || st.reps > maxReps) throw new Error(`${at}: ${st.unit === 'sec' ? 'seconds' : 'reps'} must be a whole number from 1 to ${maxReps}`);
+                        if (st.rest < 0 || st.rest > 300) throw new Error(`${at}: rest must be from 0 to 300 seconds`);
+                        if (st.mode < 1 || st.mode > 5) throw new Error(`${at}: mode must be from 1 to 5`);
+                    });
 
                     // Determine the preset: use the exported preset field if present, else default to Custom (-1).
                     const presetField = (ex.preset !== undefined && ex.preset !== null) ? ex.preset : ex.presetId;  // the AI prompt asks for presetId

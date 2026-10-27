@@ -1322,3 +1322,26 @@ test('after a good save the save button stays locked while the page leaves', asy
     await ctx.window.saveWorkout();
     assert.equal(calls.filter((c) => c[0] === 'fetch').length, 1);
 });
+
+// ----------------------------------------------------------------------------------------------- round 33
+test('an import is held to the limits the server enforces, for the unit the exercise really has', async () => {
+    const tryImport = async (meta, sets, extra = {}) => {
+        const { ctx, doc } = editor(() => meta);
+        ctx.workoutData = [{ sentinel: true }];
+        await importJson(ctx, doc, { name: 'N', exercises: [{ id: 5, sets }], ...extra });
+        return ctx.workoutData.length === 1 && ctx.workoutData[0].sentinel ? 'refused' : 'imported';
+    };
+    assert.equal(await tryImport(metaOf(), [{ reps: 100, weight: 20 }]), 'refused');
+    assert.equal(await tryImport(metaOf(), [{ reps: 99, weight: 20 }]), 'imported');
+    assert.equal(await tryImport(metaOf(), [{ reps: 10, weight: 20, rest: 301 }]), 'refused');
+    assert.equal(await tryImport(metaOf(), [{ reps: 10, weight: 20, rest: 300 }]), 'imported');
+    assert.equal(await tryImport(metaOf({ completionMethod: 2 }), [{ reps: 600, weight: 20 }]), 'imported');  // seconds go to 3600
+    assert.equal(await tryImport(metaOf({ completionMethod: 2 }), [{ reps: 3601, weight: 20 }]), 'refused');
+    assert.equal(await tryImport(metaOf({ completionMethod: 1 }), [{ reps: 600, weight: 20, unit: 'sec' }]), 'refused');  // the exercise is rep-based
+    assert.equal(await tryImport(metaOf(), Array.from({ length: 21 }, () => ({ reps: 8, weight: 20 }))), 'refused');
+    assert.equal(await tryImport(metaOf(), Array.from({ length: 20 }, () => ({ reps: 8, weight: 20 }))), 'imported');
+    const { ctx, doc } = editor(() => metaOf());
+    ctx.workoutData = [{ sentinel: true }];
+    await importJson(ctx, doc, { name: 'N', exercises: Array.from({ length: 51 }, (_, i) => ({ id: i + 1, sets: [{ reps: 8, weight: 20 }] })) });
+    same(ctx.workoutData, [{ sentinel: true }]);
+});
