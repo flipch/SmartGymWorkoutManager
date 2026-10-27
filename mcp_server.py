@@ -409,7 +409,7 @@ def critique_my_workout(code: str, goal: str = "general") -> dict:
 @mcp.tool()
 def autoregulate(whoop_recovery: Number | None = None, hrv_vs_baseline: str = None,
                  rhr_delta_bpm: Number | None = None, sleep_hours: Number | None = None,
-                 subjective: Number | None = None, acwr: Number | None = None, use_stored_readiness: bool = True) -> dict:
+                 subjective: Number | None = None, acwr: Number | None = None, use_stored_readiness: StrictBool = True) -> dict:
     """Given today's recovery signals (any subset; from Whoop/Apple Health or a 1-5 subjective
     score), return today's training adjustment: readiness band + volume%/intensity%/RIR/session
     type. Most-conservative signal wins; sleep<6h or RHR>=+5bpm caps a green day. Fresh stored signals

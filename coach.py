@@ -250,7 +250,7 @@ def _stem(token):
     """Plural and hyphen insensitive: 'lunges' = 'lunge', 'split-squats' = 'split squat'."""
     if token in ("flye", "flyes", "flys"):  # fly, flye, flyes, flies: one movement
         return "fly"
-    if len(token) > 3:
+    if len(token) > 3 or token == "ups":  # push-ups, pull-ups, chin-ups; "abs" and "lats" stay as they are
         if token.endswith("sses"):
             return token[:-2]
         if token.endswith("ies"):
@@ -515,7 +515,7 @@ def classify_exercise(name, api_muscle=None):
     muscle = _MUSCLE_TAG_MAP.get((api_muscle or "").lower().strip()) if api_muscle else None
     pattern = None
     for keys, (mus, pat) in CLASSIFY_RULES:
-        if any((re.search(r"\brows?\b", n) if k == "row" else k in n) for k in keys):  # not "narrow" or "throw"
+        if any((re.search(r"\brows?\b", n) if k == "row" else re.search(r"\bruns?\b", n) if k == "run" else k in n) for k in keys):  # not "narrow", "throw" or "trunk"
             if muscle is None:
                 muscle = mus
             pattern = pat

@@ -2563,3 +2563,58 @@ class Round43(unittest.TestCase):
         from harness.normalize import set_load
         w = [100.0] * 4 + [75.0] * 2 + [50.0] * 4
         self.assertEqual(set_load({"finishedCount": 10, "capacity": sum(w), "trainingInfoDetail": {"weights": w}}), 50.0)
+
+
+class Round44(unittest.TestCase):
+    def test_a_feedback_file_that_becomes_unreadable_during_apply_stops_the_save(self):
+        d = tempfile.mkdtemp(prefix="gym-r44-")
+        client = mock.Mock(data_dir=d, credentials={"token": "x", "unit": 1})
+        client.get_library.return_value = []
+        client.save_workout.return_value = {"code": 0, "data": {"id": 1}}
+        program = {"goal_label": "G", "days": [{"name": "D", "exercises": [
+            {"name": "Cable chest press", "primary": "chest", "sets": 2, "reps": 8, "load": 0, "rest_sec": 60}]}]}
+        path = features._feedback_path(d)
+
+        def prepare(nm, exercises):
+            features.log_feedback({"pain": True, "exercise": "Cable chest press"}, d)
+            os.chmod(path, 0)
+        client.prepare_workout.side_effect = prepare
+        resolved = {"groupId": 7, "matched_name": "Cable Chest Press", "muscle": "chest", "confidence": "high"}
+        try:
+            with mock.patch.object(features, "resolve_exercise", return_value=resolved):
+                out = features.apply_program(client, program, 0, None, dry_run=False)
+            if os.access(path, os.R_OK):
+                self.skipTest("running as a user that ignores file modes")
+        finally:
+            if os.path.exists(path):
+                os.chmod(path, 0o600)
+        client.save_workout.assert_not_called()
+        self.assertEqual(out["results"][0]["error"], "FeedbackUnreadable")
+
+    def test_three_letter_plurals_ups_match_the_singular_title(self):
+        import coach
+        for reported, title in (("Push-ups", "Push-Up"), ("pull ups", "Pull-Up"), ("Chin-ups", "Chin-Up"), ("Sit-ups", "Sit-Up"), ("Step ups", "Step-Up")):
+            self.assertTrue(coach._is_avoided(title, {coach._norm_name(reported)}), reported)
+        self.assertEqual(coach._stem("abs"), "abs")
+        self.assertEqual(coach._stem("lats"), "lat")
+
+    def test_one_shared_generic_word_is_not_a_match_when_no_muscle_is_known(self):
+        lib = [{"id": 1, "title": "Triceps Extension", "mainMuscleGroupName": "triceps", "isLeftRight": 0},
+               {"id": 2, "title": "Hip Abduction", "mainMuscleGroupName": "glutes", "isLeftRight": 0},
+               {"id": 3, "title": "Leg Press", "mainMuscleGroupName": "quadriceps", "isLeftRight": 0},
+               {"id": 4, "title": "Plank Hold", "mainMuscleGroupName": "abs", "isLeftRight": 0}]
+        for name in ("Back Extension", "Hip Adduction", "Kettlebell Swing Press"):
+            got = features.resolve_exercise(lib, name, None)
+            self.assertTrue(got is None or got["confidence"] == "low", name)
+        self.assertNotEqual(features.resolve_exercise(lib, "Hip Abduction", None)["confidence"], "low")  # full coverage still resolves
+        self.assertNotEqual(features.resolve_exercise(lib, "Plank Hold", None)["confidence"], "low")
+
+    def test_trunk_is_not_a_run_and_a_strict_unit_flag_is_a_real_true(self):
+        import coach
+        self.assertNotEqual(coach.classify_exercise("Cable Trunk Rotation")[1], "cardio")
+        self.assertEqual(coach.classify_exercise("Treadmill Run")[1], "cardio")
+        for flag in ("false", "no", 1):
+            with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-r44-")}):
+                client = api_client.SpeedianceClient()
+            client.save_config("42", "tok", "Global", 1, "", 1, False, [], [], unit_confirmed=flag)
+            self.assertFalse(api_client.unit_is_confirmed(client.credentials), repr(flag))

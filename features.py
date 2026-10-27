@@ -1083,7 +1083,7 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
             score -= 0.10
         key = (score, -len(lib_tokens))
         if best is None or key > best[0]:
-            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1, _variant_tokens(title) != coach_variant or bool(coach_movement and _movement_tokens(title) != coach_movement), is_uni != req_uni)
+            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1, _variant_tokens(title) != coach_variant or bool(coach_movement and _movement_tokens(title) != coach_movement), is_uni != req_uni, coach_tokens <= lib_tokens)
     if best is None:
         cands = sorted((len(_norm_tokens(ex.get("title") or "")), ex.get("id"), ex.get("title"))
                        for ex in library if isinstance(ex, dict) and ex.get("id")
@@ -1097,6 +1097,8 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
     conf = "high" if score >= 1.0 else "med" if score >= 0.55 else "low"
     if best[6] or best[7]:  # a one-sided exercise for a two-handed request (or the reverse) is a different load; a different angle, direction or movement ("Decline press", "Chest fly" for a press)
         # "Decline press" must not be saved as "Incline press" (or any other angle or direction)
+        conf = "low"
+    if not anchor and not best[8]:  # nothing says which muscle: one shared generic word ("Back extension" / "Triceps extension") is not a match
         conf = "low"
     if anchor:  # the movement must train the muscle the coach named: "Leg extension" is not "Triceps extension"
         if best[3] and best[3] not in anchor and best[3] != "full body":
@@ -1282,6 +1284,12 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
                 # the feedback lock is held from the last avoid-list read until the vendor has answered: a pain report
                 # logged meanwhile (web or MCP) waits its turn instead of arriving after the check and before the write
                 with (state_io.file_lock(_feedback_path(data_dir) + ".lock") if isinstance(data_dir, str) else contextlib.nullcontext()):
+                    now_unreadable = _feedback_read_error(data_dir) if isinstance(data_dir, str) else None
+                    if now_unreadable and now_unreadable != QUARANTINED:  # it became unreadable while this ran: an empty avoid list is not "nothing to avoid"
+                        entry["error"] = "FeedbackUnreadable"
+                        entry["message"] = "the stored pain/avoid list could not be read, so nothing was saved"
+                        results.append(entry)
+                        continue
                     fresh = _avoid_entries(client, program)
                     hit = [r["coach_name"] for r in resolved if coach._is_avoided(r["matched_name"], fresh) or coach._is_avoided(r["coach_name"] or "", fresh)]
                     if hit:

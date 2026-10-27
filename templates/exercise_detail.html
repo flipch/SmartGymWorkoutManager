@@ -196,7 +196,7 @@
                 <div class="mt-8">
                     <h3 class="text-xs font-bold text-gray-500 uppercase mb-3 tracking-wider">Target Muscles</h3>
                     <div class="flex flex-wrap gap-2">
-                        {% for aux in ex.auxiliaryMuscleGroupList %}
+                        {% for aux in (ex.auxiliaryMuscleGroupList or []) %}
                         <span class="bg-gray-700 text-gray-300 px-2 py-0.5 rounded text-xs border border-gray-600">
                             {{ aux.muscleGroupName }} (Auxiliary)
                         </span>
