@@ -74,7 +74,7 @@ def _parse_date(v):
                 return stamp.astimezone().date()
         except ValueError:
             pass
-        m = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', v)
+        m = re.search(r'([0-9]{4})[-/]([0-9]{1,2})[-/]([0-9]{1,2})', v)
         if m:
             try:
                 return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))

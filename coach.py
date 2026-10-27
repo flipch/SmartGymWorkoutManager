@@ -515,7 +515,7 @@ def classify_exercise(name, api_muscle=None):
     muscle = _MUSCLE_TAG_MAP.get((api_muscle or "").lower().strip()) if api_muscle else None
     pattern = None
     for keys, (mus, pat) in CLASSIFY_RULES:
-        if any((re.search(r"\brows?\b", n) if k == "row" else re.search(r"\bruns?\b", n) if k == "run" else k in n) for k in keys):  # not "narrow", "throw" or "trunk"
+        if any((re.search(r"\brows?\b", n) if k == "row" else re.search(r"\b(?:run|runs|running)\b", n) if k == "run" else k in n) for k in keys):  # not "narrow", "throw" or "trunk"
             if muscle is None:
                 muscle = mus
             pattern = pat

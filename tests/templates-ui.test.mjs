@@ -180,7 +180,7 @@ function calendar(responses) {
             if (next === 'throw') throw new Error('network');
             return { json: async () => next };
         },
-        Date,
+        Date, movesInFlight: new Set(),
     };
     vm.createContext(ctx);
     const handler = between(src, 'async function ', 'async function deleteScheduledWorkout');
@@ -1439,4 +1439,39 @@ test('an exported unit with stray spaces still means the same thing at import', 
     assert.equal(ctx.workoutData.length, 1);
     assert.equal(ctx.workoutData[0].sentinel, undefined);
     assert.equal(ctx.workoutData[0].sets[0].unit, 'sec');
+});
+
+test('a workout that is being moved cannot be dragged again until the first move finishes', async () => {
+    let release;
+    const slow = new Promise((r) => { release = r; });
+    const { ctx, calls, alerts } = calendar([slow, { success: true }, { success: true }, { success: true }]);
+    const first = move(ctx);  // its add answer is still pending
+    await move(ctx);  // the same booking dragged again
+    assert.equal(calls.filter((c) => c.startsWith('add')).length, 1);
+    assert.equal(alerts.filter((a) => /already being moved/.test(a)).length, 1);
+    release({ success: true });
+    await first;
+    same(calls.filter((c) => c !== 'refresh'), ['add:2099-01-02', 'remove:2099-01-01']);
+    await move(ctx);  // finished: a new move is allowed again
+    assert.equal(calls.filter((c) => c.startsWith('add')).length, 2);
+});
+
+test('a move that fails also frees the booking for another try', async () => {
+    const { ctx, calls } = calendar([{ success: false, error: 'no' }, { success: true }, { success: true }]);
+    await move(ctx);
+    await move(ctx);
+    assert.equal(calls.filter((c) => c.startsWith('add')).length, 2);
+});
+
+test('the same workout booked on two days can be moved from both at once', async () => {
+    let release;
+    const slow = new Promise((r) => { release = r; });
+    const { ctx, calls, alerts } = calendar([slow, { success: true }, { success: true }, { success: true }]);
+    const from = (originalDate) => ctx.drop({ preventDefault() {}, currentTarget: { classList: { remove() {} }, dataset: { date: '2099-01-09' } },
+                                              dataTransfer: { getData: () => JSON.stringify({ type: 'move', code: 'abc', originalDate }) } });
+    const first = from('2099-01-01');
+    await from('2099-01-03');
+    assert.equal(alerts.filter((a) => /already being moved/.test(a)).length, 0);
+    release({ success: true });
+    await first;
 });

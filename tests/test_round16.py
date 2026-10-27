@@ -2618,3 +2618,42 @@ class Round44(unittest.TestCase):
                 client = api_client.SpeedianceClient()
             client.save_config("42", "tok", "Global", 1, "", 1, False, [], [], unit_confirmed=flag)
             self.assertFalse(api_client.unit_is_confirmed(client.credentials), repr(flag))
+
+
+class Round45(unittest.TestCase):
+    def test_a_fractional_rep_count_is_not_a_set(self):
+        from harness.normalize import session_with_sets, set_load
+        row = {"finishedCount": 0.1, "targetCount": 10, "capacity": 740, "trainingInfoDetail": {}}
+        self.assertIsNone(set_load(row))
+        record = {"trainingId": 1, "startTimestamp": 1_792_000_000, "title": "T"}
+        detail = [{"actionLibraryName": "Cable Row", "finishedReps": [row, {**row, "finishedCount": 10, "capacity": 740}]}]
+        sets = session_with_sets(record, detail).sets
+        self.assertEqual([(s.reps, s.load) for s in sets], [(None, None), (10, 74.0)])
+        for bad in (2.5, 9.99):
+            self.assertIsNone(set_load({**row, "finishedCount": bad}), bad)
+        self.assertEqual(set_load({**row, "finishedCount": 10.0}), 74.0)  # a whole number sent as 10.0 is fine
+
+    def test_running_is_cardio_and_a_unicode_date_is_not_a_date(self):
+        from datetime import date
+        import coach
+        for name in ("Running", "Treadmill Run", "Runs", "run"):
+            self.assertEqual(coach.classify_exercise(name)[1], "cardio", name)
+        self.assertNotEqual(coach.classify_exercise("Cable Trunk Rotation")[1], "cardio")
+        self.assertIsNone(features._parse_date("２０２６-１０-２８"))
+        self.assertEqual(features._parse_date("2026-10-28"), date(2026, 10, 28))
+
+    def test_the_library_page_survives_an_accessory_with_a_non_string_name(self):
+        client = mock.Mock()
+        client.credentials = {"token": "x"}
+        client.get_accessories.return_value = [{"id": 1, "name": None}, {"id": 2, "name": 5}, {"id": 3, "name": ["x"]}, {"id": 4, "name": "Bar"}]
+        client.get_library.return_value = [{"id": 5, "title": "T", "mainMuscleGroupName": "chest", "accessories": "1,2,3,4"}]
+        client.get_categories.return_value = [{"id": 1, "name": "Chest"}]
+        with mock.patch.object(gym_app, "client", client):
+            resp = gym_app.app.test_client().get("/library", headers=BASIC)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_a_fractional_target_is_not_a_target(self):
+        from harness.normalize import session_with_sets
+        record = {"trainingId": 1, "startTimestamp": 1_792_000_000, "title": "T"}
+        detail = [{"actionLibraryName": "Cable Row", "finishedReps": [{"finishedCount": 8, "targetCount": 2.5, "capacity": 640, "trainingInfoDetail": {}}]}]
+        self.assertIsNone(session_with_sets(record, detail).sets[0].target)

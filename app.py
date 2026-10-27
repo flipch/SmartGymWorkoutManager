@@ -452,7 +452,7 @@ def library():
         accessories = []
         categories = []
 
-    accessory_map = {str(acc['id']): acc['name'] for acc in accessories if isinstance(acc, dict) and 'id' in acc and 'name' in acc}
+    accessory_map = {str(acc['id']): acc['name'] for acc in accessories if isinstance(acc, dict) and 'id' in acc and isinstance(acc.get('name'), str)}
     
     # Enrich exercises with equipment names
     for ex in exercises:

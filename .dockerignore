@@ -6,6 +6,7 @@
 .env.*
 *.env
 config.json
+config.json.*
 readiness.json
 readiness.json.corrupt-*
 coach_feedback.json

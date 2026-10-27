@@ -471,6 +471,8 @@
         ev.currentTarget.classList.remove('drag-over');
     }
 
+    const movesInFlight = new Set();  // one move per booked workout at a time
+
     async function drop(ev) {
         ev.preventDefault();
         ev.currentTarget.classList.remove('drag-over');
@@ -497,6 +499,13 @@
 
         if (data.type === 'move') {
             if (data.originalDate === targetDate) return; // Dropped on same day
+
+            const moveKey = `${data.originalDate}|${data.code}`;
+            if (movesInFlight.has(moveKey)) {  // a second drag of the same booking would add it twice and remove the origin twice
+                alert('This workout is already being moved. Wait for it to finish.');
+                return;
+            }
+            movesInFlight.add(moveKey);
 
             // 1. Add to the new date FIRST: whatever fails afterwards, the workout is still booked somewhere
             let added = false;
@@ -542,6 +551,8 @@
                 } else {
                     alert('Error moving workout');
                 }
+            } finally {
+                movesInFlight.delete(moveKey);
             }
 
         } else {
