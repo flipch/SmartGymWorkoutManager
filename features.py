@@ -1202,6 +1202,9 @@ def _program_loads(day):
     return out
 
 
+_PROGRAM_ALIASES = {"weight": "load", "weights": "load", "weight_kg": "load", "weight_lb": "load", "rest": "rest_sec", "rest_seconds": "rest_sec"}
+
+
 def program_day_to_payload(library, day, load_unit=None, imperial=False, avoid=frozenset()):
     """Build save_workout's exercises payload for one program day + a resolution report."""
     exercises, resolved, unresolved = [], [], []
@@ -1221,6 +1224,9 @@ def program_day_to_payload(library, day, load_unit=None, imperial=False, avoid=f
             # the library match may be an exercise the user reported pain on, even if the coach's own name is not
             unresolved.append({"name": e.get("name"), "muscle": e.get("primary"), "reason": "on your avoid list"})
             continue
+        for alias, right in _PROGRAM_ALIASES.items():  # save_workout's words are not this program's: the value would be dropped and the set saved at 0
+            if alias in e:
+                raise ValueError(f"{e.get('name') or 'exercise'}: this is a program exercise: use '{right}', not '{alias}'")
         one_sided = bool(r["unilateral"]) if "unilateral" in r else bool(e.get("unilateral"))  # the MATCHED exercise decides
         n_sets = _whole(e.get("sets"), "sets", MAX_SETS // 2 if one_sided else MAX_SETS)  # bounded BEFORE allocating
         reps = _whole(e.get("reps"), "reps", MAX_REPS)

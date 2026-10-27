@@ -2163,7 +2163,7 @@ class Round36(unittest.TestCase):
         self.assertIsNotNone(control.load)  # a comparable newer session still counts
         self.assertGreater(control.load, 80.0)
         one_rep = self.plan([SetResult("Cable Row", reps=1, load=80.0, target=1) for _ in range(3)])
-        self.assertLessEqual(one_rep.load, 80.0)  # 1 rep at a 1-rep target is not "hit every set" for a 10-rep prescription
+        self.assertIsNone(one_rep.load)  # 1 rep at a 1-rep target says nothing about 10 reps: no load to plan on
         timed = self.plan([SetResult("Cable Row", reps=0, seconds=45, load=80.0) for _ in range(3)])
         self.assertIsNone(timed.load)
         self.assertIn("timed", timed.load_basis)
@@ -2827,3 +2827,41 @@ class Round50(unittest.TestCase):
             self.assertIn("far from", out.load_basis)
         ok = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=tuple(SetResult("Bench", reps=8, load=150.0, target=10) for _ in range(3)))
         self.assertIsNotNone(planner._from_template(ok, auto, 5.0, date(2026, 10, 26))[0].load)
+
+
+class Round51(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def test_a_newer_session_that_managed_one_or_two_reps_is_not_a_load_to_plan_on(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        template = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T", sets=tuple(SetResult("Bench", reps=10, load=100.0, target=10) for _ in range(3)))
+        for newer_reps, load in ((1, 90.0), (2, 100.0), (1, 100.0)):
+            newer = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Bench", reps=newer_reps, load=load, target=10) for _ in range(3)))
+            out = planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26), [template, newer])[0]
+            self.assertIsNone(out.load, (newer_reps, load))
+            self.assertIn("far from", out.load_basis)
+        four = SessionResult("3", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Bench", reps=4, load=100.0, target=10) for _ in range(3)))
+        self.assertLessEqual(planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26), [template, four])[0].load, 100.0)  # a miss still holds
+
+    def test_a_program_exercise_with_save_workouts_words_is_refused_not_saved_at_zero(self):
+        lib = [{"id": 7, "title": "Cable Chest Press", "mainMuscleGroupName": "chest", "isLeftRight": 0}]
+        for alias in ("weight", "rest", "weight_kg"):
+            day = {"name": "D", "exercises": [{"name": "Cable chest press", "primary": "chest", "sets": 3, "reps": 10, alias: 60}]}
+            with self.assertRaises(ValueError, msg=alias):
+                features.program_day_to_payload(lib, day, "lb", True)
+        ok = {"name": "D", "exercises": [{"name": "Cable chest press", "primary": "chest", "sets": 3, "reps": 10, "load": 60, "rest_sec": 90}]}
+        exercises, _, _ = features.program_day_to_payload(lib, ok, "lb", True)
+        self.assertEqual(exercises[0]["sets"][0]["weight"], 60.0)
+
+    def test_small_robustness_items(self):
+        from harness.normalize import session_with_sets
+        self.assertFalse(gym_app._record_arg("9" * 5000))
+        self.assertTrue(gym_app._record_arg("12345"))
+        record = {"trainingId": 1, "startTimestamp": 1_792_000_000, "title": "T"}
+        sets = session_with_sets(record, [{"actionLibraryName": "Row", "finishedReps": [{"finishedCount": 8.0, "targetCount": 10.0, "capacity": 640}]}]).sets
+        self.assertEqual((sets[0].reps, type(sets[0].reps)), (8, int))
+        self.assertEqual(gym_app.app.config["MAX_CONTENT_LENGTH"], 5 * 1024 * 1024)
+        big = gym_app.app.test_client().post("/api/coach/critique", headers=BASIC, data=b"{" + b" " * (6 * 1024 * 1024) + b"}", content_type="application/json")
+        self.assertEqual(big.status_code, 413)

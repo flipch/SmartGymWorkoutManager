@@ -38,7 +38,7 @@ def _count(value):
 def _whole_count(value):
     """A rep count: a whole number of reps. 0.1 reps is not a set, and capacity / 0.1 would be a 10x load."""
     n = _count(value)
-    return n if n is not None and n == int(n) else None
+    return int(n) if n is not None and n == int(n) else None
 
 
 def set_load(set_row: dict) -> float | None:

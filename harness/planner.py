@@ -281,6 +281,12 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                 out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
                                             f"a newer session ({nday.isoformat()}) logged this lift as a timed exercise (seconds): choose a load that leaves the target RIR"))
                 continue
+            nreps = sorted(x.reps for x in nsets if x.reps)
+            if nload <= last and nreps[len(nreps) // 2] < 0.3 * (reps or 0):  # 1 or 2 reps of a 10-rep prescription is not a load to plan on
+                out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
+                                            f"a newer session ({nday.isoformat()}) managed about {nreps[len(nreps) // 2]} rep(s) per set, far from the {reps} prescribed: "
+                                            "choose a load that leaves the target RIR"))
+                continue
             if nload <= last:  # not heavier since this template: that is where the athlete is now,
                 ntargets = [x.target for x in nsets if x.target]  # and that session's result decides whether to progress
                 last, newer_note = nload, f"; a newer session ({nday.isoformat()}) is the latest evidence"

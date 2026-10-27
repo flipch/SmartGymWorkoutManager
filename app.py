@@ -34,6 +34,7 @@ else:
 
 # Signs the flash-message cookie only. Not a constant (it was a published string): env, else random per process.
 app.secret_key = os.environ.get("GYM_SECRET_KEY") or secrets.token_hex(32)
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # every JSON body here is small; a bigger one is a 413, not a parse of unbounded size
 client = SpeedianceClient()
 
 
@@ -522,7 +523,8 @@ def exercise_detail(ex_id):
     # Format: [{"context": "Text...", "img": "url..."}, ...]
     try:
         if detail.get('showDetails'):
-            detail['steps'] = json.loads(detail['showDetails'])
+            steps = json.loads(detail['showDetails'])
+            detail['steps'] = steps if isinstance(steps, list) else []
         else:
             detail['steps'] = []
     except Exception as e:
@@ -591,6 +593,8 @@ def _record_arg(value):
         return False
     if isinstance(value, int):
         return 0 < value < 10 ** 12
+    if isinstance(value, str) and len(value) > 64:
+        return False  # before int(): a 5000-digit string would raise
     if isinstance(value, str) and re.fullmatch(r"-?\d+", value) and int(value) <= 0:
         return False  # "0" and "-7" are no more ids than 0 and -7
     return valid_record_id(value)
