@@ -2470,3 +2470,96 @@ class Round42(unittest.TestCase):
             out = features.apply_program(client, program, 0, None, dry_run=False)
         client.save_workout.assert_not_called()
         self.assertEqual(out["results"][0]["error"], "AvoidListChanged")
+
+
+class Round43(unittest.TestCase):
+    def test_a_pain_report_waits_for_a_save_in_flight_and_the_save_sees_the_earlier_ones(self):
+        import threading, time as _time
+        d = tempfile.mkdtemp(prefix="gym-r43-")
+        client = mock.Mock(data_dir=d, credentials={"token": "x", "unit": 1})
+        client.get_library.return_value = []
+        program = {"goal_label": "G", "days": [{"name": "D", "exercises": [
+            {"name": "Cable chest press", "primary": "chest", "sets": 2, "reps": 8, "load": 0, "rest_sec": 60}]}]}
+        seen = {}
+
+        def save(nm, exercises):
+            late = threading.Thread(target=lambda: features.log_feedback({"pain": True, "exercise": "Cable chest press"}, d))
+            late.start()
+            _time.sleep(0.3)
+            seen["still_waiting"] = late.is_alive()  # the report cannot land between the last check and the vendor's answer
+            seen["thread"] = late
+            return {"code": 0, "data": {"id": 1}}
+        client.save_workout.side_effect = save
+        resolved = {"groupId": 7, "matched_name": "Cable Chest Press", "muscle": "chest", "confidence": "high"}
+        with mock.patch.object(features, "resolve_exercise", return_value=resolved):
+            features.apply_program(client, program, 0, None, dry_run=False)
+        seen["thread"].join(5)
+        self.assertTrue(seen["still_waiting"])
+        self.assertIn("Cable chest press", features._feedback_profile(d)["avoid"])  # recorded right after the save
+
+    def test_an_iso_timestamp_with_a_zone_is_the_local_day(self):
+        from datetime import date
+        import time as _time
+        old = os.environ.get("TZ")
+        os.environ["TZ"] = "America/Los_Angeles"; _time.tzset()
+        try:
+            self.assertEqual(features._parse_date("2026-10-28T01:00:00Z"), date(2026, 10, 27))
+            self.assertEqual(features._parse_date("2026-10-27T01:00:00Z"), date(2026, 10, 26))
+            self.assertEqual(features._parse_date("2026-10-27T09:00:00-07:00"), date(2026, 10, 27))
+            self.assertEqual(features._parse_date("2026-10-27 09:00:00"), date(2026, 10, 27))  # no zone: the date as written
+            self.assertEqual(features._parse_date("2026-10-27"), date(2026, 10, 27))
+        finally:
+            if old is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old
+            _time.tzset()
+
+    def test_a_two_level_set_has_no_load_nobody_carried(self):
+        from harness.normalize import set_load
+        row = lambda w: {"finishedCount": len(w), "capacity": sum(w), "trainingInfoDetail": {"weights": w}}
+        self.assertEqual(set_load(row([100.0] * 5 + [75.0] * 5)), 75.0)
+        self.assertEqual(set_load(row([100.0] * 5 + [45.0] * 5)), 45.0)
+        self.assertEqual(set_load(row([100.0] * 5 + [40.0] * 5)), 40.0)
+        self.assertEqual(set_load(row([100.0] * 10)), 100.0)  # the controls
+        self.assertEqual(set_load(row([40.0, 40.0, 40.0, 20.0, 60.0])), 40.0)
+        self.assertEqual(set_load(row([100.0] * 9 + [85.0])), 100.0)
+
+    def test_a_flag_that_is_not_true_never_becomes_confirmed_by_an_unrelated_save(self):
+        for flag in ("false", 1, "no", "0", 0, None, []):
+            with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-r43-")}):
+                client = api_client.SpeedianceClient()
+            client.save_config("42", "tok", "Global", 1, "", 1, False, [], [], unit_confirmed=True)
+            client.credentials["unit_confirmed"] = flag
+            client.save_config("42", "tok", "Global", 1, "other", 1, False, [], [])
+            self.assertFalse(api_client.unit_is_confirmed(client.credentials), repr(flag))
+        client.credentials["unit_confirmed"] = True
+        client.save_config("42", "tok", "Global", 1, "other", 1, False, [], [])
+        self.assertTrue(api_client.unit_is_confirmed(client.credentials))
+
+    def test_a_malformed_opt_out_does_not_switch_the_stored_safety_lists_off(self):
+        for value in (None, 0, "", [], "false"):
+            with mock.patch.object(features, "_feedback_profile", return_value={"avoid": ["Cable chest press"]}) as spy, \
+                    mock.patch.object(features, "_authed", return_value=True):
+                gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"use_stored_feedback": value})
+            self.assertTrue(spy.called, repr(value))
+        with mock.patch.object(features, "_feedback_profile", return_value={"avoid": []}) as spy:
+            gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"use_stored_feedback": False})
+        self.assertFalse(spy.called)
+
+    def test_a_boolean_load_is_not_a_number(self):
+        with self.assertRaises(ValueError):
+            features._program_loads({"exercises": [{"name": "x", "load": True}]})
+        self.assertEqual(features._program_loads({"exercises": [{"name": "x", "load": "12"}, {"name": "y"}]}), [12.0, 0.0])
+
+    def test_a_caller_supplied_feedback_still_keeps_the_stored_avoid_list_unless_turned_off_with_false(self):
+        stored = {"avoid": ["Cable chest press"], "events": 1}
+        for value, kept in ((None, True), (0, True), ("false", True), (False, False)):
+            with mock.patch.object(features, "_feedback_profile", return_value=stored) as spy, mock.patch.object(features, "_authed", return_value=True):
+                gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"feedback": {"avoid": ["Squat"]}, "use_stored_feedback": value})
+            self.assertEqual(spy.called, kept, repr(value))
+
+    def test_a_three_level_set_anchors_on_what_three_quarters_of_the_reps_carried(self):
+        from harness.normalize import set_load
+        w = [100.0] * 4 + [75.0] * 2 + [50.0] * 4
+        self.assertEqual(set_load({"finishedCount": 10, "capacity": sum(w), "trainingInfoDetail": {"weights": w}}), 50.0)

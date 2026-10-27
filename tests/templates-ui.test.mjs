@@ -1431,3 +1431,12 @@ test('an unloaded set of a timed exercise imports without a unit in the file', a
     assert.equal(await tryImport(metaOf({ completionMethod: 1 }), [{ reps: 10, weight: 0 }]), 'refused');  // a rep exercise still needs a load
     assert.equal(await tryImport(metaOf({ completionMethod: 1 }), [{ reps: 10, weight: 0, unit: 'sec' }]), 'refused');
 });
+
+test('an exported unit with stray spaces still means the same thing at import', async () => {
+    const { ctx, doc } = editor(() => metaOf({ completionMethod: 2 }));
+    ctx.workoutData = [{ sentinel: true }];
+    await importJson(ctx, doc, { name: 'N', exercises: [{ id: 5, sets: [{ reps: 45, weight: 0, unit: ' SEC ' }] }] });
+    assert.equal(ctx.workoutData.length, 1);
+    assert.equal(ctx.workoutData[0].sentinel, undefined);
+    assert.equal(ctx.workoutData[0].sets[0].unit, 'sec');
+});

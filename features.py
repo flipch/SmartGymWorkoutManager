@@ -14,6 +14,7 @@ since field names vary by region/firmware.
 """
 from flask import Blueprint, jsonify, Response, render_template_string, request
 from datetime import datetime, date, timedelta, timezone
+import contextlib
 import glob
 import hashlib
 from collections import defaultdict
@@ -67,6 +68,12 @@ def _parse_date(v):
             return None
         return None
     if isinstance(v, str):
+        try:  # "2026-10-28T01:00:00Z" is October 27 on the US west coast: convert before taking the date
+            stamp = datetime.fromisoformat(v.strip())
+            if stamp.tzinfo is not None:
+                return stamp.astimezone().date()
+        except ValueError:
+            pass
         m = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', v)
         if m:
             try:
@@ -777,15 +784,15 @@ def _all_finite(value):
 def coach_program():
     body = json_object(request.get_json(silent=True))
     readiness = body.get("readiness")
-    readiness_error = _readiness_read_error() if body.get("use_stored_readiness", True) else None
+    readiness_error = _readiness_read_error() if body.get("use_stored_readiness") is not False else None
     if readiness is not None:
         try:
             readiness = state_io.require_readiness(readiness)
         except ValueError as e:
             return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
-        if body.get("use_stored_readiness", True):
+        if body.get("use_stored_readiness") is not False:
             readiness = merge_readiness(readiness)
-    elif body.get("use_stored_readiness", True):
+    elif body.get("use_stored_readiness") is not False:
         stored = _fresh_readiness()
         if any(k in stored for k in state_io.READINESS_SIGNALS):
             readiness = stored
@@ -799,11 +806,11 @@ def coach_program():
         if not isinstance(feedback, dict) or not (isinstance(avoid_given, (list, tuple)) and all(isinstance(a, str) for a in avoid_given)):
             return jsonify({"error": "bad_request", "message": "feedback must be an object whose avoid is a name or a list of names."}), 400
         feedback = {**feedback, "avoid": list(avoid_given)}
-    if feedback is None and body.get("use_stored_feedback", True):
+    if feedback is None and body.get("use_stored_feedback") is not False:
         prof = _feedback_profile()
         feedback = prof if prof.get("events") else None
         feedback_error = prof.get("unreadable")
-    elif isinstance(feedback, dict) and body.get("use_stored_feedback", True):
+    elif isinstance(feedback, dict) and body.get("use_stored_feedback") is not False:
         prof = _feedback_profile()  # the caller's numbers apply, but a reported pain or avoid stays excluded
         feedback = {**feedback, "avoid": sorted(set(feedback["avoid"]) | set(prof.get("avoid") or []))}
         feedback_error = prof.get("unreadable")
@@ -1154,6 +1161,8 @@ def _program_loads(day):
     out = []
     for e in day.get("exercises", []):
         try:
+            if isinstance(e.get("load"), bool):
+                raise TypeError
             out.append(float(e.get("load") or 0))
         except (TypeError, ValueError):
             raise ValueError("every exercise load must be a number") from None
@@ -1269,15 +1278,18 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
         if modes:
             entry["notes"] = [f"coach modes ({', '.join(modes)}) are not applied: every set is saved as Standard"]
         if not dry_run and exercises:
-            fresh = _avoid_entries(client, program)  # a pain report logged while this call was checking the library must still win
-            hit = [r["coach_name"] for r in resolved if coach._is_avoided(r["matched_name"], fresh) or coach._is_avoided(r["coach_name"] or "", fresh)]
-            if hit:
-                entry["error"] = "AvoidListChanged"
-                entry["message"] = "an exercise on your avoid list was added while this ran, so nothing was saved: " + ", ".join(str(h) for h in hit)
-                results.append(entry)
-                continue
             try:
-                resp = client.save_workout(nm, exercises)
+                # the feedback lock is held from the last avoid-list read until the vendor has answered: a pain report
+                # logged meanwhile (web or MCP) waits its turn instead of arriving after the check and before the write
+                with (state_io.file_lock(_feedback_path(data_dir) + ".lock") if isinstance(data_dir, str) else contextlib.nullcontext()):
+                    fresh = _avoid_entries(client, program)
+                    hit = [r["coach_name"] for r in resolved if coach._is_avoided(r["matched_name"], fresh) or coach._is_avoided(r["coach_name"] or "", fresh)]
+                    if hit:
+                        entry["error"] = "AvoidListChanged"
+                        entry["message"] = "an exercise on your avoid list was added while this ran, so nothing was saved: " + ", ".join(str(h) for h in hit)
+                        results.append(entry)
+                        continue
+                    resp = client.save_workout(nm, exercises)
                 if not isinstance(resp, dict) or resp.get("code") != 0:  # the vendor may answer 200 with an error code
                     entry["error"] = "UpstreamRejected"
                     entry["upstream_code"] = resp.get("code") if isinstance(resp, dict) else None

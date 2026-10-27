@@ -43,6 +43,8 @@ def set_load(set_row: dict) -> float | None:
         mid = float(median(weights))
         if min(weights) < 0.5 * mid:  # a drop set: no single load was lifted for the counted reps, so none is an anchor
             return None
+        if sum(1 for w in weights if w < 0.9 * mid) > 0.25 * len(weights):  # a two-level set (100 then 75) has a median nobody lifted
+            return float(sorted(weights)[(len(weights) - 1) // 4])  # what at least three quarters of the reps carried
         return float(mid)
     reps, capacity = _count(set_row.get("finishedCount")) or 0, set_row.get("capacity") or 0
     if isinstance(reps, (int, float)) and isinstance(capacity, (int, float)) and reps > 0 and capacity > 0 and math.isfinite(capacity):

@@ -1040,7 +1040,7 @@
         if (field === 'weight') {
             min = ex.dataStatType === 6 ? 1 : rules.minW;
             max = ex.dataStatType === 6 ? 10 : rules.maxW;
-            step = rules.step;
+            step = ex.dataStatType === 6 ? 1 : rules.step;  // a Vita level is a whole number on a metric account too
         }
         if (field === 'reps') {
             const apiUnit = getSetGoalUnit(workoutData[exIdx]);
@@ -1344,7 +1344,7 @@ You must output a JSON object with the following structure:
                         })(),
                         mode: (s.mode === undefined || s.mode === null || s.mode === '' || s.mode === 0) ? 1 : whole(s.mode, 'mode', si),
                         rest: (s.rest === undefined || s.rest === null || s.rest === '') ? 60 : whole(s.rest, 'rest', si),  // 0 s is a real rest
-                        unit: String(s.unit || '').toLowerCase() === 'sec' ? 'sec' : 'reps'  // an exported timed set stays timed
+                        unit: String(s.unit || '').trim().toLowerCase() === 'sec' ? 'sec' : 'reps'  // an exported timed set stays timed
                     }));
 
                     // Handle Unilateral: expand L/R pairs if not already expanded.

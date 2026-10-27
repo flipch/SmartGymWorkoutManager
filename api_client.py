@@ -324,7 +324,7 @@ class SpeedianceClient:
 
     def save_config(self, user_id, token, region="Global", unit=0, custom_instruction="", device_type=1, allow_monster_moves=False, owned_accessories=None, owned_devices=None, unit_confirmed=None):
         previous = getattr(self, "credentials", None) or {}
-        confirmed = bool(previous.get("unit_confirmed")) if unit_confirmed is None else bool(unit_confirmed)
+        confirmed = previous.get("unit_confirmed") is True if unit_confirmed is None else bool(unit_confirmed)
         old_user = str(previous.get("user_id") or "")
         if old_user and old_user != str(user_id) and unit_confirmed is not True:
             unit, confirmed = 0, False  # another account: its unit is unknown until someone chooses it

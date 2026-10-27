@@ -316,7 +316,7 @@
                 setsInfo = mins > 0
                     ? `<span class="text-purple-300">${mins} min follow-along</span>`
                     : `<span class="text-purple-300">Follow-along</span>`;
-            } else if (ex.completionMethod === 0) {
+            } else if (ex.completionMethod === 0 || ex.completionMethod === 2) {
                 setsInfo = `<span class="text-blue-300">${esc(setsReps)}s timer</span>`;
             } else {
                 const parts = setsReps.split(',');
