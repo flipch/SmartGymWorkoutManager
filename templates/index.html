@@ -334,6 +334,7 @@
             if (seq !== calendarSeq) return;
             renderCalendarGrid(data);
         } catch (error) {
+            if (seq !== calendarSeq) return;  // an older failure must not replace a newer calendar
             console.error('Error fetching calendar:', error);
             grid.innerHTML = '<div class="col-span-7 text-center text-red-500 py-10">Error loading calendar</div>';
         }

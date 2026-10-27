@@ -555,6 +555,15 @@ def _valid_schedule_status(status):
     return type(status) is int and status in (0, 1)
 
 
+def _record_arg(value):
+    """A vendor record id as a client may send it (digits as a number, or a code as a string); never a bool, 0 or a negative."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return 0 < value < 10 ** 12
+    return valid_record_id(value)
+
+
 @app.route('/api/schedule', methods=['POST'])
 def api_schedule():
     """Schedules or unschedules a workout."""
@@ -568,7 +577,7 @@ def api_schedule():
 
     if not date_str or not template_code or status is None:
         return jsonify({"error": "Missing parameters"}), 400
-    if not (valid_iso_date(date_str) and _valid_schedule_status(status) and valid_record_id(str(template_code))):
+    if not (valid_iso_date(date_str) and _valid_schedule_status(status) and _record_arg(template_code)):
         return jsonify({"error": "Invalid parameters"}), 400  # nothing the caller sent is echoed back
 
     try:
@@ -592,7 +601,7 @@ def api_schedule_course():
 
     if not date_str or not course_id:
         return jsonify({"error": "Missing parameters"}), 400
-    if not (valid_iso_date(date_str) and _valid_schedule_status(status) and valid_record_id(str(course_id))):
+    if not (valid_iso_date(date_str) and _valid_schedule_status(status) and _record_arg(course_id)):
         return jsonify({"error": "Invalid parameters"}), 400
 
     try:

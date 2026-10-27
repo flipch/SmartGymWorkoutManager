@@ -1101,6 +1101,7 @@ class Round20ServerSide(unittest.TestCase):
             return []
         with mock.patch.object(gym_app.client, "credentials", creds), mock.patch.object(gym_app.client, "load_config", return_value=creds), \
                 mock.patch.object(gym_app.client, "get_workout_detail", return_value={"name": "n", "actionLibraryList": []}), \
+                mock.patch.object(gym_app.client, "get_user_workouts", return_value=[]), mock.patch.object(gym_app.client, "get_accessories", return_value=[]), \
                 mock.patch.object(gym_app.client, "get_library", side_effect=lib if "library" in down else lambda **kw: []), \
                 mock.patch.object(gym_app.client, "get_categories", side_effect=lib if "categories" in down else lambda **kw: []):
             resp = gym_app.app.test_client().get("/edit/abc", headers=BASIC, follow_redirects=True)
@@ -1216,6 +1217,117 @@ class Round21(unittest.TestCase):
             {"finishedCount": 8, "trainingInfoDetail": {"weights": [30.0]}}]}]
         got = normalize.session_with_sets({"trainingId": 1, "startTimestamp": 1_790_000_000}, detail)
         self.assertEqual([x.side for x in got.sets], ["left", "right", None])
+
+
+class Round22(unittest.TestCase):
+    def mcp(self, name):
+        return getattr(getattr(mcp_server, name), "fn", getattr(mcp_server, name))
+
+    def test_program_loads_land_on_the_editors_grid_in_every_unit_pair(self):
+        for load, unit, imperial, expected in ((36.4, "lb", True, 36.0), (70.5, "lb", True, 70.0), (36.4, "kg", False, 36.5), (22.25, "kg", False, 22.0),
+                                               (100, "lb", False, 45.5), (45, "kg", True, 99)):
+            self.assertEqual(features._to_account_unit(load, unit, imperial), expected, (load, unit, imperial))
+        library = [{"id": 7, "title": "Cable Row", "mainMuscleGroupName": "Lats", "isLeftRight": 0}]
+        day = {"name": "D", "exercises": [{"name": "Cable Row", "primary": "back", "sets": 1, "reps": 8, "load": 56.6}]}
+        exercises, _, _ = features.program_day_to_payload(library, day, "lb", True)
+        self.assertEqual(exercises[0]["sets"][0]["weight"], 57.0)
+
+    def test_a_plain_cable_exercise_cannot_claim_to_be_a_vita_one(self):
+        client = client_with(1, True)
+        client.get_batch_details = lambda ids, **kw: [{"id": i, "actionLibraryList": [{"id": i + 1000}], "dataStatType": 0} for i in ids]
+        with self.assertRaises(ValueError) as ctx:
+            client.prepare_workout("n", [ex(8, data_stat_type=6)])
+        self.assertIn("not a level-based", str(ctx.exception))
+        client.get_batch_details = lambda ids, **kw: [{"id": i, "actionLibraryList": [{"id": i + 1000}]} for i in ids]  # key absent: unknown
+        client.prepare_workout("n", [ex(8, data_stat_type=6)])
+
+    def test_the_builder_parses_exactly_what_the_validator_accepted(self):
+        client = client_with(1, True)
+        wobbly = ex(10, preset_id="5.0", data_stat_type="0.0")
+        wobbly["sets"] = [{"reps": "10.0", "weight": 5, "rest": "", "mode": "2.0", "unit": "reps"}]
+        out = client.prepare_workout("n", [wobbly])["actionLibraryList"][0]
+        self.assertEqual((out["templatePresetId"], out["setsAndReps"], out["sportMode"], out["breakTime2"]), (5, "10", "2", "60"))
+        for key, value in (("rest", 0.5), ("mode", 2.5), ("reps", 10.5)):
+            broken = ex(10)
+            broken["sets"] = [{"reps": 10, "weight": 5, "rest": 60, key: value}]
+            with self.assertRaises(ValueError, msg=key):
+                client.prepare_workout("n", [broken])
+        with self.assertRaises(ValueError):
+            client.prepare_workout("n", [ex(10, data_stat_type=6.5)])
+
+    def test_the_schedule_routes_forward_only_what_they_validated(self):
+        creds = {"token": "x", "user_id": "42", "unit": 1, "unit_confirmed": True, "region": "Global", "device_type": 1}
+        sent = []
+        with mock.patch.object(gym_app.client, "credentials", creds), mock.patch.object(gym_app.client, "load_config", return_value=creds), \
+                mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), \
+                mock.patch.object(gym_app.client, "schedule_workout", side_effect=lambda *a: sent.append(a) or True), \
+                mock.patch.object(gym_app.client, "schedule_course", side_effect=lambda *a: sent.append(a) or True):
+            c = gym_app.app.test_client()
+            for bad in (True, -1, 0, 1.5, [1], {"a": 1}):
+                self.assertEqual(c.post("/api/schedule", headers=BASIC, json={"date": "2026-11-01", "templateCode": bad, "status": 1}).status_code, 400, bad)
+                self.assertEqual(c.post("/api/schedule_course", headers=BASIC, json={"date": "2026-11-01", "courseId": bad, "status": 1}).status_code, 400, bad)
+            raw = c.post("/api/schedule_course", data='{"date":"2026-11-01","courseId":NaN,"status":1}', content_type="application/json", headers=BASIC)
+            self.assertEqual(raw.status_code, 400)
+            self.assertEqual(sent, [])
+            self.assertEqual(c.post("/api/schedule_course", headers=BASIC, json={"date": "2026-11-01", "courseId": 123, "status": 1}).status_code, 200)
+            self.assertEqual(c.post("/api/schedule", headers=BASIC, json={"date": "2026-11-01", "templateCode": "ab_12", "status": 1}).status_code, 200)
+            self.assertEqual(sent, [("2026-11-01", 123, 1), ("2026-11-01", "ab_12", 1)])
+
+    def test_the_planner_proposes_loads_the_machine_can_be_set_to(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        day = date(2026, 10, 26)
+        auto = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+        for unit, step in (("lb", 1.0), ("kg", 0.5)):
+            sets = tuple(SetResult("Cable Row", reps=10, load=76.0, unit=unit, target=10) for _ in range(3))
+            session = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=sets)
+            self.assertEqual(planner._grid(sets), step)
+            load = planner._from_template(session, auto, 10.0, day)[0].load
+            self.assertEqual(load % step, 0, (unit, load))
+        self.assertEqual(planner._round(76.5, 1.0), 76.0)
+        import coach
+        names = [e["name"] for d in coach.generate_program(goal="muscle", days_per_week=3)["days"] for e in d["exercises"]]
+        for unit, step in (("lb", 1.0), ("kg", 0.5)):
+            for last in (61.0, 77.0, 83.0, 91.0, 99.0):
+                sets = tuple(SetResult(n, reps=30, load=last, unit=unit, target=10) for n in names for _ in range(3))
+                session = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=sets)
+                warnings = []
+                _, plan = planner._from_catalog([session], auto, "muscle", 3, "intermediate", day, 10.0, warnings)
+                loads = [x.load for x in plan if x.load is not None]
+                self.assertTrue(loads)
+                self.assertTrue(all(abs(l % step) < 1e-9 for l in loads), (unit, last, loads))
+                from_template = [x.load for x in planner._from_template(session, auto, 10.0, day) if x.load is not None]
+                self.assertTrue(all(abs(l % step) < 1e-9 for l in from_template), (unit, last, from_template))
+
+    def test_a_mid_set_peak_survives_the_summary(self):
+        s = features._summarize_set({"finishedCount": 9, "capacity": 100, "trainingInfoDetail": {"weights": [20, 60, 20]}}, False)
+        self.assertEqual((s["weight"], s["weight_max"]), ([20, 20], 60))
+        self.assertEqual(features._set_weight(s), 60)
+        self.assertEqual(features._set_weight({"weight": [20, 20]}), 20)
+        self.assertEqual(features._set_weight({"weight": 30}), 30)
+
+    def test_mixed_reports_cannot_evict_a_standing_exclusion(self):
+        d = tempfile.mkdtemp(prefix="gym-fb-")
+        features.log_feedback({"avoid": "Squat"}, d)
+        for _ in range(520):
+            features.log_feedback({"pain": True, "exercise": "Curl", "rpe": 9}, d)
+        profile = features._feedback_profile(d, days=3650)
+        self.assertEqual(sorted(profile["avoid"]), ["Curl", "Squat"])
+        self.assertLessEqual(len(json.load(open(features._feedback_path(d)))), 102)
+
+    def test_autoregulate_does_not_hide_a_fresh_stored_red_reading(self):
+        d = tempfile.mkdtemp(prefix="gym-r22-")
+        features.save_readiness({"whoop_recovery": 10}, d)
+        path = features._readiness_path(d)
+        with mock.patch.object(features, "_readiness_path", side_effect=lambda dd=None: path):
+            c = gym_app.app.test_client()
+            self.assertEqual(c.post("/api/coach/autoregulate", headers=BASIC, json={"subjective": 5}).get_json()["band"], "low")
+            self.assertNotEqual(c.post("/api/coach/autoregulate?use_stored=0", headers=BASIC, json={"subjective": 5}).get_json()["band"], "low")
+        client = mock.Mock(data_dir=d)
+        with mock.patch.object(mcp_server, "_client", return_value=client), mock.patch.object(mcp_server, "_require_auth"):
+            self.assertEqual(self.mcp("autoregulate")(subjective=5)["band"], "low")
+            self.assertNotEqual(self.mcp("autoregulate")(subjective=5, use_stored_readiness=False)["band"], "low")
 
 
 @unittest.skipUnless(shutil.which("node"), "node is required")

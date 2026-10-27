@@ -499,7 +499,7 @@
         currentCourseId = courseId;  // scheduling targets the course the modal SHOWS
         resetScheduleUI();
         fetch(`/api/browse/course/${courseId}`)
-            .then(r => r.json())
+            .then(r => r.json().then(data => { if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status)); return data; }))
             .then(data => {
                 if (currentCourseId !== courseId) return;  // a slower answer for a course that is no longer shown
                 document.getElementById('courseModalLoading').classList.add('hidden');

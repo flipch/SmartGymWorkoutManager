@@ -154,7 +154,7 @@ def _iso_week(d):
 def _set_weight(s):
     w = s.get("weight")
     if isinstance(w, list):
-        return max(w) if w else 0
+        return max([x for x in w] + [s.get("weight_max") or 0]) if w else 0
     return w or 0
 
 
@@ -721,6 +721,8 @@ def coach_autoregulate():
         readiness = state_io.require_readiness(json_object(request.get_json(silent=True)))
     except ValueError as e:
         return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
+    if request.args.get("use_stored", "1") != "0":  # a partial reading must not hide a fresh stored red one
+        readiness = merge_readiness(readiness)
     return jsonify(coach.autoregulate(readiness))
 
 
@@ -842,8 +844,14 @@ def log_feedback(payload, data_dir=None):
             # a repeat report replaces an older one only when it restates EVERY exclusion that one carried
             mine = _exclusions(event)
             events = [e for e in events[:-1] if not (_pure_exclusion(e) and _exclusions(e) <= mine)] + [event]
-        standing = [e for e in events if e.get("pain") or e.get("avoid")][-500:]
-        ordinary = [e for e in events if not (e.get("pain") or e.get("avoid"))][-100:]
+        standing, seen = [], set()
+        for e in reversed(events):  # newest first: each excluded exercise keeps the newest report that names it
+            names = _exclusions(e) if (e.get("pain") or e.get("avoid")) else set()
+            if names - seen and len(seen) < 500:
+                standing.append(e)
+                seen |= names
+        kept = {id(e) for e in standing}
+        ordinary = [e for e in events if id(e) not in kept and (not (e.get("pain") or e.get("avoid")) or _exclusions(e) <= seen)][-100:]  # an evicted exercise's report goes with it
         state_io.atomic_write_json(path, sorted(standing + ordinary, key=lambda e: str(e.get("ts") or "")))
     return event
 
@@ -1042,7 +1050,7 @@ def _to_account_unit(load, load_unit, imperial):
         return round(load / 2.2 * 2) / 2
     if load_unit == "kg" and imperial:
         return round(load * 2.2)
-    return load
+    return float(round(load)) if imperial else round(load * 2) / 2  # the editor's grid: whole lb, half kg
 
 
 def _whole(value, what, hi):
@@ -1362,6 +1370,7 @@ def _summarize_set(s, unilateral):
                     segs.append((cw, c)); cw, c = w, 1
             segs.append((cw, c))
             out["weight"] = [segs[0][0], segs[-1][0]]
+            out["weight_max"] = max(warr)  # the summary pair alone would lose a mid-set peak
             out["weight_note"] = ", ".join(f"{n}x{w}" for w, n in segs)
     elif reps and cap:
         out["weight"] = round(cap / reps, 1)

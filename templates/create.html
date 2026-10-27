@@ -332,7 +332,12 @@
         }
     }
 
+    let templateLoading = false;  // adding or saving while the existing template is still loading would overwrite it with a partial plan
     async function loadExistingWorkout(data) {
+        templateLoading = true;
+        try { await loadExistingWorkoutInner(data); } finally { templateLoading = false; }
+    }
+    async function loadExistingWorkoutInner(data) {
         document.getElementById('plan-name').value = data.name;
 
         const groupIds = Array.from(new Set(data.actionLibraryList.map(apiEx => apiEx.groupId || apiEx.actionLibraryId)));
@@ -425,6 +430,7 @@
 
     // --- ADD EXERCISE ---
     async function addExerciseToPlan(groupId, title, img) {
+        if (templateLoading) { alert('The workout is still loading: wait a moment, then add exercises.'); return; }
         if (workoutData.length >= 50) {
             alert('Speediance limits custom workouts to 50 exercises. Remove one before adding another.');
             return;
@@ -1421,6 +1427,7 @@ You must output a JSON object with the following structure:
 
     let saveInFlight = false;
     window.saveWorkout = async () => {
+        if (templateLoading) return alert('The workout is still loading: wait a moment, then save.');
         if (saveInFlight) return;  // a double click must not create two templates
         saveInFlight = true;
         try { await saveWorkoutOnce(); } finally { saveInFlight = false; }

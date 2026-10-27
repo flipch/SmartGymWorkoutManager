@@ -62,8 +62,13 @@ def _same_exercise(a: str, b: str) -> bool:
     return bool(ta) and ta == tb
 
 
-def _round(x: float) -> float:
-    return round(x / ROUND_TO) * ROUND_TO
+def _round(x: float, step: float = ROUND_TO) -> float:
+    return round(x / step) * step
+
+
+def _grid(sets) -> float:
+    """The machine's load step for these sets: whole pounds, half kilograms."""
+    return 1.0 if any(getattr(s, "unit", None) == "lb" for s in sets) else ROUND_TO
 
 
 # ── template selection ──────────────────────────────────────────────────────
@@ -152,7 +157,7 @@ def _readiness_dict(fresh: list[Reading]) -> tuple[dict, list[str]]:
 
 
 def _progress(last: float, hit_all: bool, band: str, intensity_pct: float, max_jump_pct: float,
-              *, allow_increase: bool = True):
+              *, allow_increase: bool = True, step: float = ROUND_TO):
     """(load, basis) for one exercise given its last logged load.
 
     Never exceeds the jump cap, and never exceeds `last` unless it is a deliberate progression. Rounding to the
@@ -171,11 +176,11 @@ def _progress(last: float, hit_all: bool, band: str, intensity_pct: float, max_j
     limit = interlocks.clamp_to_jump(float("inf"), last, max_jump_pct)
     if proposed <= last:
         limit = min(limit, last)
-    if last < 2 * ROUND_TO:  # finer than the plate grid: rounding would give 0 or flip a progression into a drop
+    if last < 2 * step:  # finer than the plate grid: rounding would give 0 or flip a progression into a drop
         return min(proposed, limit), basis
-    load = _round(min(proposed, limit))
+    load = _round(min(proposed, limit), step)
     while load > limit + 1e-9:  # rounding must never break the cap
-        load -= ROUND_TO
+        load -= step
     return load, basis
 
 
@@ -206,7 +211,7 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
         last = anchor_load(performed)
         hit_all = bool(targets) and all((r.reps or 0) >= r.target for r in rows if r.target)
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
-                                allow_increase=age < LAYOFF_DAYS)
+                                allow_increase=age < LAYOFF_DAYS, step=_grid(performed))
         uneven = asymmetry_note(performed)
         out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", load,
                                     f"{basis} (last {last:g}{'; ' + uneven if uneven else ''})", last_load=last))
@@ -234,7 +239,7 @@ def _from_catalog(sessions: list[SessionResult], auto: dict, goal: str, days_per
         last, logged, last_day = anchor
         hit_all = all(x.reps is not None and x.reps >= ex["reps"] for x in logged)
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
-                                allow_increase=(day - last_day).days < LAYOFF_DAYS)
+                                allow_increase=(day - last_day).days < LAYOFF_DAYS, step=_grid(logged))
         out.append(ProposedExercise(ex["name"], sets, ex["reps"], max(ex["rir"], auto["rir_min"]), mode, load,
                                     f"{basis} (last {last:g} on {last_day.isoformat()}"
                                     f"{'; ' + asymmetry_note(logged) if asymmetry_note(logged) else ''})", last_load=last))

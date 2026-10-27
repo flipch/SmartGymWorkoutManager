@@ -396,16 +396,22 @@ def critique_my_workout(code: str, goal: str = "general") -> dict:
 @mcp.tool()
 def autoregulate(whoop_recovery: float = None, hrv_vs_baseline: str = None,
                  rhr_delta_bpm: float = None, sleep_hours: float = None,
-                 subjective: int = None, acwr: float = None) -> dict:
+                 subjective: int = None, acwr: float = None, use_stored_readiness: bool = True) -> dict:
     """Given today's recovery signals (any subset; from Whoop/Apple Health or a 1-5 subjective
     score), return today's training adjustment: readiness band + volume%/intensity%/RIR/session
-    type. Most-conservative signal wins; sleep<6h or RHR>=+5bpm caps a green day."""
+    type. Most-conservative signal wins; sleep<6h or RHR>=+5bpm caps a green day. Fresh stored signals
+    you did not mention are included (use_stored_readiness=false for a pure what-if)."""
     r = {k: v for k, v in {
         "whoop_recovery": whoop_recovery, "hrv_vs_baseline": hrv_vs_baseline,
         "rhr_delta_bpm": rhr_delta_bpm, "sleep_hours": sleep_hours,
         "subjective": subjective, "acwr": acwr,
     }.items() if v is not None}
-    return _safe(lambda: coach.autoregulate(state_io.require_readiness(r)))  # out-of-range numbers are refused
+    def run():
+        got = state_io.require_readiness(r)  # out-of-range numbers are refused
+        if use_stored_readiness:  # a partial reading must not hide a fresh stored red one
+            got = merge_readiness(got, _client().data_dir)
+        return coach.autoregulate(got)
+    return _safe(run)
 
 
 @mcp.tool()

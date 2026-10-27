@@ -58,7 +58,7 @@ function editor(metaFor) {
         fetch: async (url, opts) => { calls.push(['fetch', url, JSON.parse(opts.body)]); return { json: async () => ({ status: 'error', message: 'x' }) }; },
     };
     vm.createContext(ctx);
-    const load = between(src, 'async function loadExistingWorkout', '// --- ADD EXERCISE ---');
+    const load = between(src, 'let templateLoading', '// --- ADD EXERCISE ---');
     vm.runInContext(load + '\nglobalThis.loadExistingWorkout = loadExistingWorkout;', ctx);
     vm.runInContext(between(src, 'window.processImport = async', '\n    };\n') + '\n};', ctx);
     vm.runInContext(between(src, 'let saveInFlight', '// --- STATS LOGIC ---'), ctx);
@@ -745,4 +745,49 @@ test('the coach page says when the stored readiness could not be read', () => {
     assert.match(doc.getElementById('out').innerHTML, /stored readiness could not be read \(JSONDecodeError\)/);
     ctx.api.render(aProgram());
     assert.doesNotMatch(doc.getElementById('out').innerHTML, /stored readiness could not be read/);
+});
+
+// ----------------------------------------------------------------------------------------------- round 22
+test('saving or adding while the existing template is still loading is refused', async () => {
+    let release;
+    const slow = new Promise((r) => { release = r; });
+    const { ctx, calls } = editor((id) => slow.then(() => metaOf()));
+    const src = read('create.html');
+    vm.runInContext(between(src, 'async function addExerciseToPlan', '    // --- ').replace('async function addExerciseToPlan', 'globalThis.addExerciseToPlan = async function addExerciseToPlan'), ctx);
+    const loading = ctx.loadExistingWorkout({ name: 'n', actionLibraryList: [apiExercise()] });
+    await ctx.window.saveWorkout();
+    await ctx.addExerciseToPlan(7, 'Press', '');
+    assert.equal(calls.filter((c) => c[0] === 'fetch').length, 0);
+    assert.equal(calls.filter((c) => c[0] === 'alert' && /still loading/.test(c[1])).length, 2);
+    release();
+    await loading;
+    assert.equal(ctx.workoutData.length, 1);
+    await ctx.addExerciseToPlan(7, 'Press', '');
+    assert.equal(ctx.workoutData.length, 2);  // loaded: adding works again
+});
+
+test('a failed course detail opened from a program day shows an error', async () => {
+    const { ctx, doc } = browse(() => Promise.resolve({ ok: false, status: 502, json: async () => ({ error: 'upstream_error' }) }));
+    ctx.api.openCourseDetailById(101, 'A', 10);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(ctx.rendered, null);
+    assert.match(doc.getElementById('courseModalLoading').textContent, /Error: upstream_error/);
+});
+
+test('an older calendar failure does not replace the newer calendar', async () => {
+    const src = read('index.html');
+    const doc = makeDocument();
+    const answers = [];
+    const drawn = [];
+    const ctx = { document: doc, console, window: { location: {} }, currentDate: new Date(2026, 9, 26), getMonthString: () => '2026-10',
+                  renderCalendarGrid: (d) => drawn.push(d), fetch: () => new Promise((resolve, reject) => answers.push({ resolve, reject })) };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'let calendarSeq', '    function renderCalendarGrid') + '\nglobalThis.fetchCalendarData = fetchCalendarData;', ctx);
+    const first = ctx.fetchCalendarData();
+    const second = ctx.fetchCalendarData();
+    answers[1].resolve({ status: 200, json: async () => [{ date: '2026-10-01' }] }); await second;
+    doc.getElementById('calendarGrid').innerHTML = 'NEWER';
+    answers[0].reject(new Error('network')); await first;
+    assert.equal(doc.getElementById('calendarGrid').innerHTML, 'NEWER');
+    assert.equal(drawn.length, 1);
 });

@@ -107,12 +107,17 @@ def _group_id(value, where):
     return n
 
 
+def _int(value):
+    """int() the way validate_workout parsed it: "5.0" is 5 (validate_workout has already refused 5.5)."""
+    return int(float(value))
+
+
 def _has_cable_load(exercises):
     """Is any set a kg/lb cable load (not a preset RM, not a Vita level)? Those are the numbers a wrong unit corrupts."""
     for ex in exercises:
         raw_preset = ex.get('preset_id')  # normalised exactly as prepare_workout does ("-01" is -1, a custom load)
-        preset = -1 if raw_preset is None else int(raw_preset)
-        if preset != -1 or int(ex.get('data_stat_type') or 0) == 6:
+        preset = -1 if raw_preset in (None, "") else _int(raw_preset)
+        if preset != -1 or _int(ex.get('data_stat_type') or 0) == 6:
             continue
         if any(float(st.get('weight') or 0) > 0 for st in ex['sets']):
             return True
@@ -143,6 +148,8 @@ def validate_workout(name, exercises, imperial=False):
         if variant not in (None, "") and not (str(variant).isdigit() and int(variant) > 0):
             raise ValueError(f"exercise {n}: variant_id must be a positive whole number")
         stat = _bounded(ex.get('data_stat_type') or 0, f"exercise {n}: data_stat_type", 100)
+        if stat != int(stat):
+            raise ValueError(f"exercise {n}: data_stat_type must be a whole number")
         for m, st in enumerate(ex['sets'], 1):
             if not isinstance(st, dict):
                 raise ValueError(f"exercise {n} set {m}: must be an object")
@@ -159,7 +166,8 @@ def validate_workout(name, exercises, imperial=False):
                 raise ValueError(f"{where}: reps (or seconds) must be a whole number")
             if int(float(st.get('reps'))) < 1:
                 raise ValueError(f"{where}: reps (or seconds) is required")
-            _bounded(st.get('rest') or 0, f"{where}: rest", MAX_REST_S)
+            if _bounded(st.get('rest') or 0, f"{where}: rest", MAX_REST_S) != int(float(st.get('rest') or 0)):
+                raise ValueError(f"{where}: rest must be a whole number of seconds")
             if st.get('mode') not in (None, ""):
                 mode = _bounded(st['mode'], f"{where}: mode", MAX_MODE)
                 if mode < 1 or mode != int(mode):
@@ -755,6 +763,7 @@ class SpeedianceClient:
         id_map = {}
         variants = {}
         lib_stat = {str(d.get('id')): int(d.get('dataStatType') or 0) for d in details if isinstance(d, dict)}
+        stat_known = {str(d.get('id')) for d in details if isinstance(d, dict) and d.get('dataStatType') is not None}  # absent = unknown
         for d in details:
             if d.get('actionLibraryList'):
                 id_map[str(d['id'])] = d['actionLibraryList'][0]['id']
@@ -771,10 +780,12 @@ class SpeedianceClient:
             group_id = int(ex['groupId'])
             sets = ex['sets']
             raw_preset_id = ex.get('preset_id')
-            preset_id = int(raw_preset_id) if raw_preset_id is not None else -1
-            data_stat_type = int(ex.get('data_stat_type') or 0)
+            preset_id = _int(raw_preset_id) if raw_preset_id not in (None, "") else -1
+            data_stat_type = _int(ex.get('data_stat_type') or 0)
             if lib_stat.get(str(group_id)) == 6 and data_stat_type != 6:
                 raise ValueError(f"exercise {group_id}: this is a level-based (Vita) exercise; its data_stat_type must be 6")
+            if data_stat_type == 6 and str(group_id) in stat_known and lib_stat[str(group_id)] != 6:
+                raise ValueError(f"exercise {group_id}: this is not a level-based (Vita) exercise; its data_stat_type must not be 6")
             
             is_unilateral = unilateral_check.get(group_id, False)
             if is_unilateral and len(sets) % 2:  # the machine alternates left, right: a lone set is one-sided work
@@ -803,10 +814,10 @@ class SpeedianceClient:
             set_capacity = 0
 
             for i, s in enumerate(sets):
-                reps = int(s.get('reps') or 0)
+                reps = _int(s.get('reps') or 0)
                 weight_val = float(s.get('weight') or 0)
-                mode = int(s.get('mode') or 1)
-                rest = int(s.get('rest') if s.get('rest') is not None else 60)  # 0 s rest is legitimate
+                mode = _int(s.get('mode') or 1)
+                rest = _int(s.get('rest') if s.get('rest') not in (None, "") else 60)  # 0 s rest is legitimate
                 unit = str(s.get('unit', 'reps')).lower()
                 one_cable_max = MAX_WEIGHT_LB_UNILATERAL if imperial else MAX_WEIGHT_KG_UNILATERAL
                 if is_unilateral and preset_id == -1 and data_stat_type != 6 and weight_val > one_cable_max:
