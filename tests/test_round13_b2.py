@@ -260,7 +260,10 @@ vm.runInThisContext(%(script)s);
 
     def test_the_button_sends_an_explicit_real_save(self):
         resp = gym_app.app.test_client().get("/coach", headers=BASIC)
-        script = "\n".join(re.findall(r"<script>(.*?)</script>", resp.get_data(as_text=True), re.S))
+        scripts = re.findall(r"<script>(.*?)</script>", resp.get_data(as_text=True), re.S)
+        shell = ("// ui-theme:start", "// tailwind-config:start", "// ui-shell:start", "function esc(v)")
+        # the layout's esc()/jsq() helper runs first, then the page's own script; the theme and shell scripts need a real DOM
+        script = "\n".join([x for x in scripts if "function esc(v)" in x] + [x for x in scripts if not any(m in x for m in shell)])
         out = subprocess.run([NODE, "-e", self.HARNESS % {"script": json.dumps(script)}], capture_output=True, text=True, timeout=30)
         self.assertEqual(out.returncode, 0, out.stderr)
         sent = json.loads(out.stdout.strip().splitlines()[-1])

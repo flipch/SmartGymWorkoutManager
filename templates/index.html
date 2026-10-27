@@ -3,7 +3,7 @@
 <!-- Workouts Section -->
 <div class="flex justify-between items-center mb-6">
     <h1 class="text-3xl font-bold text-white">My Workouts <span class="text-lg font-normal {% if workouts | length >= 50 %}text-red-400{% elif workouts | length >= 40 %}text-yellow-400{% else %}text-gray-400{% endif %}">({{ workouts | length }} / 50)</span></h1>
-    <div class="flex gap-2 items-center">
+    <div class="flex flex-wrap gap-2 items-center">
         <button id="selectModeBtn" onclick="toggleSelectMode()" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded transition text-sm">Select</button>
         <button id="exportSelectedBtn" onclick="exportSelectedWorkouts()" class="hidden bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition text-sm">Export Selected (0)</button>
         <a href="/create" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow hover:shadow-lg transition">New Workout</a>
@@ -53,11 +53,11 @@
 
 <!-- Calendar Section -->
 <div class="mb-10">
-    <div class="flex justify-between items-center mb-4">
+    <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
         <h2 class="text-2xl font-bold text-white flex items-center gap-2">
             <span>📅</span> Training Calendar
         </h2>
-        <div class="flex items-center space-x-4 bg-gray-800 p-2 rounded-lg">
+        <div class="flex flex-wrap items-center justify-center gap-2 bg-gray-800 p-2 rounded-lg">
             <button id="prevMonth" class="text-gray-400 hover:text-white px-2 py-1 hover:bg-gray-700 rounded transition">
                 &lt; Prev
             </button>
@@ -124,20 +124,20 @@
         transition: all 0.2s;
     }
     .calendar-day.drag-over {
-        background-color: rgba(59, 130, 246, 0.2); /* blue-500 with opacity */
-        border-color: #3b82f6;
+        background-color: rgb(var(--accent) / 0.2);
+        border-color: rgb(var(--accent));
     }
     .calendar-day.today {
-        background-color: rgba(55, 65, 81, 0.8); /* gray-700 */
-        border: 1px solid #4b5563; /* gray-600 */
+        background-color: rgb(var(--raised));
+        border: 1px solid rgb(var(--control-line));
     }
     .workout-pill {
         font-size: 0.75rem;
         line-height: 1rem;
         padding: 2px 6px;
         border-radius: 4px;
-        background-color: #1f2937; /* gray-800 */
-        border: 1px solid #374151; /* gray-700 */
+        background-color: rgb(var(--surface));
+        border: 1px solid rgb(var(--line));
         margin-bottom: 2px;
         display: flex;
         justify-content: space-between;
@@ -145,17 +145,25 @@
         cursor: default;
     }
     .workout-pill:hover {
-        background-color: #374151; /* gray-700 */
+        background-color: rgb(var(--raised));
     }
     .delete-schedule-btn {
         opacity: 0;
-        color: #ef4444; /* red-500 */
+        color: rgb(var(--danger));
         cursor: pointer;
         margin-left: 4px;
         font-weight: bold;
     }
     .workout-pill:hover .delete-schedule-btn {
         opacity: 1;
+    }
+    /* Seven columns have to fit a phone: cells may shrink below their content and the card padding gives way. */
+    #calendarGrid > * { min-width: 0; }
+    @media (max-width: 40rem) {
+        div:has(> #calendarGrid) { padding: 0.5rem; }
+        #weekdayHeaders, #calendarGrid { gap: 0.25rem; }
+        #weekdayHeaders { font-size: 0.65rem; letter-spacing: 0; }
+        #calendarGrid .calendar-day { min-height: 4.5rem; padding: 0.25rem; }
     }
 </style>
 

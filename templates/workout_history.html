@@ -13,11 +13,11 @@
 
     <!-- Calendar Section -->
     <div class="mb-8">
-        <div class="flex justify-between items-center mb-4">
+        <div class="flex flex-wrap justify-between items-center gap-3 mb-4">
             <h2 class="text-xl font-bold text-white flex items-center gap-2">
                 <span>📅</span> Monthly Overview
             </h2>
-            <div class="flex items-center space-x-4 bg-gray-800 p-2 rounded-lg">
+            <div class="flex flex-wrap items-center justify-center gap-2 bg-gray-800 p-2 rounded-lg">
                 <button id="prevMonthHistory" class="text-gray-400 hover:text-white px-2 py-1 hover:bg-gray-700 rounded transition">
                     &lt; Prev
                 </button>
@@ -155,8 +155,8 @@
     .history-calendar-day {
         min-height: 100px;
         transition: all 0.2s;
-        background-color: rgba(55, 65, 81, 0.3);
-        border: 1px solid rgba(75, 85, 99, 0.5);
+        background-color: rgb(var(--raised) / 0.5);
+        border: 1px solid rgb(var(--line));
         border-radius: 0.375rem;
         padding: 0.5rem;
         display: flex;
@@ -164,8 +164,8 @@
     }
 
     .history-calendar-day.today {
-        background-color: rgba(55, 65, 81, 0.6);
-        border-color: #4b5563;
+        background-color: rgb(var(--raised));
+        border-color: rgb(var(--control-line));
     }
 
     .history-workout-pill {
@@ -180,28 +180,28 @@
 
     .history-workout-pill:hover {
         transform: translateY(-1px);
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 2px 4px rgb(0 0 0 / 0.3);
     }
 
     /* Type 2 (Official) - Turquoise */
     .history-workout-type2 {
-        background-color: #5f9ea0;
-        border: 1px solid #4a7a7c;
-        color: #e0f7fa;
+        background-color: rgb(var(--blue-700));
+        border: 1px solid rgb(var(--blue-600));
+        color: rgb(var(--on-accent));
     }
 
     /* Type 5 (Custom) - Purple */
     .history-workout-type5 {
-        background-color: #9370db;
-        border: 1px solid #7b5ab8;
-        color: #f3e5f5;
+        background-color: rgb(var(--purple-700));
+        border: 1px solid rgb(var(--purple-600));
+        color: rgb(var(--on-accent));
     }
 
     /* Type 7 (Movement) - White outline */
     .history-workout-type7 {
         background-color: transparent;
-        border: 2px solid #ffffff;
-        color: #ffffff;
+        border: 2px solid rgb(var(--fg-strong));
+        color: rgb(var(--fg-strong));
     }
 
     .history-workout-pill .workout-title {
@@ -217,6 +217,15 @@
         font-size: 0.65rem;
         opacity: 0.9;
         margin-top: 2px;
+    }
+    /* Seven columns have to fit a phone: cells may shrink, titles are cut short and the details live in the popup. */
+    .history-calendar-day { min-width: 0; }
+    @media (max-width: 40rem) {
+        div:has(> #historyCalendarGrid) { padding: 0.5rem; }
+        div:has(> .history-calendar-day) { gap: 0.25rem; }
+        .history-calendar-day { min-height: 4.5rem; padding: 0.25rem; }
+        .history-workout-pill { padding: 2px 4px; }
+        .history-workout-pill .workout-meta { display: none; }
     }
 </style>
 
