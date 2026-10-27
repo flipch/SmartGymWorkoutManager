@@ -619,6 +619,7 @@ svg [fill="#34d399"] { fill: rgb(var(--success)); }
     }
     .ui-header, .ui-footer, .ui-flash, .no-print, .ui-skip { display: none !important; }
     .ui-main { max-width: none; padding: 0; }
+    html, body { background: #fff !important; }
     * { box-shadow: none !important; }
     a { text-decoration: underline; }
 }

@@ -163,7 +163,18 @@ def install(client):
     features._deep_insights = lambda days=90, max_sessions=24: INSIGHTS_DEEP
 
 
+def _flash_demo():
+    """/_flash-demo flashes one message of every category and redirects to the library, to look at them."""
+    from flask import flash, redirect
+    flash("Library cache cleared. Reloading from server...", "info")
+    flash("Saved the workout.", "success")
+    flash("Could not delete the workout.", "error")
+    flash("GET /x -> 500\n<b>not markup</b> \"quoted\"", "debug")
+    return redirect("/library")
+
+
 if __name__ == "__main__":
+    gym_app.app.add_url_rule("/_flash-demo", "flash_demo", _flash_demo)
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 5099
     install(gym_app.client)
     print(f"serving the UI fixture on http://127.0.0.1:{port}  (Basic auth: any user, password {DUMMY_TOKEN})", flush=True)

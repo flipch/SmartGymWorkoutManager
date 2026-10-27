@@ -4,6 +4,7 @@ credit, and the contract every page relies on (blocks `head` and `content`, help
 Pages are rendered inside a request context, so `request.path` is what the nav's active-link logic really sees.
 """
 import base64
+import hashlib
 import os
 import re
 import sys
@@ -133,9 +134,23 @@ class Landmarks(unittest.TestCase):
         self.assertEqual(buttons["ui-theme-btn"].get("type"), "button")
 
     def test_theme_is_set_before_the_stylesheet_so_nothing_flashes(self):
-        self.assertLess(self.html.index("ui-theme:start"), self.html.index('href="/static/ui-theme.css"'))
-        self.assertLess(self.html.index('href="/static/ui-theme.css"'), self.html.index("cdn.tailwindcss.com"))
+        self.assertLess(self.html.index("ui-theme:start"), self.html.index('href="/static/ui-theme.css?v='))
+        self.assertLess(self.html.index('href="/static/ui-theme.css?v='), self.html.index("cdn.tailwindcss.com"))
         self.assertLess(self.html.index("tailwind-config:start"), self.html.index("function esc"))
+
+
+class Stylesheet(unittest.TestCase):
+    def test_the_stylesheet_url_carries_its_content_hash_so_a_browser_never_pairs_new_markup_with_old_css(self):
+        with open(os.path.join(os.path.dirname(__file__), "..", "static", "ui-theme.css"), "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()[:10]
+        html = render_page("/")
+        self.assertIn(f'href="/static/ui-theme.css?v={digest}"', html,
+                      f"static/ui-theme.css changed: set the ?v= in templates/layout.html to {digest}")
+
+    def test_the_stylesheet_is_served(self):
+        resp = gym_app.app.test_client().get("/static/ui-theme.css", headers=BASIC)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/css", resp.headers["Content-Type"])
 
 
 class Footer(unittest.TestCase):
