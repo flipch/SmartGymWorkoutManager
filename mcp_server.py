@@ -16,6 +16,7 @@ import os
 from datetime import date, timedelta
 
 from mcp.server.mcpserver import MCPServer
+from pydantic import StrictBool
 
 import coach
 import state_io
@@ -353,7 +354,7 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
 
 @mcp.tool()
 def create_workout_from_program(program: dict, day_index: int = None,
-                                name: str = None, dry_run: bool = True, load_unit: str = None) -> dict:
+                                name: str = None, dry_run: StrictBool = True, load_unit: str = None) -> dict:  # 0/'no'/'off' must not mean 'save'
     """Import a generated program (the `generate_program` result) into REAL Speediance workout
     templates. Resolves each exercise name to a library groupId, builds the sets payload, and
     saves it. dry_run defaults to TRUE (preview only: shows the resolution, saves nothing); pass dry_run=false to save, which also requires the server to have writes enabled. day_index saves a

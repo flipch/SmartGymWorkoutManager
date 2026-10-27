@@ -259,6 +259,8 @@
                     })
                 };
             }).filter(Boolean);
+            if (exportArr.length === 0) { alert('None of the selected workouts could be exported (they may have been deleted).'); return; }
+            if (exportArr.length < results.length) alert(`${results.length - exportArr.length} of ${results.length} workouts had no exercises and were left out of the export.`);
 
             const jsonStr = JSON.stringify(exportArr, null, 2);
             const blob = new Blob([jsonStr], { type: 'application/json' });

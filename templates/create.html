@@ -310,6 +310,7 @@
     // --- LADE LOGIK ---
     async function fetchExerciseMetadata(groupId) {
         try {
+            if (!/^\d{1,16}$/.test(String(groupId))) throw new Error('exercise id must be a number');  // never a path
             const res = await fetch(`/api/exercise/${groupId}`);
             const details = await res.json();
             if (!res.ok || !details || details.error) throw new Error('exercise details unavailable');  // never "no variants, bilateral"
@@ -506,6 +507,7 @@
                 auxiliaryMuscleGroupList: meta.auxiliaryMuscleGroupList
             };
 
+            if (getSetGoalUnit(newEx) === 'sec') newEx.sets.forEach(s => { s.unit = 'sec'; });  // what the editor shows is what is stored, exported and saved
             workoutData.push(newEx);
             renderBuilder();
             
@@ -1436,7 +1438,7 @@ You must output a JSON object with the following structure:
             weight: ex.dataStatType === 6 ? (ex.sets.length ? ex.sets[ex.sets.length - 1].weight : 5) : rules.defW,  // a Vita level repeats, never jumps to the cable default 
             mode: 1, 
             rest: rules.defRest, 
-            unit: 'reps'
+            unit: getSetGoalUnit(ex) === 'sec' ? 'sec' : 'reps'
         };
         
         // For UI model, we just push ONE set object.

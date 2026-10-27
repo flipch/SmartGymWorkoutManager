@@ -638,6 +638,8 @@ def api_history():
     end = request.args.get('end')
     if not start or not end:
         return jsonify({"error": "Missing start/end parameters"}), 400
+    if not (valid_iso_date(start) and valid_iso_date(end)):
+        return jsonify({"error": "start and end must be YYYY-MM-DD dates"}), 400
     try:
         records = client.get_training_records(start, end)
         stats = client.get_training_stats(start, end)
@@ -870,7 +872,10 @@ def api_workout_history_detail(record_id):
 
         if response.status_code == 200:
             _require_ok(response, "training detail")  # HTTP 200 with a vendor error code is not a session
-            return jsonify(response.json())
+            body = response.json()
+            if not isinstance(body, dict) or not body.get("data"):  # code 0 and no data: an unknown id, not a workout with no sets
+                return jsonify({"error": "training_detail_not_found", "type_requested": training_type}), 502
+            return jsonify(body)
         status = 401 if response.status_code == 401 else 502
         return jsonify({"error": f"Speediance API Error: {response.status_code}", "type_requested": training_type}), status
     except Exception as e:

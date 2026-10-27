@@ -181,6 +181,8 @@ def validate_feedback(payload) -> dict:
     if out.get("pain") and not (out.get("exercise") or out.get("avoid")):
         # a pain report only protects you through the exercise it names: accepting one without it would do nothing
         raise ValueError("pain: say which exercise hurt (exercise or avoid)")
+    if "prefer" in payload:
+        out["prefer"] = _text(payload, "prefer", MAX_NAME)
     if "note" in payload:
         out["note"] = _text(payload, "note", MAX_NOTE)
     if "workout_code" in payload:

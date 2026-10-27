@@ -53,7 +53,7 @@ function editor(metaFor) {
     const ctx = {
         WorkoutLogic, userUnit: 1, workoutData: [], fullLibrary: [], currentTemplateId: null, window: {}, document: doc,
         alert: (m) => calls.push(['alert', m]), renderBuilder() {}, closeImportModal() {}, console,
-        fetchExerciseMetadata: async (id) => metaFor(id),
+        fetchExerciseMetadata: async (id) => metaFor(id), getSetGoalUnit: (ex) => WorkoutLogic.getSetGoalUnit(ex),
         parseImportedSets: (s, uni, expanded) => WorkoutLogic.parseImportedSets(s, uni, expanded),
         fetch: async (url, opts) => { calls.push(['fetch', url, JSON.parse(opts.body)]); return { json: async () => ({ status: 'error', message: 'x' }) }; },
     };
@@ -248,7 +248,8 @@ function bulkExport(detail) {
     vm.createContext(ctx);
     const body = between(src, 'const exportArr = results.map', 'const jsonStr = JSON.stringify(exportArr');
     vm.runInContext('globalThis.convert = (results) => { ' + body + ' return exportArr; };', ctx);
-    return plain(ctx.convert([detail]));
+    const out = ctx.convert([detail]);
+    return out === undefined ? undefined : plain(out);
 }
 
 test('a bulk export keeps Vita levels, zero rests and timed sets', () => {
@@ -1041,7 +1042,7 @@ test('a measured zero is not replaced by the prescribed duration, and vendor num
 // ----------------------------------------------------------------------------------------------- round 25
 test('adding a set to a Vita exercise repeats the current level, not the cable default', () => {
     const src = read('create.html');
-    const ctx = { workoutData: [], getRules: (ex) => WorkoutLogic.getRules(ex, 1), renderBuilder() {}, window: {} };
+    const ctx = { workoutData: [], getRules: (ex) => WorkoutLogic.getRules(ex, 1), getSetGoalUnit: (ex) => WorkoutLogic.getSetGoalUnit(ex), renderBuilder() {}, window: {} };
     vm.createContext(ctx);
     vm.runInContext(between(src, 'window.addSet = ', '    window.removeSet') + '\n', ctx);
     ctx.workoutData = [{ selectedPresetId: -1, dataStatType: 6, sets: [{ reps: 8, weight: 3, rest: 30, unit: 'reps' }] },
@@ -1054,8 +1055,8 @@ test('adding a set to a Vita exercise repeats the current level, not the cable d
 });
 
 test('a bulk export skips a template whose detail is empty', () => {
-    same(bulkExport({}), []);
-    same(bulkExport({ name: 'n', actionLibraryList: [] }), []);
+    assert.equal(bulkExport({}), undefined);  // nothing to export: says so and stops
+    assert.equal(bulkExport({ name: 'n', actionLibraryList: [] }), undefined);
 });
 
 test('the workout history page clears an old table when a search fails', async () => {
@@ -1113,4 +1114,36 @@ test('a bulk export is named for the local date, not the UTC one', () => {
     vm.createContext(ctx);
     vm.runInContext(between(src, 'const jsonStr = JSON.stringify(exportArr', '            URL.revokeObjectURL(url);'), ctx);
     assert.equal(made[0].download, 'workouts_export_2026-01-05.json');
+});
+
+// ----------------------------------------------------------------------------------------------- round 26
+test('a forced-timed exercise is stored, exported and kept as timed from the start', async () => {
+    const { ctx } = editor(() => metaOf({ completionMethod: 2 }));
+    const src = read('create.html');
+    vm.runInContext(between(src, 'async function addExerciseToPlan', '    // --- ').replace('async function addExerciseToPlan', 'globalThis.addExerciseToPlan = async function addExerciseToPlan'), ctx);
+    await ctx.addExerciseToPlan(7, 'Plank', '');
+    same(ctx.workoutData[0].sets.map((s) => s.unit), ['sec', 'sec', 'sec']);
+    ctx.workoutData[0].sets[0].reps = 60;
+    vm.runInContext(between(src, 'window.updateEx = ', '    window.updateSet') + '\n', ctx);
+    ctx.getRules = (ex) => WorkoutLogic.getRules(ex, 1);
+    ctx.window.updateEx(0, 'selectedPresetId', '-1');
+    assert.equal(ctx.workoutData[0].sets[0].reps, 60);  // a hold is not reset to the rep default
+    const exported = JSON.parse(JSON.stringify(WorkoutLogic.buildExportJSON(ctx.workoutData, 'p', 1)));
+    assert.equal(exported.exercises[0].sets[0].unit, 'sec');
+    ctx.window.addSet = undefined;
+    vm.runInContext(between(src, 'window.addSet = ', '    window.removeSet') + '\n', ctx);
+    ctx.window.addSet(0);
+    assert.equal(ctx.workoutData[0].sets.at(-1).unit, 'sec');
+});
+
+test('an imported exercise id that is not a number never becomes a fetch path', async () => {
+    const src = read('create.html');
+    const fetched = [];
+    const ctx = { fetch: async (u) => { fetched.push(u); return { ok: true, json: async () => ({}) }; }, console };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'async function fetchExerciseMetadata', '    let templateLoading') + '\nglobalThis.f = fetchExerciseMetadata;', ctx);
+    for (const bad of ['../../x?y', '1/2', '', 'abc', '1e5']) assert.equal((await ctx.f(bad)).failed, true, bad);
+    assert.deepEqual(fetched, []);
+    await ctx.f('451234567890123');
+    assert.deepEqual(fetched, ['/api/exercise/451234567890123']);
 });

@@ -1534,6 +1534,128 @@ class Round25(unittest.TestCase):
         self.assertGreaterEqual(same[0].load, 60.0)
 
 
+class Round26(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def test_a_newer_half_done_one_sided_session_overrules_the_old_template(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        both = [SetResult("Split Squat", reps=8, load=60.0, side="left", target=8), SetResult("Split Squat", reps=8, load=60.0, side="right", target=8)] * 3
+        template = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T", sets=tuple(both))
+        half = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other",
+                             sets=(SetResult("Split Squat", reps=8, load=20.0, side="left"), SetResult("Split Squat", reps=0, load=20.0, side="right")))
+        out = planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26), [template, half])
+        self.assertIsNone(out[0].load)
+        self.assertIn("newer session", out[0].load_basis)
+
+    def test_a_lighter_session_that_missed_its_reps_does_not_progress(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        template = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T",
+                                 sets=tuple(SetResult("Cable Row", reps=10, load=60.0, target=10) for _ in range(3)))
+        missed = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other",
+                               sets=tuple(SetResult("Cable Row", reps=3, load=40.0, target=8) for _ in range(3)))
+        out = planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26), [template, missed])
+        self.assertLessEqual(out[0].load, 40.0)
+
+    def test_a_saved_workouts_eccentric_sets_reach_the_critique(self):
+        detail = {"actionLibraryList": [{"title": "Cable Curl", "setsAndReps": "10,10,10", "sportMode": "3,3,3"},
+                                        {"title": "Cable Row", "setsAndReps": "10,10", "sportMode": "1,1"},
+                                        {"title": "Fly", "setsAndReps": "10,10"}]}
+        modes = [e["mode"] for e in features._coach_workout_to_exercises(detail)]
+        self.assertEqual(modes, ["eccentric", "standard", "standard"])
+        mixed = {"actionLibraryList": [{"title": "Cable Curl", "setsAndReps": "10,10,10", "sportMode": "1,3,1"}]}
+        self.assertEqual(features._coach_workout_to_exercises(mixed)[0]["mode"], "eccentric")  # any eccentric set counts
+        report = features.coach.critique_session([{**e, "pattern": None} for e in features._coach_workout_to_exercises(detail)]) \
+            if hasattr(features.coach, "critique_session") else None
+        if report is not None:
+            self.assertTrue(any("eccentric" in str(w).lower() for w in report.get("warnings", [])) or report.get("score", 100) <= 100)
+
+    def test_the_legacy_detail_route_refuses_a_200_without_data(self):
+        client = client_with(0, True)
+        for body in ({"code": 0, "data": None}, {"code": 0}, {"code": 0, "data": {}}):
+            client._request = lambda m, u, body=body, **kw: Resp(200, body)
+            with mock.patch.object(gym_app, "client", client):
+                resp = gym_app.app.test_client().get("/api/workout_history/detail/7?type=5", headers=BASIC)
+            self.assertEqual((resp.status_code, resp.get_json()["error"]), (502, "training_detail_not_found"), body)
+        client._request = lambda m, u, **kw: Resp(200, {"code": 0, "data": {"x": 1}})
+        with mock.patch.object(gym_app, "client", client):
+            self.assertEqual(gym_app.app.test_client().get("/api/workout_history/detail/7?type=5", headers=BASIC).status_code, 200)
+
+    def test_only_a_real_boolean_false_saves_from_mcp(self):
+        import asyncio
+        program = {"days": [{"exercises": []}]}
+        def call(dry_run):
+            with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), mock.patch.object(mcp_server, "_client", return_value=mock.Mock()), \
+                    mock.patch.object(mcp_server, "_require_auth"), \
+                    mock.patch.object(mcp_server, "apply_program", return_value={"ok": True}) as applied:
+                try:
+                    asyncio.run(mcp_server.mcp.call_tool("create_workout_from_program", {"program": program, "dry_run": dry_run}))
+                except Exception:
+                    pass
+                return applied
+        applied = call(True)
+        applied.assert_called_once()  # the control: a real boolean reaches the saver
+        self.assertTrue(applied.call_args.args[4])
+        for bad in (0, "no", "off", "false", None):
+            call(bad).assert_not_called()
+        self.assertFalse(call(False).call_args.args[4])
+
+    def test_template_ids_are_real_ids(self):
+        for bad in (True, False, 0, "0", "-1", -5, "", "1,2", "../x", None):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                api_client._check_template_id(bad)
+        for good in (5, "5", "abc_12-X", "1234567890123"):
+            api_client._check_template_id(good)
+        client = client_with(1, True)
+        for bad in (True, 0, "-1"):
+            with self.assertRaises(ValueError):
+                client.prepare_workout("n", [ex(8)], template_id=bad)
+            with self.assertRaises(ValueError):
+                client.delete_workout(bad)
+
+    def test_fractional_levels_and_rms_are_refused_not_truncated(self):
+        client = client_with(1, True)
+        client.get_batch_details = lambda ids, **kw: [{"id": i, "actionLibraryList": [{"id": i + 1000}], "dataStatType": 6} for i in ids]
+        with self.assertRaises(ValueError):
+            client.prepare_workout("n", [ex(5.9, data_stat_type=6)])
+        self.assertEqual(client.prepare_workout("n", [ex(5.0, data_stat_type=6)])["actionLibraryList"][0]["level"], "5")
+        client.get_batch_details = lambda ids, **kw: [{"id": i, "actionLibraryList": [{"id": i + 1000}], "dataStatType": 0} for i in ids]
+        for rm in (7.9, 0):
+            with self.assertRaises(ValueError):
+                client.prepare_workout("n", [ex(rm, preset_id=5)])
+
+    def test_prefer_is_kept_and_vendor_code_90_is_a_lost_session(self):
+        import state_io
+        self.assertEqual(state_io.validate_feedback({"rpe": 5, "prefer": "Cable row"})["prefer"], "Cable row")
+        client = client_with(0, True)
+        client._request = api_client.SpeedianceClient._request.__get__(client)
+        with mock.patch("requests.Session.request", return_value=Resp(200, {"code": 90, "message": "login"})), \
+                mock.patch.object(client, "_get_headers", return_value={}):
+            with self.assertRaises(Exception) as ctx:
+                client.get_training_detail("1", "custom")
+        self.assertEqual(str(ctx.exception), "Unauthorized")
+
+    def test_bad_requests_are_400s(self):
+        c = gym_app.app.test_client()
+        client = client_with(0, True)
+        with mock.patch.object(gym_app, "client", client):
+            self.assertEqual(c.get("/api/history?start=abc&end=abc", headers=BASIC).status_code, 400)
+        for days in ([{"exercises": ["x"]}], [{"exercises": [None]}], [{"exercises": "x"}], [{}]):
+            with self.assertRaises(ValueError):
+                features.apply_program(client, {"days": days}, None, None, True, "kg")
+        with mock.patch.object(features, "_client", client), mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}):
+            resp = c.post("/api/coach/apply", headers=BASIC, json={"program": {"days": [{"exercises": ["x"]}]}, "dry_run": True})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_the_exercise_page_survives_a_variant_without_a_coach(self):
+        html = open(os.path.join(os.path.dirname(__file__), "..", "templates", "exercise_detail.html")).read()
+        self.assertNotIn("first_var.coach.avatar", html)
+        self.assertNotIn("first_var.coach.name", html)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

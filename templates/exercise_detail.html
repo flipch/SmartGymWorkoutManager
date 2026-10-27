@@ -22,10 +22,10 @@
                 
                 <div class="p-4 bg-gray-900 border-t border-gray-700 flex justify-between items-center">
                     <div class="flex items-center gap-3">
-                        <img id="current-coach-img" src="{{ first_var.coach.avatar | local_cache(True) }}" class="w-10 h-10 rounded-full border-2 border-green-500 p-0.5">
+                        <img id="current-coach-img" src="{{ (first_var.coach or {}).avatar | local_cache(True) }}" class="w-10 h-10 rounded-full border-2 border-green-500 p-0.5">
                         <div>
                             <p class="text-xs text-gray-400 uppercase font-bold">Coach</p>
-                            <p id="current-coach-name" class="text-white font-bold">{{ first_var.coach.name }}</p>
+                            <p id="current-coach-name" class="text-white font-bold">{{ (first_var.coach or {}).name }}</p>
                         </div>
                     </div>
                     

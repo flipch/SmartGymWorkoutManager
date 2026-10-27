@@ -661,6 +661,9 @@ def _fresh_readiness(data_dir=None):
     return {**fresh, "updated": stored.get("updated"), "field_updated": stored.get("field_updated") or {}}
 
 
+_SPORT_MODES = {"1": "standard", "2": "chain", "3": "eccentric", "4": "constant", "5": "spotter"}  # the vendor sportMode numbers
+
+
 def _coach_workout_to_exercises(detail):
     """Map a Speediance workout detail into coach critique input. The display name lives under
     `title` (not `name`), and `mainMuscleGroupName` is the device's own muscle tag — pass it
@@ -681,11 +684,15 @@ def _coach_workout_to_exercises(detail):
         if parts:
             mm = re.search(r"\d+", parts[0])
             reps = int(mm.group()) if mm else None
+        modes = [_SPORT_MODES.get(m.strip()) for m in str(a.get("sportMode") or "").split(",") if m.strip()]
+        modes = [m for m in modes if m]
+        mode = "eccentric" if "eccentric" in modes else (max(set(modes), key=modes.count) if modes else "standard")  # any eccentric set counts: the safe direction
         out.append({
             "name": name,
             "muscle": a.get("mainMuscleGroupName"),
             "sets": len(parts) if parts else int(a.get("sets") or 0),
             "reps": reps,
+            "mode": mode,
         })
     return out
 
@@ -1142,6 +1149,8 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
     days = program.get("days")
     if not isinstance(days, list) or not days or not all(isinstance(d, dict) for d in days):
         raise ValueError("program.days must be a non-empty list of days")
+    if not all(isinstance(d.get("exercises"), list) and all(isinstance(e, dict) for e in d["exercises"]) for d in days):
+        raise ValueError("every day needs an exercises list of objects")
     if len(days) > MAX_PROGRAM_DAYS:
         raise ValueError(f"a program may have at most {MAX_PROGRAM_DAYS} days")
     if day_index is None:

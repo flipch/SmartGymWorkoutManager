@@ -97,6 +97,12 @@ def unit_is_confirmed(credentials):
     return isinstance(credentials, dict) and bool(credentials.get("unit_confirmed"))
 
 
+def _check_template_id(value):
+    """A template id for an update or delete: an opaque id or a positive number, never a bool, 0 or a negative."""
+    if value is None or isinstance(value, bool) or not valid_record_id(str(value)) or (str(value).lstrip("-").isdigit() and int(str(value)) <= 0):
+        raise ValueError("template id must be a single id of letters, digits, - or _ (a positive number or an opaque id)")
+
+
 def _group_id(value, where):
     """A library group id as an int ('5' and 5 are the same exercise; anything else is refused, never interpolated)."""
     if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().isdigit():
@@ -281,7 +287,7 @@ class SpeedianceClient:
             }
             
             # Check for application-level auth error (Code 91)
-            if isinstance(body_preview, dict) and body_preview.get('code') == 91:
+            if isinstance(body_preview, dict) and body_preview.get('code') in (90, 91):
                 raise Exception("Unauthorized")
                 
             return resp
@@ -643,8 +649,7 @@ class SpeedianceClient:
         return _json_data(resp, "workout list", list)
 
     def delete_workout(self, template_id):
-        if not valid_record_id(str(template_id)):  # not '', not '1,2,3': one template per call
-            raise ValueError("template id must be a single id of letters, digits, - or _")
+        _check_template_id(template_id)  # not '', not '1,2,3', not true/0/-1: one real template per call
         url = f"{self.base_url}/api/app/customTrainingTemplate?ids={_q(template_id)}"
         resp = self._request('DELETE', url, headers=self._get_headers())
         _require_ok(resp, "delete")
@@ -768,8 +773,8 @@ class SpeedianceClient:
         Splits weights from counterweight2 cleanly (the fix for the vendor's 'Parameter Error')."""
         imperial = bool(self.credentials.get("unit"))
         validate_workout(name, exercises, imperial)
-        if template_id not in (None, "") and not valid_record_id(str(template_id)):
-            raise ValueError("template id must be a single id of letters, digits, - or _")
+        if template_id not in (None, ""):
+            _check_template_id(template_id)
         if _has_cable_load(exercises) and not unit_is_confirmed(self.credentials):
             raise ValueError("the account's unit (kg or lb) has not been confirmed: choose it on /settings once, "
                              "then loads can be saved")  # the vendor does not expose it, and a wrong guess is 2.2x
@@ -859,6 +864,8 @@ class SpeedianceClient:
 
                 # Vita exercises (dataStatType==6): weight input = difficulty level (1-10)
                 if data_stat_type == 6:
+                    if float(weight_val) != int(weight_val):
+                        raise ValueError(f"exercise {group_id}: a Vita level must be a whole number from 1 to 10")
                     level_list.append(str(max(1, min(10, int(weight_val) or 1))))
                 else:
                     level_list.append("0")
@@ -887,6 +894,8 @@ class SpeedianceClient:
                     # For presets, we MUST populate weights_list with dummy values (e.g. 3.5)
                     # AND populate counter_list with the RM value.
                     weights_list.append("3.5")
+                    if float(weight_val) != int(weight_val) or int(weight_val) < 1:
+                        raise ValueError(f"exercise {group_id}: a preset's RM must be a whole number of at least 1")
                     counter_list.append(str(int(weight_val)))
                     if unit != 'sec':  # seconds x load is not volume
                         set_capacity += (reps * weight_val * 2.2)

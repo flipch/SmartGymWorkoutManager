@@ -134,6 +134,17 @@ def asymmetry_note(sets) -> str | None:
     return f"left {left:g} vs right {right:g}: anchored on the lower side"
 
 
+def _newest_logged(name: str, sessions: list[SessionResult], since: date | None = None):
+    """(sets, day) of the newest session that logged this exercise with a load, whatever its quality."""
+    for s in sorted(sessions, key=lambda x: x.started_at_ms, reverse=True):
+        if since is not None and s.local_day < since:
+            continue
+        sets = [x for x in s.sets if _same_exercise(x.exercise, name)]
+        if any(x.load for x in sets):
+            return sets, s.local_day
+    return None
+
+
 def last_logged(name: str, sessions: list[SessionResult], *, since: date | None = None):
     """(median load, sets, day) from the newest session that logged this exercise with loads (catalog fallback).
 
@@ -229,11 +240,20 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
             continue
         last = anchor_load(performed)
         newer_note = ""
-        newer = last_logged(name, [x for x in (sessions or []) if x.started_at_ms > template.started_at_ms and x.local_day <= day],
-                            since=day - timedelta(days=ANCHOR_MAX_AGE_DAYS))
-        if newer is not None and newer[0] < last:  # a lighter session since this template: that is where the athlete is now
-            last, newer_note = newer[0], f"; a newer session ({newer[2].isoformat()}) logged less"
         hit_all = bool(targets) and all((r.reps or 0) >= r.target for r in rows if r.target)
+        newer = _newest_logged(name, [x for x in (sessions or []) if x.started_at_ms > template.started_at_ms and x.local_day <= day],
+                               since=day - timedelta(days=ANCHOR_MAX_AGE_DAYS))
+        if newer is not None:
+            nsets, nday = newer
+            if side_missing(nsets):  # the latest word is a half-done one-sided lift: the old template's load is not an anchor
+                out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
+                                            f"a newer session ({nday.isoformat()}) has a side with no completed sets: choose a load that leaves the target RIR"))
+                continue
+            nload = anchor_load(nsets)
+            if nload is not None and nload < last:  # lighter since this template: that is where the athlete is now,
+                ntargets = [x.target for x in nsets if x.target]  # and that session's result decides whether to progress
+                last, newer_note = nload, f"; a newer session ({nday.isoformat()}) logged less"
+                hit_all = bool(ntargets) and all((x.reps or 0) >= x.target for x in nsets if x.target)
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
                                 allow_increase=age < LAYOFF_DAYS, step=_grid(performed))
         uneven = asymmetry_note(performed)
