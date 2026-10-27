@@ -280,6 +280,10 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                 last, newer_note = nload, f"; a newer session ({nday.isoformat()}) is the latest evidence"
                 # a success is judged against what this plan prescribes: a 1-rep set at a 1-rep target is not "hit all" for 10 reps
                 hit_all = bool(ntargets) and all((x.reps or 0) >= max(x.target, reps or 0) for x in nsets if x.target)
+            else:  # heavier than the template: if it missed its reps there, that load is not ready, whatever the template did
+                ntargets = [x.target for x in nsets if x.target]
+                if ntargets and not all((x.reps or 0) >= max(x.target, reps or 0) for x in nsets if x.target):
+                    hit_all, newer_note = False, f"; a heavier newer session ({nday.isoformat()}) at {nload:g} missed its reps"
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
                                 allow_increase=age < LAYOFF_DAYS, step=_grid(performed))
         uneven = asymmetry_note(performed)

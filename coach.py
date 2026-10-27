@@ -255,8 +255,10 @@ def _stem(token):
             return token[:-2]
         if token.endswith("ies"):
             return token[:-3] + "y"
-        if token.endswith(("ches", "shes", "xes", "zes")):  # crunches, benches, boxes
+        if token.endswith(("ches", "shes", "xes")):  # crunches, benches, boxes
             return token[:-2]
+        if token.endswith("zes"):  # squeezes, sizes
+            return token[:-1]
         if token.endswith("s") and not token.endswith(("ss", "us", "is")):
             return token[:-1]
     return token

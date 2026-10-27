@@ -72,7 +72,7 @@ def _parse_date(v):
             stamp = datetime.fromisoformat(v.strip())
             if stamp.tzinfo is not None:
                 return stamp.astimezone().date()
-        except ValueError:
+        except (ValueError, OverflowError):
             pass
         m = re.search(r'([0-9]{4})[-/]([0-9]{1,2})[-/]([0-9]{1,2})', v)
         if m:
@@ -782,7 +782,10 @@ def _all_finite(value):
 
 @features_bp.route('/api/coach/program', methods=['POST'])
 def coach_program():
-    body = json_object(request.get_json(silent=True))
+    parsed = request.get_json(silent=True)
+    if parsed is None and request.get_data(cache=True).strip() not in (b"", b"null"):  # truncated JSON or a wrong Content-Type must not become "all defaults"
+        return jsonify({"error": "bad_request", "message": "The body must be a JSON object (Content-Type: application/json)."}), 400
+    body = json_object(parsed)
     readiness = body.get("readiness")
     readiness_error = _readiness_read_error() if body.get("use_stored_readiness") is not False else None
     if readiness is not None:
@@ -1019,7 +1022,26 @@ _MUSCLE_ANCHOR = {
 
 
 _VARIANT = {"incline", "decline", "reverse", "overhead", "front", "rear", "lateral", "upright", "side", "sumo", "curtsy",
-            "internal", "external", "adduction", "abduction", "flexion", "forward", "backward", "inner", "outer"}  # opposite directions are different exercises  # change the movement, not just the gear
+            "internal", "external", "adduction", "abduction", "flexion", "forward", "backward", "inner", "outer", "straight"}  # opposite directions are different exercises  # change the movement, not just the gear
+
+
+_ONE_SIDED_WORDS = {"one", "single", "unilateral", "alternating", "1"}  # one-sidedness is checked separately (isLeftRight), not by name coverage
+
+
+def _cover(tokens):
+    """Name words for the 'does the library title say everything the coach's name says' check: spelling variants and
+    one-sided synonyms agree (flye = fly, one-arm = single arm)."""
+    return {coach._stem(t) for t in tokens if t not in _ONE_SIDED_WORDS}
+
+
+_POSTURE = {"seated", "standing", "lying", "prone", "supine", "kneeling"}
+
+
+def _posture_clash(a, b):
+    """Both names say how the body is positioned, and they say different things."""
+    pa = _POSTURE & set(re.sub(r"[^a-z0-9 ]", " ", (a or "").lower()).split())
+    pb = _POSTURE & set(re.sub(r"[^a-z0-9 ]", " ", (b or "").lower()).split())
+    return bool(pa and pb and pa != pb)
 
 
 def _variant_tokens(s):
@@ -1082,9 +1104,10 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
             score += 0.15
         elif not unilateral and is_uni:
             score -= 0.10
-        key = (score, -len(lib_tokens))
+        exact = coach._norm_name(name) == coach._norm_name(title)  # the title the coach named beats a near-tie ("Standing" vs "Seated" calf raise)
+        key = (score + (0.3 if exact else 0.0), -len(lib_tokens))
         if best is None or key > best[0]:
-            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1, _variant_tokens(title) != coach_variant or bool(coach_movement and _movement_tokens(title) != coach_movement), is_uni != req_uni, coach_tokens <= lib_tokens)
+            best = (key, gid, title, mg, score, ex.get("isLeftRight") == 1, _variant_tokens(title) != coach_variant or bool(coach_movement and _movement_tokens(title) != coach_movement), is_uni != req_uni, _cover(coach_tokens) <= _cover(lib_tokens), _posture_clash(name, title))
     if best is None:
         cands = sorted((len(_norm_tokens(ex.get("title") or "")), ex.get("id"), ex.get("title"))
                        for ex in library if isinstance(ex, dict) and ex.get("id")
@@ -1099,7 +1122,9 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
     if best[6] or best[7]:  # a one-sided exercise for a two-handed request (or the reverse) is a different load; a different angle, direction or movement ("Decline press", "Chest fly" for a press)
         # "Decline press" must not be saved as "Incline press" (or any other angle or direction)
         conf = "low"
-    if not anchor and not best[8]:  # nothing says which muscle: one shared generic word ("Back extension" / "Triceps extension") is not a match
+    if not best[8]:  # a word of the coach's name that the library title lacks ("Romanian" deadlift, "Straight-arm" pulldown) is a different exercise
+        conf = "low"
+    if best[9]:  # "Standing" and "Seated" versions load differently
         conf = "low"
     if anchor:  # the movement must train the muscle the coach named: "Leg extension" is not "Triceps extension"
         if best[3] and best[3] not in anchor and best[3] != "full body":
@@ -1438,7 +1463,7 @@ async function saveDayOnce(i){
     if(r.unresolved&&r.unresolved.length)m+=` <span class=warn>· not saved: ${r.unresolved.map(u=>esc(u.name)+(u.reason?' ('+esc(u.reason)+')':'')).join(', ')}</span>`;
     if(d.feedback_error)m+=` <span class=warn>· ⚠ your pain/avoid list could not be fully read (${esc(d.feedback_error)})</span>`;
     el.innerHTML=m;
-  } else { el.innerHTML='<span class=warn>'+esc(r.error||d.message||'Could not save')+'</span>'; }
+  } else { el.innerHTML='<span class=warn>'+esc(r.message||r.error||d.message||'Could not save')+'</span>'; }
 }
 </script></body></html>"""
 

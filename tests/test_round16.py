@@ -2669,3 +2669,60 @@ class Round46(unittest.TestCase):
             self.assertTrue(got is None or got["confidence"] == "low", (wanted, offered))
             lib[0]["title"] = wanted
             self.assertNotEqual(features.resolve_exercise(lib, wanted, "shoulders", True)["confidence"], "low", wanted)  # its own name still resolves
+
+
+class Round47(unittest.TestCase):
+    def test_the_title_the_coach_named_beats_a_near_tie_and_a_different_posture_is_refused(self):
+        lib = [{"id": 1, "title": "Seated Calf Raise", "mainMuscleGroupName": "calves", "isLeftRight": 0},
+               {"id": 2, "title": "Standing Calf Raise", "mainMuscleGroupName": "calves", "isLeftRight": 0}]
+        self.assertEqual(features.resolve_exercise(lib, "Standing Calf Raise", "calves")["groupId"], 2)
+        self.assertEqual(features.resolve_exercise(lib, "Seated Calf Raise", "calves")["groupId"], 1)
+        only_seated = features.resolve_exercise(lib[:1], "Standing Calf Raise", "calves")
+        self.assertEqual(only_seated["confidence"], "low")
+        lib2 = [{"id": 1, "title": "Barbell Curl", "mainMuscleGroupName": "biceps", "isLeftRight": 0},
+                {"id": 2, "title": "Cable Curl", "mainMuscleGroupName": "biceps", "isLeftRight": 0}]
+        self.assertEqual(features.resolve_exercise(lib2, "Cable Curl", "biceps")["groupId"], 2)
+
+    def test_a_modifier_word_the_library_title_lacks_is_a_different_exercise(self):
+        lib = [{"id": 1, "title": "Barbell Deadlift", "mainMuscleGroupName": "hamstrings", "isLeftRight": 0},
+               {"id": 2, "title": "Lat Pulldown", "mainMuscleGroupName": "lats", "isLeftRight": 0},
+               {"id": 3, "title": "Preacher Curl", "mainMuscleGroupName": "biceps", "isLeftRight": 0}]
+        for name, muscle in (("Romanian deadlift", "hamstrings"), ("Straight-arm pulldown", "back"), ("Hammer curl", "biceps")):
+            got = features.resolve_exercise(lib, name, muscle)
+            self.assertTrue(got is None or got["confidence"] == "low", name)
+        self.assertNotEqual(features.resolve_exercise(lib, "Lat Pulldown", "back")["confidence"], "low")  # controls
+        lib4 = [{"id": 1, "title": "Single Arm Cable Chest Press", "mainMuscleGroupName": "chest", "isLeftRight": 1},
+                {"id": 2, "title": "Cable Chest Fly", "mainMuscleGroupName": "chest", "isLeftRight": 0}]
+        self.assertNotEqual(features.resolve_exercise(lib4, "One-Arm Cable Chest Press", "chest", True)["confidence"], "low")
+        self.assertNotEqual(features.resolve_exercise(lib4, "Cable Chest Flye", "chest")["confidence"], "low")
+
+    def test_an_unparseable_program_body_is_a_400_not_the_defaults(self):
+        c = gym_app.app.test_client()
+        with mock.patch.object(features, "_authed", return_value=True):
+            truncated = c.post("/api/coach/program", headers=BASIC, data='{"readiness":{"whoop_recovery":15},"days_per_week":3', content_type="application/json")
+            no_type = c.post("/api/coach/program", headers=BASIC, data='{"days_per_week":3}', content_type="text/plain")
+            empty = c.post("/api/coach/program", headers=BASIC, data="", content_type="application/json")
+            good = c.post("/api/coach/program", headers=BASIC, json={"days_per_week": 3})
+        self.assertEqual((truncated.status_code, no_type.status_code), (400, 400))
+        self.assertEqual(empty.status_code, 200)  # no body at all still means "all defaults"
+        self.assertEqual(len(good.get_json()["days"]), 3)
+
+    def test_a_heavier_newer_session_that_missed_its_reps_holds_the_template_load(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        auto = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+        template = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T", sets=tuple(SetResult("Bench", reps=10, load=100.0, target=10) for _ in range(3)))
+        failed = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Bench", reps=2, load=101.0, target=10) for _ in range(3)))
+        out = planner._from_template(template, auto, 5.0, date(2026, 10, 26), [template, failed])[0]
+        self.assertLessEqual(out.load, 100.0)
+        self.assertIn("missed its reps", out.load_basis)
+        made_it = SessionResult("3", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Bench", reps=10, load=105.0, target=10) for _ in range(3)))
+        self.assertGreater(planner._from_template(template, auto, 5.0, date(2026, 10, 26), [template, made_it])[0].load, 100.0)
+
+    def test_squeezes_and_a_year_one_timestamp(self):
+        from datetime import date
+        import coach
+        self.assertTrue(coach._is_avoided("Glute Squeeze", {coach._norm_name("Glute Squeezes")}))
+        self.assertTrue(coach._is_avoided("Cable Crunch", {coach._norm_name("Cable crunches")}))
+        self.assertEqual(features._parse_date("0001-01-01T00:00:00Z"), date(1, 1, 1))
