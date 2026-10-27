@@ -2143,3 +2143,40 @@ class TemplateHandlersRunUnderNode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Round36(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def plan(self, newer_sets):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        template = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T",
+                                 sets=tuple(SetResult("Cable Row", reps=10, load=80.0, target=10) for _ in range(3)))
+        newer = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(newer_sets))
+        return planner._from_template(template, self.AUTO, 5.0, date(2026, 10, 26), [template, newer])[0]
+
+    def test_a_newer_session_far_from_the_prescribed_reps_does_not_progress(self):
+        from harness.model import SetResult
+        control = self.plan([SetResult("Cable Row", reps=10, load=80.0, target=10) for _ in range(3)])
+        self.assertIsNotNone(control.load)  # a comparable newer session still counts
+        self.assertGreater(control.load, 80.0)
+        one_rep = self.plan([SetResult("Cable Row", reps=1, load=80.0, target=1) for _ in range(3)])
+        self.assertLessEqual(one_rep.load, 80.0)  # 1 rep at a 1-rep target is not "hit every set" for a 10-rep prescription
+        timed = self.plan([SetResult("Cable Row", reps=0, seconds=45, load=80.0) for _ in range(3)])
+        self.assertIsNone(timed.load)
+        self.assertIn("timed", timed.load_basis)
+
+    def test_a_deeply_nested_body_is_not_a_server_error(self):
+        import features
+        self.assertTrue(features._all_finite({"a": [1.5, {"b": 2.0}]}))
+        self.assertFalse(features._all_finite({"a": [1.0, {"b": float("inf")}]}))
+        deep = []
+        for _ in range(200_000):
+            deep = [deep]
+        self.assertTrue(features._all_finite(deep))  # recursive checking raised RecursionError here
+        deep_bad = [float("nan")]
+        for _ in range(200_000):
+            deep_bad = [deep_bad]
+        self.assertFalse(features._all_finite(deep_bad))

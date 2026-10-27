@@ -257,10 +257,15 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                 out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
                                             f"a newer session ({nday.isoformat()}) logged this lift with no completed set: choose a load that leaves the target RIR"))
                 continue
+            if nload <= last and not any(x.reps for x in nsets):  # logged as a timed exercise: no evidence for a rep prescription
+                out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
+                                            f"a newer session ({nday.isoformat()}) logged this lift as a timed exercise (seconds): choose a load that leaves the target RIR"))
+                continue
             if nload <= last:  # not heavier since this template: that is where the athlete is now,
                 ntargets = [x.target for x in nsets if x.target]  # and that session's result decides whether to progress
                 last, newer_note = nload, f"; a newer session ({nday.isoformat()}) is the latest evidence"
-                hit_all = bool(ntargets) and all((x.reps or 0) >= x.target for x in nsets if x.target)
+                # a success is judged against what this plan prescribes: a 1-rep set at a 1-rep target is not "hit all" for 10 reps
+                hit_all = bool(ntargets) and all((x.reps or 0) >= max(x.target, reps or 0) for x in nsets if x.target)
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
                                 allow_increase=age < LAYOFF_DAYS, step=_grid(performed))
         uneven = asymmetry_note(performed)

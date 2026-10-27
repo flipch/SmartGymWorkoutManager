@@ -1358,3 +1358,47 @@ test('an imported preset with digits must be a whole number', async () => {
     await importJson(ctx, doc, { name: 'n', exercises: [{ id: 5, presetId: ' 5 ', sets: [{ reps: 8, weight: 5 }] }, { id: 6, presetId: 'abc', sets: [{ reps: 8, weight: 20 }] }] });
     same(ctx.workoutData.map((e) => e.selectedPresetId), [5, -1]);
 });
+
+// ----------------------------------------------------------------------------------------------- round 36
+test('an import with a unit the editor does not have is refused, and a zero weight needs a timed set', async () => {
+    const tryImport = async (meta, sets) => {
+        const { ctx, doc } = editor(() => meta);
+        ctx.workoutData = [{ sentinel: true }];
+        await importJson(ctx, doc, { name: 'N', exercises: [{ id: 5, sets }] });
+        return ctx.workoutData.length === 1 && ctx.workoutData[0].sentinel ? 'refused' : 'imported';
+    };
+    assert.equal(await tryImport(metaOf(), [{ reps: 10, weight: 20, unit: 'reps' }]), 'imported');  // controls
+    assert.equal(await tryImport(metaOf(), [{ reps: 10, weight: 20, unit: ' REPS ' }]), 'imported');
+    assert.equal(await tryImport(metaOf({ completionMethod: 2 }), [{ reps: 45, weight: 20, unit: 'sec' }]), 'imported');
+    for (const unit of ['kcal', 'lbs', 'seconds', 'min']) {
+        assert.equal(await tryImport(metaOf(), [{ reps: 10, weight: 20, unit }]), 'refused', unit);
+    }
+    assert.equal(await tryImport(metaOf({ completionMethod: 1 }), [{ reps: 10, weight: 0, unit: 'sec' }]), 'refused');  // a rep exercise is not saved at 0 load
+    assert.equal(await tryImport(metaOf({ completionMethod: 2 }), [{ reps: 45, weight: 0, unit: 'sec' }]), 'imported');
+});
+
+test('an exercise added while an import replaces the plan does not land in the new plan', async () => {
+    let release;
+    const slow = new Promise((r) => { release = r; });
+    let calls_ = 0;
+    const { ctx, doc } = editor(() => (calls_++ === 0 ? slow.then(() => metaOf()) : metaOf()));
+    const src = read('create.html');
+    vm.runInContext(between(src, 'async function addExerciseToPlan', '    // --- ').replace('async function addExerciseToPlan', 'globalThis.addExerciseToPlan = async function addExerciseToPlan'), ctx);
+    ctx.workoutData = [];
+    const adding = ctx.addExerciseToPlan(7, 'Press', '');  // waits on its metadata
+    await importJson(ctx, doc, { name: 'N', exercises: [{ id: 5, sets: [{ reps: 10, weight: 20 }] }] });
+    assert.equal(ctx.workoutData.length, 1);
+    release();
+    await adding;
+    assert.equal(ctx.workoutData.length, 1);  // the imported plan only
+    assert.equal(ctx.workoutData[0].groupId, 5);
+});
+
+test('two exercises added together cannot take the plan past 50', async () => {
+    const { ctx } = editor(() => metaOf());
+    const src = read('create.html');
+    vm.runInContext(between(src, 'async function addExerciseToPlan', '    // --- ').replace('async function addExerciseToPlan', 'globalThis.addExerciseToPlan = async function addExerciseToPlan'), ctx);
+    ctx.workoutData = Array.from({ length: 49 }, (_, i) => ({ internalId: i, groupId: i, sets: [] }));
+    await Promise.all([ctx.addExerciseToPlan(7, 'A', ''), ctx.addExerciseToPlan(8, 'B', '')]);  // both pass the first check at 49
+    assert.equal(ctx.workoutData.length, 50);
+});

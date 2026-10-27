@@ -743,12 +743,16 @@ def coach_autoregulate():
 
 
 def _all_finite(value):
-    if isinstance(value, float):
-        return math.isfinite(value)
-    if isinstance(value, dict):
-        return all(_all_finite(v) for v in value.values())
-    if isinstance(value, list):
-        return all(_all_finite(v) for v in value)
+    stack = [value]  # iterative: a deeply nested body must be refused, not crash the worker with a RecursionError
+    while stack:
+        item = stack.pop()
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                return False
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
     return True
 
 

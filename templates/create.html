@@ -450,12 +450,15 @@
         }
         groupId = parseInt(groupId, 10);
         const tempId = Date.now();
+        const planAtStart = workoutData;
         try {
             const meta = await fetchExerciseMetadata(groupId);
             if (meta.failed) {  // a one-sided or Vita exercise would be added as a plain bilateral one
                 alert('Could not load this exercise from Speediance, so it was not added. Try again.');
                 return;
             }
+            if (workoutData !== planAtStart) return;  // an import or a template replaced the plan meanwhile: this add belongs to the old one
+            if (workoutData.length >= 50) { alert('Speediance limits custom workouts to 50 exercises. Remove one before adding another.'); return; }
             // Default Custom Settings
             const rules = WorkoutLogic.getRules({ selectedPresetId: -1, isUnilateral: meta.isUnilateral, isBarbell: meta.isBarbell }, userUnit);
 
@@ -1322,6 +1325,10 @@ You must output a JSON object with the following structure:
                         if (!/^-?\d+$/.test(text)) throw new Error(`exercise ${imported.length + 1} set ${si + 1}: ${what} must be a whole number`);
                         return parseInt(text, 10);
                     };
+                    ex.sets.forEach((s, si) => {  // "kcal" or "lbs" would be saved as reps: refuse it instead
+                        const u = String((s && s.unit) ?? '').trim().toLowerCase();
+                        if (u !== '' && u !== 'reps' && u !== 'sec') throw new Error(`exercise ${imported.length + 1} set ${si + 1}: unit must be "reps" or "sec"`);
+                    });
                     const setsParsed = ex.sets.map((s, si) => ({
                         reps: (s.reps === undefined || s.reps === null || s.reps === '') ? NaN : whole(s.reps, 'reps', si),
                         weight: (() => {
@@ -1349,6 +1356,7 @@ You must output a JSON object with the following structure:
                     if (finalSets.length > 20) throw new Error(`exercise ${imported.length + 1}: at most 20 sets (left and right count separately)`);
                     finalSets.forEach((st, si) => {  // the limits the server will enforce on save, for the unit the exercise really has
                         const at = `exercise ${imported.length + 1} set ${si + 1}`;
+                        if (st.weight === 0 && st.unit !== 'sec') throw new Error(`${at} needs a weight above 0`);  // 0 is only a timed bodyweight set
                         const maxReps = st.unit === 'sec' ? 3600 : 99;
                         if (!Number.isInteger(st.reps) || st.reps < 1 || st.reps > maxReps) throw new Error(`${at}: ${st.unit === 'sec' ? 'seconds' : 'reps'} must be a whole number from 1 to ${maxReps}`);
                         if (st.rest < 0 || st.rest > 300) throw new Error(`${at}: rest must be from 0 to 300 seconds`);
