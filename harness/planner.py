@@ -126,7 +126,7 @@ def asymmetry_note(sets) -> str | None:
     for s in sets:
         if s.load and s.side:
             by_side.setdefault(s.side, []).append(s.load)
-    if len(by_side) < 2:
+    if len(by_side) < 2 or not {"left", "right"} <= set(by_side):
         return None
     left, right = (float(median(by_side[k])) for k in ("left", "right") if k in by_side)
     if abs(left - right) <= 1e-9:
@@ -291,6 +291,12 @@ def _from_catalog(sessions: list[SessionResult], auto: dict, goal: str, days_per
         if not any(x.reps for x in logged):  # logged as a timed exercise (seconds): that is no evidence for a rep prescription
             out.append(ProposedExercise(ex["name"], sets, ex["reps"], max(ex["rir"], auto["rir_min"]), mode, None,
                                         f"last logged on {last_day.isoformat()} as a timed exercise (seconds): choose a load that leaves the target RIR"))
+            continue
+        done_reps = sorted(x.reps for x in logged if x.reps)
+        if done_reps and done_reps[len(done_reps) // 2] < 0.6 * ex["reps"]:  # a 1-rep max is not the load for 9 reps
+            out.append(ProposedExercise(ex["name"], sets, ex["reps"], max(ex["rir"], auto["rir_min"]), mode, None,
+                                        f"last logged at about {done_reps[len(done_reps) // 2]} rep(s) per set on {last_day.isoformat()}, far from the {ex['reps']} prescribed: "
+                                        "choose a load that leaves the target RIR"))
             continue
         hit_all = all(x.reps is not None and x.reps >= ex["reps"] for x in logged)
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,

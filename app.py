@@ -501,7 +501,7 @@ def exercise_detail(ex_id):
 
     # 2. Resolve accessories (IDs -> Objects with Image/Name)
     all_accessories = client.get_accessories()
-    required_ids = detail.get('accessories', '').split(',')
+    required_ids = str(detail.get('accessories') or '').split(',')
     
     mapped_accessories = []
     for acc in all_accessories:

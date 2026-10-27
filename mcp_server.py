@@ -17,7 +17,9 @@ from datetime import date, timedelta
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.utilities.func_metadata import ArgModelBase
-from pydantic import StrictBool, StrictInt, StrictStr
+from pydantic import StrictBool, StrictFloat, StrictInt, StrictStr
+
+Number = StrictInt | StrictFloat  # true must not become 1.0 (a reading of 1% recovery, an RPE of 1)
 
 # a misspelled argument (whoop_recoveryy, addd) must fail the call, not be dropped while the rest runs
 ArgModelBase.model_config = {**ArgModelBase.model_config, "extra": "forbid"}
@@ -404,9 +406,9 @@ def critique_my_workout(code: str, goal: str = "general") -> dict:
 
 
 @mcp.tool()
-def autoregulate(whoop_recovery: float = None, hrv_vs_baseline: str = None,
-                 rhr_delta_bpm: float = None, sleep_hours: float = None,
-                 subjective: int = None, acwr: float = None, use_stored_readiness: bool = True) -> dict:
+def autoregulate(whoop_recovery: Number | None = None, hrv_vs_baseline: str = None,
+                 rhr_delta_bpm: Number | None = None, sleep_hours: Number | None = None,
+                 subjective: Number | None = None, acwr: Number | None = None, use_stored_readiness: bool = True) -> dict:
     """Given today's recovery signals (any subset; from Whoop/Apple Health or a 1-5 subjective
     score), return today's training adjustment: readiness band + volume%/intensity%/RIR/session
     type. Most-conservative signal wins; sleep<6h or RHR>=+5bpm caps a green day. Fresh stored signals
@@ -429,8 +431,8 @@ def autoregulate(whoop_recovery: float = None, hrv_vs_baseline: str = None,
 
 
 @mcp.tool()
-def log_feedback(rpe: float = None, difficulty: str = None, completion: str = None,
-                 soreness: int = None, pain: bool = None, avoid: str = None,
+def log_feedback(rpe: Number | None = None, difficulty: str = None, completion: str = None,
+                 soreness: Number | None = None, pain: StrictBool | None = None, avoid: str = None,
                  exercise: str = None, note: str = None) -> dict:
     """Tell the coach how a session went — this PERSISTS. rpe, difficulty, soreness, pain and avoid
     adapt the next generate_program; completion (missed|as_prescribed|exceeded) and note are recorded
@@ -464,9 +466,9 @@ def get_feedback() -> dict:
 
 
 @mcp.tool()
-def set_readiness(whoop_recovery: float = None, hrv_vs_baseline: str = None,
-                  rhr_delta_bpm: float = None, sleep_hours: float = None,
-                  subjective: int = None, acwr: float = None) -> dict:
+def set_readiness(whoop_recovery: Number | None = None, hrv_vs_baseline: str = None,
+                  rhr_delta_bpm: Number | None = None, sleep_hours: Number | None = None,
+                  subjective: Number | None = None, acwr: Number | None = None) -> dict:
     """Persist today's recovery signals (from Whoop / Apple Health / a 1-5 subjective score)
     so subsequent generate_program / recovery calls use them automatically. Returns today's
     training adjustment."""

@@ -2068,6 +2068,70 @@ class Round34(unittest.TestCase):
             self.assertIn(pattern, docker)
 
 
+class Round35(unittest.TestCase):
+    def call(self, tool, args, patched, **kw):
+        import asyncio
+        client = mock.Mock(data_dir=tempfile.mkdtemp(prefix="gym-r35-"))
+        with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), mock.patch.object(mcp_server, "_client", return_value=client), \
+                mock.patch.object(mcp_server, "_require_auth"), mock.patch.object(mcp_server, patched, **kw) as spy:
+            try:
+                asyncio.run(mcp_server.mcp.call_tool(tool, args))
+            except Exception:
+                pass
+            return spy
+
+    def test_a_boolean_is_never_a_reading_or_an_rpe_over_rpc(self):
+        self.call("log_feedback", {"rpe": 7}, "_persist_feedback", return_value={"rpe": 7}).assert_called_once()  # control
+        self.call("log_feedback", {"rpe": 7.5, "soreness": 3}, "_persist_feedback", return_value={"rpe": 7.5}).assert_called_once()
+        for args in ({"rpe": True}, {"soreness": True}, {"rpe": "7"}):
+            self.call("log_feedback", args, "_persist_feedback", return_value={}).assert_not_called()
+        self.call("set_readiness", {"whoop_recovery": 80}, "_persist_readiness", return_value={}).assert_called_once()
+        for args in ({"whoop_recovery": True}, {"sleep_hours": True}, {"subjective": False}, {"acwr": True}):
+            self.call("set_readiness", args, "_persist_readiness", return_value={}).assert_not_called()
+        spy = self.call("autoregulate", {"whoop_recovery": 80, "use_stored_readiness": False}, "coach", wraps=mcp_server.coach)
+        self.assertTrue(spy.autoregulate.called)
+        for args in ({"whoop_recovery": True}, {"subjective": True}, {"acwr": True}, {"sleep_hours": True}, {"rhr_delta_bpm": True}):
+            spy = self.call("autoregulate", {**args, "use_stored_readiness": False}, "coach", wraps=mcp_server.coach)
+            self.assertFalse(spy.autoregulate.called, args)
+
+    def test_a_one_rep_max_is_not_the_load_for_nine_reps(self):
+        from datetime import date, datetime, timezone
+        from harness import planner
+        from harness.model import Reading, SessionResult, SetResult
+        now = datetime(2026, 10, 26, 7, tzinfo=timezone.utc)
+
+        def plan(reps):
+            session = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=tuple(SetResult("Cable chest press", reps=reps, load=100.0) for _ in range(3)))
+            result = planner.todays_plan(sessions=[session], readings=[Reading("subjective", 4, "manual", now)], now=now, tz="UTC", days_per_week=1, goal="muscle")
+            return next(e for e in result.exercises if e.name.lower() == "cable chest press")
+        self.assertIsNotNone(plan(9).load)  # the control: a comparable rep count anchors
+        self.assertIsNotNone(plan(6).load)
+        self.assertIsNone(plan(1).load)
+        self.assertIn("far from", plan(1).load_basis)
+
+    def test_a_one_sided_exercise_without_side_metadata_is_not_bilateral(self):
+        from datetime import date
+        from harness import normalize, planner
+        record = {"trainingId": 1, "startTimestamp": 1_790_000_000_000, "title": "T"}
+        rows = [{"finishedCount": 8, "targetCount": 8, "trainingInfoDetail": {"weights": [20.0]}}, {"finishedCount": 8, "targetCount": 8, "trainingInfoDetail": {"weights": [60.0]}}]
+        detail = [{"actionLibraryName": "Split Squat", "isLeftRight": 1, "completionMethod": 1, "finishedReps": rows * 3}]
+        sets = normalize.session_with_sets(record, detail).sets
+        self.assertEqual({x.side for x in sets}, {"unknown"})
+        self.assertTrue(planner.side_missing(sets))
+        self.assertIsNone(planner.anchor_load(sets))
+        self.assertIsNone(planner.asymmetry_note(sets))
+        from harness.model import SetResult
+        self.assertIsNone(planner.asymmetry_note([SetResult("S", reps=8, load=20.0, side="left"), SetResult("S", reps=8, load=40.0, side="unknown")]))
+        bilateral = [{**detail[0], "isLeftRight": 0}]
+        self.assertEqual({x.side for x in normalize.session_with_sets(record, bilateral).sets}, {None})
+        sided = [{**detail[0], "finishedReps": [{**r, "leftRight": 1 + i % 2} for i, r in enumerate(rows * 3)]}]
+        self.assertEqual({x.side for x in normalize.session_with_sets(record, sided).sets}, {"left", "right"})
+
+    def test_a_null_accessories_field_does_not_crash_the_exercise_page(self):
+        src = open(os.path.join(os.path.dirname(__file__), "..", "app.py")).read()
+        self.assertIn("str(detail.get('accessories') or '').split(',')", src)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

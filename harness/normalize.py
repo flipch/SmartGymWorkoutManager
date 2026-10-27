@@ -79,7 +79,7 @@ def session_with_sets(record: dict, detail, tz: str = DEFAULT_TZ, unit: str | No
             sets.append(SetResult(exercise=name, reps=reps, load=set_load(row),
                                   seconds=_count(row.get("time")) if timed else None, unit=unit,
                                   target=None if timed else (_count(row.get("targetCount")) or None),
-                                  side={1: "left", 2: "right"}.get(row.get("leftRight"))))  # a duration is not a rep target
+                                  side={1: "left", 2: "right"}.get(row.get("leftRight")) or ("unknown" if ex.get("isLeftRight") == 1 else None)))  # a duration is not a rep target
     header = session_header(record, tz)
     return SessionResult(header.source_id, header.local_day, header.started_at_ms, header.title,
                          header.duration_s, header.total_volume, tuple(sets))
