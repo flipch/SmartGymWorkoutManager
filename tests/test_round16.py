@@ -2657,3 +2657,15 @@ class Round45(unittest.TestCase):
         record = {"trainingId": 1, "startTimestamp": 1_792_000_000, "title": "T"}
         detail = [{"actionLibraryName": "Cable Row", "finishedReps": [{"finishedCount": 8, "targetCount": 2.5, "capacity": 640, "trainingInfoDetail": {}}]}]
         self.assertIsNone(session_with_sets(record, detail).sets[0].target)
+
+
+class Round46(unittest.TestCase):
+    def test_opposite_directions_are_different_exercises(self):
+        pairs = (("Shoulder External Rotation", "Shoulder Internal Rotation"), ("Hip Adduction", "Hip Abduction"),
+                 ("Forward Lunge", "Backward Lunge"), ("Inner Thigh Squeeze", "Outer Thigh Squeeze"), ("Wrist Flexion Curl", "Wrist Extension Curl"))
+        for wanted, offered in pairs:
+            lib = [{"id": 1, "title": offered, "mainMuscleGroupName": "shoulders", "isLeftRight": 1}]
+            got = features.resolve_exercise(lib, wanted, "shoulders", True)
+            self.assertTrue(got is None or got["confidence"] == "low", (wanted, offered))
+            lib[0]["title"] = wanted
+            self.assertNotEqual(features.resolve_exercise(lib, wanted, "shoulders", True)["confidence"], "low", wanted)  # its own name still resolves
