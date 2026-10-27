@@ -88,7 +88,11 @@
                 {% if acc.img %}
                 <img src="{{ acc.img }}" alt="" class="w-8 h-8 object-contain flex-shrink-0">
                 {% endif %}
-                <span class="text-sm text-gray-200 truncate">{{ acc.name }}</span>
+                <span class="min-w-0 truncate">
+                    <span class="text-sm text-gray-200">{{ acc.name }}</span>
+                    {# the vendor lists one entry per machine generation (Monster 1/2/2S, 3/3S, Ultra): say which #}
+                    {% if acc.deviceCodes is string and acc.deviceCodes %}<span class="block text-xs text-gray-400" data-generation>{{ acc.deviceCodes.split(',')|reverse|join(' · ')|replace('monsterultra', 'Ultra')|replace('monster', 'Monster ') }}</span>{% endif %}
+                </span>
             </label>
             {% endfor %}
         </div>
