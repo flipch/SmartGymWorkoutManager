@@ -1284,3 +1284,41 @@ test('the stats modal shows the exercise it is titled for', async () => {
     assert.match(doc.getElementById('stats-table-body').innerHTML, /d2/);
     assert.doesNotMatch(doc.getElementById('stats-table-body').innerHTML, /d1/);
 });
+
+// ----------------------------------------------------------------------------------------------- round 32
+test('a default load is never below the machine minimum, in either unit', () => {
+    for (const unit of [0, 1]) {
+        for (const ex of [{ selectedPresetId: -1 }, { selectedPresetId: -1, isUnilateral: true }, { selectedPresetId: -1, isBarbell: true }]) {
+            const r = WorkoutLogic.getRules(ex, unit);
+            assert.ok(r.defW >= r.minW && r.defW <= r.maxW, JSON.stringify([unit, ex, r.defW, r.minW]));
+        }
+    }
+    assert.equal(WorkoutLogic.getRules({ selectedPresetId: -1 }, 1).defW, 15);
+    assert.equal(WorkoutLogic.getRules({ selectedPresetId: -1 }, 0).defW, 10);
+});
+
+test('an import that cannot be saved is refused before it replaces the plan', async () => {
+    const bad = [{ weight: 20, rest: 60 }, { reps: 8, weight: '30 lb' }, { reps: 8, weight: '8,7,5' }, { reps: -3, weight: 20 }, { reps: 0, weight: 20 },
+                 { reps: 8, weight: 20, rest: -5 }, { reps: 8, weight: 20, mode: 9 }, { reps: 99999, weight: 20 }];
+    for (const set of bad) {
+        const { ctx, doc } = editor(() => metaOf());
+        ctx.workoutData = [{ sentinel: true }];
+        await importJson(ctx, doc, { name: 'Broken', exercises: [{ id: 5, sets: [set] }] });
+        same(ctx.workoutData, [{ sentinel: true }]);
+        assert.notEqual(doc.getElementById('plan-name').value, 'Broken', JSON.stringify(set));
+    }
+    const { ctx, doc } = editor(() => metaOf());
+    await importJson(ctx, doc, { name: 'Fine', exercises: [{ id: 5, sets: [{ reps: 8, weight: '20,5', rest: 0, mode: 3 }] }] });
+    same(ctx.workoutData[0].sets.map((s) => [s.reps, s.weight, s.rest, s.mode]), [[8, 21, 0, 3]]);
+});
+
+test('after a good save the save button stays locked while the page leaves', async () => {
+    const { ctx, calls } = editor(() => metaOf());
+    ctx.workoutData = [{ groupId: 5, selectedVariantId: 55, selectedPresetId: -1, dataStatType: null, completionMethod: null, selectCompletionMethod: null,
+                         sets: [{ reps: 10, weight: 40, unit: 'reps', rest: 60 }] }];
+    ctx.window.location = { href: '' };
+    ctx.fetch = async (url, opts) => { calls.push(['fetch', url, JSON.parse(opts.body)]); return { json: async () => ({ status: 'success' }) }; };
+    await ctx.window.saveWorkout();
+    await ctx.window.saveWorkout();
+    assert.equal(calls.filter((c) => c[0] === 'fetch').length, 1);
+});

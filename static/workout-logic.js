@@ -71,6 +71,7 @@ function getRules(ex, userUnit) {
                 rules.minW = 3.5;
             }
         }
+        rules.defW = Math.min(rules.maxW, Math.max(rules.defW, rules.minW));  // 10 is a kg figure: on lb it is below the 15 lb floor
     }
     return rules;
 }

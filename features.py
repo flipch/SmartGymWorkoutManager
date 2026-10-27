@@ -779,7 +779,8 @@ def coach_program():
     elif isinstance(feedback, dict) and body.get("use_stored_feedback", True):
         prof = _feedback_profile()  # the caller's numbers apply, but a reported pain or avoid stays excluded
         given = feedback.get("avoid")
-        feedback = {**feedback, "avoid": sorted(set(given if isinstance(given, (list, tuple, set)) else []) | set(prof.get("avoid") or []))}
+        given = [given] if isinstance(given, str) else (given if isinstance(given, (list, tuple, set)) else [])
+        feedback = {**feedback, "avoid": sorted(set(given) | set(prof.get("avoid") or []))}
         feedback_error = prof.get("unreadable")
     try:
         prog = coach.generate_program(

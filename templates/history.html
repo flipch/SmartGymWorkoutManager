@@ -490,7 +490,7 @@
         if (!historyData || !historyData.records || historyData.records.length === 0)
             return alert('No data to export.');
         const range = loadedRange || { start: '', end: '' };
-        const eligible = historyData.records.filter(r => (TYPE_MAP[r.type] || {}).detailType !== null);
+        const eligible = historyData.records.filter(r => (TYPE_MAP[r.type] || {}).detailType != null);  // unmapped types are not clickable either
         if (!confirm(`This will fetch full detail for ${eligible.length} workout(s). Continue?`)) return;
 
         const btn = document.getElementById('deepExportBtn');

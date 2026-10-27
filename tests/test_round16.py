@@ -1967,6 +1967,36 @@ class Round31(unittest.TestCase):
             self.assertIn(pattern, docker)
 
 
+class Round32(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def test_the_catalog_path_withholds_progression_after_a_failed_newest_session(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        old = SessionResult("1", date(2026, 10, 17), 1_790_000_000_000, "T", sets=tuple(SetResult("Cable chest press", reps=10, load=100.0, target=10) for _ in range(3)))
+        failed = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "O", sets=tuple(SetResult("Cable chest press", reps=0, load=50.0, target=10) for _ in range(3)))
+        self.assertIsNone(planner.last_logged("Cable chest press", [old, failed]))
+        self.assertEqual(planner.last_logged("Cable chest press", [old])[0], 100.0)
+
+    def test_a_feedback_avoid_given_as_one_name_still_excludes_it(self):
+        profile = {"events": 0, "avoid": [], "unreadable": None}
+        with mock.patch.object(features, "_feedback_profile", return_value=profile):
+            resp = gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"feedback": {"avoid": "Cable fly"}})
+        names = {e["name"].lower() for d in resp.get_json()["days"] for e in d["exercises"]}
+        self.assertNotIn("cable fly", names)
+
+    def test_zero_and_negative_ids_are_refused_as_strings_too(self):
+        for bad in ("0", "-7", "-0", 0, -7, True):
+            self.assertFalse(gym_app._record_arg(bad), repr(bad))
+        for good in ("12", 12, "abc_1", "ab-12"):
+            self.assertTrue(gym_app._record_arg(good), repr(good))
+
+    def test_only_mapped_history_types_are_deep_exportable(self):
+        html = open(os.path.join(os.path.dirname(__file__), "..", "templates", "history.html")).read()
+        self.assertIn("(TYPE_MAP[r.type] || {}).detailType != null", html)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

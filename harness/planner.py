@@ -158,9 +158,7 @@ def last_logged(name: str, sessions: list[SessionResult], *, since: date | None 
         if loads:
             anchor = anchor_load(sets)
             if anchor is None:
-                if side_missing(sets):
-                    return None  # one side has no completed sets: no anchor, not an older session's
-                continue
+                return None  # loads but no completed set (or a missing side): the latest word is "not done", not an older session's success
             return anchor, sets, s.local_day
     return None
 

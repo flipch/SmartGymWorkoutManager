@@ -580,6 +580,8 @@ def _record_arg(value):
         return False
     if isinstance(value, int):
         return 0 < value < 10 ** 12
+    if isinstance(value, str) and re.fullmatch(r"-?\d+", value) and int(value) <= 0:
+        return False  # "0" and "-7" are no more ids than 0 and -7
     return valid_record_id(value)
 
 

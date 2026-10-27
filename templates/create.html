@@ -1321,6 +1321,9 @@ You must output a JSON object with the following structure:
                     const setsParsed = ex.sets.map((s, si) => ({
                         reps: (s.reps === undefined || s.reps === null || s.reps === '') ? NaN : whole(s.reps, 'reps', si),
                         weight: (() => {
+                            if (/\d/.test(String(s.weight ?? '')) && !/^-?\d+([.,]\d+)?$/.test(String(s.weight).trim())) {  // "30 lb" is a unit slip, not 30; words and blanks get the missing-weight message below
+                                throw new Error(`exercise ${imported.length + 1} set ${si + 1}: weight must be a plain number`);
+                            }
                             const w = parseFloat(String(s.weight ?? '').replace(',', '.'));
                             if (!Number.isFinite(w) || w < 0 || (w === 0 && String(s.unit || '').toLowerCase() !== 'sec')) {
                                 throw new Error(`exercise ${imported.length + 1} set ${si + 1} needs a weight above 0`);
@@ -1331,6 +1334,13 @@ You must output a JSON object with the following structure:
                         rest: (s.rest === undefined || s.rest === null || s.rest === '') ? 60 : whole(s.rest, 'rest', si),  // 0 s is a real rest
                         unit: String(s.unit || '').toLowerCase() === 'sec' ? 'sec' : 'reps'  // an exported timed set stays timed
                     }));
+
+                    setsParsed.forEach((st, si) => {  // targets, rests and modes the editor itself could not produce
+                        const at = `exercise ${imported.length + 1} set ${si + 1}`;
+                        if (!Number.isInteger(st.reps) || st.reps < 1 || st.reps > 3600) throw new Error(`${at}: reps must be a whole number from 1 to 3600`);
+                        if (st.rest < 0 || st.rest > 3600) throw new Error(`${at}: rest must be from 0 to 3600 seconds`);
+                        if (st.mode < 1 || st.mode > 5) throw new Error(`${at}: mode must be from 1 to 5`);
+                    });
 
                     // Handle Unilateral: expand L/R pairs if not already expanded.
                     // Exports from this app include `isUnilateralExpanded: true`, so we don't double them.
@@ -1489,12 +1499,13 @@ You must output a JSON object with the following structure:
     };
 
     let saveInFlight = false;
+    let leavingPage = false;  // after a good save the page navigates: a second click must not create a second template
     window.saveWorkout = async () => {
         const blocked = editorBlocker();
         if (blocked) return alert(blocked);
         if (saveInFlight) return;  // a double click must not create two templates
         saveInFlight = true;
-        try { await saveWorkoutOnce(); } finally { saveInFlight = false; }
+        try { await saveWorkoutOnce(); } finally { if (!leavingPage) saveInFlight = false; }
     };
     const saveWorkoutOnce = async () => {
         const name = document.getElementById('plan-name').value || "Custom Workout";
@@ -1532,6 +1543,7 @@ You must output a JSON object with the following structure:
             return;
         }
         if(json.status === 'success') {
+            leavingPage = true;
             window.location.href = '/';
         } else {
             alert("Error: " + json.message);
