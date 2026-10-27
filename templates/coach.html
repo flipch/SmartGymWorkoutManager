@@ -414,8 +414,14 @@ function renderProgram() {
         const adjs = Array.isArray(ra.adjustments) ? ra.adjustments : [];
         h += '<div class="bg-gray-800 border ' + (adjs.length ? 'border-yellow-700' : 'border-gray-700') + ' rounded-lg p-4 mb-4"><p class="font-semibold text-white">Readiness: ' + band(ra.band) + '</p>';
         if (adjs.length) {
-            h += '<p class="text-gray-300 mt-1">' + esc(adjs.length) + ' change' + (adjs.length > 1 ? 's' : '') + ' made to this program because of today\'s readiness (shown on each exercise).</p>';
-            h += '<ul class="mt-2 text-xs text-gray-300 list-disc pl-5">' + adjs.map(a => '<li>' + esc(a.exercise) + ': ' + esc(a.field) + ' ' + esc(a.from) + ' to ' + esc(a.to) + '</li>').join('') + '</ul>';
+            const touched = f => new Set(adjs.filter(a => a.field === f).map(a => a.day + '|' + a.exercise)).size;
+            const parts = [];
+            if (touched('sets')) parts.push('sets trimmed on ' + touched('sets') + ' exercise' + (touched('sets') > 1 ? 's' : ''));
+            if (touched('load')) parts.push('loads lowered on ' + touched('load'));
+            if (touched('rir')) parts.push('reps in reserve raised on ' + touched('rir'));
+            h += '<p class="text-gray-300 mt-1">' + esc(adjs.length) + ' change' + (adjs.length > 1 ? 's' : '') + ' made to this program because of today\'s readiness: ' + esc(parts.join(', ')) + '. Each exercise shows its own change.</p>';
+            h += '<details class="mt-2 text-xs text-gray-300"><summary class="cursor-pointer text-green-400 focus:outline-none focus:ring-2 focus:ring-green-500 rounded">List every change</summary><ul class="mt-1 list-disc pl-5">'
+                + adjs.map(a => '<li>' + esc(a.exercise) + ': ' + esc(a.field) + ' ' + esc(a.from) + ' to ' + esc(a.to) + '</li>').join('') + '</ul></details>';
         } else {
             h += '<p class="text-gray-300 mt-1">No changes: this is the program as written. Readiness can only reduce a program, never add to it.</p>';
         }
@@ -450,7 +456,7 @@ function renderDay(p, d, i) {
             + '<div class="mt-1 flex flex-wrap items-center gap-2 text-xs">'
             + '<span class="px-2 py-0.5 rounded-full font-bold ' + (MODE_CLASS[mode] || 'bg-gray-700 text-gray-200') + '" title="' + esc(e.mode_note) + '">' + esc(mode) + '</span>'
             + '<span class="text-gray-400">belt ' + esc(e.belt) + ' · ' + esc(e.accessory) + '</span>'
-            + adj.map(a => '<span class="px-2 py-0.5 rounded bg-yellow-900 text-yellow-200">readiness: ' + esc(a.field) + ' ' + esc(a.from) + ' to ' + esc(a.to) + '</span>').join('')
+            + (adj.length ? '<span class="px-2 py-0.5 rounded bg-yellow-900 text-yellow-200">readiness: ' + adj.map(a => esc(a.field) + ' ' + esc(a.from) + ' to ' + esc(a.to)).join(', ') + '</span>' : '')
             + '</div></li>';
     }
     h += '</ul>';
@@ -486,6 +492,10 @@ function renderApply(i) {
     if (unresolved.length) {
         h += '<p class="mt-2 text-yellow-400 text-xs">Not saved:</p><ul class="list-disc pl-5 text-xs text-yellow-200">'
             + unresolved.map(u => '<li>' + esc(u.name) + ': ' + esc(u.reason || 'not found') + '</li>').join('') + '</ul>';
+    }
+    if (pv.resolved.length) {
+        h += '<details class="mt-2 text-xs text-gray-400"><summary class="cursor-pointer text-green-400 focus:outline-none focus:ring-2 focus:ring-green-500 rounded">Matched to your library</summary><ul class="mt-1 list-disc pl-5">'
+            + pv.resolved.map(m => '<li>' + esc(m.coach_name) + ' as ' + esc(m.matched_name) + (m.confidence ? ' (' + esc(m.confidence) + ' confidence)' : '') + '</li>').join('') + '</ul></details>';
     }
     if (Array.isArray(pv.notes) && pv.notes.length) h += '<ul class="mt-2 list-disc pl-5 text-xs text-gray-400">' + pv.notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>';
     if (!st.writes_enabled) {

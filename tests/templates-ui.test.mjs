@@ -1669,9 +1669,9 @@ test('program cards: sets x reps @ load, mode, belt, accessories, rest and what 
     assert.match(h, /belt mid · handles/);
     assert.match(h, /Needs: handles, rope/);
     assert.match(h, /rest 90 s/);
-    assert.match(h, /readiness: sets 4 to 2/);
-    assert.match(h, /readiness: rir 2 to 3/);
-    assert.match(h, /2 changes made to this program because of today/);
+    assert.match(h, /readiness: sets 4 to 2, rir 2 to 3/);  // one chip per exercise
+    assert.match(h, /2 changes made to this program because of today's readiness: sets trimmed on 1 exercise, reps in reserve raised on 1/);
+    assert.match(h, /List every change/);
     assert.match(h, /defer the heaviest lifts/);
 });
 

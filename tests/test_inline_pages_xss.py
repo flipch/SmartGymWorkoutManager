@@ -187,14 +187,15 @@ class CoachPage(unittest.TestCase):
     def test_program_and_preview_are_inert(self):
         script = page_script("/coach")
         for payload in PAYLOADS:
-            preview = {"name": payload + "PV", "exercise_count": payload, "resolved": [], "notes": [payload + "PN"],
+            preview = {"name": payload + "PV", "exercise_count": payload, "notes": [payload + "PN"],
+                       "resolved": [{"coach_name": payload + "RC", "matched_name": payload + "RM", "confidence": payload + "RF"}],
                        "unresolved": [{"name": payload + "PU", "reason": payload + "PR"}]}
             driver = (f"S.status = {{authenticated: true, writes_enabled: true, unit_confirmed: true}}; S.loadUnit = {json.dumps(payload)};"
                       f"S.program = {json.dumps(self.program(payload))}; S.previews[0] = {json.dumps(preview)}; renderProgram();")
             captured = run_page(script, {}, driver=driver)
             assert_inert(self, captured, allowed_handlers=COACH_HANDLERS)
             self.assertIn(py_esc(payload), captured["out"])
-            for tag in ("PV", "PN", "PU", "PR"):  # the preview's own fields, not only the program's
+            for tag in ("PV", "PN", "PU", "PR", "RC", "RM", "RF"):  # the preview's own fields, not only the program's
                 self.assertIn(py_esc(payload + tag), captured["out"])
 
     def test_save_result_is_inert(self):

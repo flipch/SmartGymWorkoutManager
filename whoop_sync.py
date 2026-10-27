@@ -182,7 +182,11 @@ def status(data_dir, now=None, env=None):
            "message": None,
            "notes": [_safe_text(n) for n in (state.get("notes") or []) if isinstance(n, str)][:5]}
     if kind == "not_configured":
-        out["message"] = creds_error or HOW_TO
+        if creds is not None:  # the app is registered but nothing has consented yet: the next step is different
+            out["message"] = ("WHOOP credentials are set but nothing is connected yet. " + ("Use Connect WHOOP to approve access, or p" if out["can_connect"] else "P")
+                              + "ut the consented whoop.token.json in the data volume.")
+        else:
+            out["message"] = creds_error or HOW_TO
     elif kind == "needs_reconsent":
         out["message"] = RECONSENT
     elif kind == "refreshing_failed":

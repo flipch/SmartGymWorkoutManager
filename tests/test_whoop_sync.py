@@ -548,3 +548,17 @@ class McpTools(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_compose_passes_the_whoop_settings_to_both_services():
+    """The web app and the MCP server share one data volume and each can pull WHOOP, so both need the same settings."""
+    import os
+    import re
+    text = open(os.path.join(os.path.dirname(__file__), "..", "docker-compose.yml")).read()
+    services = re.split(r"(?m)^  (?=[a-z][a-z-]*:$)", text.split("\nservices:\n", 1)[1])
+    by_name = {sv.split(":", 1)[0]: sv for sv in services if sv.strip()}
+    for svc in ("smart-gym-app", "smart-gym-mcp"):
+        for var in ("WHOOP_CLIENT_ID", "WHOOP_CLIENT_SECRET", "WHOOP_REDIRECT_URI", "WHOOP_TOKEN_FILE", "WHOOP_PULL_MIN_INTERVAL_S"):
+            assert f"- {var}=${{{var}:-" in by_name[svc], f"{svc} does not pass {var}"
+    for svc in ("gym-tunnel", "edge"):  # nothing else gets the WHOOP secret
+        assert "WHOOP" not in by_name.get(svc, ""), svc

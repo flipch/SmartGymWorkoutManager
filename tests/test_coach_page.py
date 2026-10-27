@@ -156,6 +156,8 @@ class SoftVeto(unittest.TestCase):
             out = coach.apply_readiness(program, auto)
             self.assertEqual(out["days"], program["days"], auto)
             self.assertEqual(out["readiness_applied"]["adjustments"], [])
+            # the record must not claim a raise either: the clamp to zero is what the page shows as "no changes"
+            self.assertEqual((out["readiness_applied"]["volume_pct"], out["readiness_applied"]["intensity_pct"]), (0, 0), auto)
 
     def test_a_low_band_trims_sets_and_load_and_adds_reserve_and_lists_every_change(self):
         program = coach.generate_program("muscle", 3, "intermediate", one_rm={"chest": 100, "back": 100, "quads": 100, "hamstrings": 100})
