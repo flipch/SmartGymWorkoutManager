@@ -1197,6 +1197,9 @@ def program_day_to_payload(library, day, load_unit=None, imperial=False, avoid=f
 MAX_WORKOUT_NAME = 80
 
 
+_UNSAVABLE = re.compile(r"^exercise (\d+): (?:this exercise is timed|this is a level-based|this is a calorie-goal)")
+
+
 def apply_program(client, program, day_index=None, name=None, dry_run=True, load_unit=None):
     """Resolve + (optionally) save a generated program's day(s) as Speediance templates.
 
@@ -1243,8 +1246,21 @@ def apply_program(client, program, day_index=None, name=None, dry_run=True, load
         if exercises:
             validate_workout(nm, exercises, imperial)
             prepare = getattr(client, "prepare_workout", None)
-            if callable(prepare):  # library-aware checks (e.g. the one-cable cap) for EVERY day before the first write
-                prepare(nm, exercises)
+            while callable(prepare):  # library-aware checks (e.g. the one-cable cap) for EVERY day before the first write
+                try:
+                    prepare(nm, exercises)
+                    break
+                except ValueError as e:
+                    gone = _UNSAVABLE.match(str(e))  # a timed, Vita or calorie exercise cannot take a rep prescription: report it, save the rest
+                    if not gone or not any(int(x["groupId"]) == int(gone.group(1)) for x in exercises):
+                        raise
+                    gid = int(gone.group(1))
+                    for r in [r for r in resolved if int(r["groupId"]) == gid]:
+                        unresolved.append({"name": r["coach_name"], "reason": "a timed, level-based or calorie-goal exercise cannot take a rep prescription"})
+                    exercises = [x for x in exercises if int(x["groupId"]) != gid]
+                    resolved = [r for r in resolved if int(r["groupId"]) != gid]
+                    if not exercises:
+                        break
         prepared.append((idx, nm, exercises, resolved, unresolved))
     for idx, nm, exercises, resolved, unresolved in prepared:
         entry = {"day_index": idx, "name": nm, "exercise_count": len(exercises),

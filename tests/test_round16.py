@@ -2349,3 +2349,39 @@ class Round39(unittest.TestCase):
             SetResult("Cable Row", reps=1, load=100.0, target=1), SetResult("Cable Row", reps=20, load=10.0, target=20)))
         out = planner._from_template(ramp, {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}, 5.0, date(2026, 10, 26))[0]
         self.assertEqual(out.reps, 20)  # the target of the 10 lb set that the anchor is, not the first set's single rep
+
+
+class Round41(unittest.TestCase):
+    def test_a_timed_library_entry_is_reported_and_the_rest_of_the_program_still_saves(self):
+        def resolve(library, name, primary, uni=None):
+            return {"groupId": 2 if name == "Cable crunch" else 7, "matched_name": name, "muscle": "x", "confidence": "high"}
+
+        def prepare(nm, exercises):
+            for ex in exercises:
+                if ex["groupId"] == 2:
+                    raise ValueError("exercise 2: this exercise is timed; every set's unit must be 'sec'")
+        client = mock.Mock(data_dir=tempfile.mkdtemp(prefix="gym-r41-"), credentials={"token": "x", "unit": 1})
+        client.get_library.return_value = []
+        client.prepare_workout.side_effect = prepare
+        client.save_workout.return_value = {"code": 0, "data": {"id": 1}}
+        program = {"goal_label": "G", "days": [{"name": "D", "exercises": [
+            {"name": "Press", "primary": "chest", "sets": 2, "reps": 8, "load": 0, "rest_sec": 60},
+            {"name": "Cable crunch", "primary": "abs", "sets": 3, "reps": 12, "load": 0, "rest_sec": 60}]}]}
+        with mock.patch.object(features, "resolve_exercise", side_effect=resolve):
+            out = features.apply_program(client, program, 0, None, dry_run=False)
+            self.assertEqual((out["created"], out["failed"]), (1, 0))
+            day = out["results"][0]
+            self.assertEqual(day["exercise_count"], 1)
+            self.assertEqual([r["coach_name"] for r in day["resolved"]], ["Press"])
+            self.assertEqual([u["name"] for u in day["unresolved"]], ["Cable crunch"])
+            self.assertEqual([e["groupId"] for e in client.save_workout.call_args[0][1]], [7])
+            client.prepare_workout.side_effect = ValueError("exercise 7: not found in the exercise library")  # any OTHER problem still aborts
+            with self.assertRaises(ValueError):
+                features.apply_program(client, program, 0, None, dry_run=False)
+
+    def test_a_template_id_must_be_a_real_integer_or_an_opaque_id(self):
+        for good in (1, 7, "1001", "abc_def-1", 2 ** 53 - 1):
+            api_client._check_template_id(good)
+        for bad in (True, 0, -1, 1.0, 1.5, float("nan"), float("inf"), 1e-05, 12345678901234567890, "12345678901234567890", "", None, "1,2"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                api_client._check_template_id(bad)

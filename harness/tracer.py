@@ -3,6 +3,9 @@
   python -m harness.tracer --whoop-recovery 62 --sleep-hours 7.2                      # live read (cached NANO token)
   python -m harness.tracer --recordings DIR --as-of 2026-09-28T07:00:00-07:00 --subjective 4   # offline replay
 
+Live reads: one history call, one detail read for the chosen template, up to NEWER_DETAIL_MAX (3) more for sessions NEWER
+than that template (a newer session can overrule it), and --detail N adds other newest sessions up to N reads in total.
+
 Prints a proposal. It never writes to Speediance and has no push path. Exit codes: 0 plan, 2 unavailable
 (a missing/stale/errored input — fix the input, don't override), 1 usage/config error.
 """
@@ -125,7 +128,7 @@ def main(argv=None) -> int:
                    help="how loads are LABELLED (default: $GYM_UNIT, else lb, the unit Felipe's app shows). "
                         "Never inferred from the vendor, and the planner works in ratios so it cannot change a load")
     p.add_argument("--history-days", type=int, default=28)
-    p.add_argument("--detail", type=int, default=1, help="live mode: max per-session detail reads (0-5); 1 = just the chosen template")
+    p.add_argument("--detail", type=int, default=1, help="live mode: max per-session detail reads (0-5) for the template plus other newest sessions; up to 3 extra reads of sessions NEWER than the template are always made")
     p.add_argument("--template", help="plan this template instead of the rotation pick (substring of its title)")
     p.add_argument("--json", action="store_true")
     a = p.parse_args(argv)

@@ -100,7 +100,8 @@ def unit_is_confirmed(credentials):
 
 def _check_template_id(value):
     """A template id for an update or delete: an opaque id or a positive number, never a bool, 0 or a negative."""
-    if value is None or isinstance(value, bool) or not valid_record_id(str(value)) or (str(value).lstrip("-").isdigit() and int(str(value)) <= 0):
+    if value is None or isinstance(value, (bool, float)) or not valid_record_id(str(value)) \
+            or (str(value).lstrip("-").isdigit() and not 0 < int(str(value)) < 2 ** 53):  # NaN, inf and 1e-05 are not ids; neither is 20 digits
         raise ValueError("template id must be a single id of letters, digits, - or _ (a positive number or an opaque id)")
 
 
