@@ -1202,6 +1202,9 @@ def _program_loads(day):
     return out
 
 
+# every key coach.generate_program puts on an exercise; anything else is a typo or another tool's word
+_PROGRAM_EXERCISE_KEYS = frozenset({"accessory", "belt", "load", "mode", "mode_note", "muscles", "name", "pct1rm", "primary", "reps",
+                                    "rest_sec", "rir", "sets", "unilateral"})
 _PROGRAM_ALIASES = {"weight": "load", "weights": "load", "weight_kg": "load", "weight_lb": "load", "rest": "rest_sec", "rest_seconds": "rest_sec"}
 
 
@@ -1224,9 +1227,11 @@ def program_day_to_payload(library, day, load_unit=None, imperial=False, avoid=f
             # the library match may be an exercise the user reported pain on, even if the coach's own name is not
             unresolved.append({"name": e.get("name"), "muscle": e.get("primary"), "reason": "on your avoid list"})
             continue
-        for alias, right in _PROGRAM_ALIASES.items():  # save_workout's words are not this program's: the value would be dropped and the set saved at 0
-            if alias in e:
-                raise ValueError(f"{e.get('name') or 'exercise'}: this is a program exercise: use '{right}', not '{alias}'")
+        for key in e:  # save_workout's words, or a typo ('laod'), are not this program's: the value would be dropped and the set saved at 0
+            if key in _PROGRAM_ALIASES:
+                raise ValueError(f"{e.get('name') or 'exercise'}: this is a program exercise: use '{_PROGRAM_ALIASES[key]}', not '{key}'")
+            if key not in _PROGRAM_EXERCISE_KEYS:
+                raise ValueError(f"{e.get('name') or 'exercise'}: unknown field {str(key)[:40]!r} (a program exercise has: {', '.join(sorted(_PROGRAM_EXERCISE_KEYS))})")
         one_sided = bool(r["unilateral"]) if "unilateral" in r else bool(e.get("unilateral"))  # the MATCHED exercise decides
         n_sets = _whole(e.get("sets"), "sets", MAX_SETS // 2 if one_sided else MAX_SETS)  # bounded BEFORE allocating
         reps = _whole(e.get("reps"), "reps", MAX_REPS)

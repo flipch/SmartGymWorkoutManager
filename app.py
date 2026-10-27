@@ -436,6 +436,8 @@ def api_stats(group_id):
         result = client.get_user_action_stats(group_id)
         return jsonify(result)
     except Exception as e:
+        if str(e) == "Unauthorized":  # the vendor session expired: the same 401 every sibling route answers
+            return jsonify({"error": "Unauthorized"}), 401
         return jsonify({"error": str(e)}), 500
 
 @app.route('/library')

@@ -2971,3 +2971,52 @@ class Round53(unittest.TestCase):
         with self.assertRaises(api_client.UpstreamError):
             client.schedule_course("2026-10-27", 5, 1)
         self.assertEqual(client.last_debug_info["status"], 502)
+
+
+class Round54(unittest.TestCase):
+    def _client(self):
+        with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-r54-")}):
+            client = api_client.SpeedianceClient()
+        client.save_config("1", "tok", "Global", 1, "", 1, False, [], [])
+        return client
+
+    def test_a_write_answer_that_is_json_but_not_an_object_is_not_a_success(self):
+        for body in (False, [], "rejected", 0):
+            self.assertRaises(api_client.UpstreamError, api_client._require_ok, Resp(200, body), "x")
+        api_client._require_ok(Resp(200, {"code": 0, "data": True}), "x")
+        api_client._require_ok(Resp(200, {"data": True}), "x")
+        null_body = Resp(200, {})
+        null_body.json = lambda: None
+        api_client._require_ok(null_body, "x")  # a JSON null is no refusal (the vendor sends objects; this keeps a bare 200 working)
+        client = self._client()
+        client._request = lambda method, url, **kw: Resp(200, False)
+        ok, _ = client.update_unit(0)
+        self.assertFalse(ok)
+        self.assertEqual(client.credentials["unit"], 1)  # nothing persisted
+        with self.assertRaises(api_client.UpstreamError):
+            client.delete_workout("abc123")
+
+    def test_a_program_exercise_with_an_unknown_field_is_refused_not_saved_at_zero(self):
+        import coach
+        lib = [{"id": 7, "title": "Cable Chest Press", "mainMuscleGroupName": "chest", "isLeftRight": 0}]
+        typo = {"name": "D", "exercises": [{"name": "Cable chest press", "primary": "chest", "sets": 2, "reps": 10, "laod": 60}]}
+        with self.assertRaises(ValueError) as ctx:
+            features.program_day_to_payload(lib, typo, "lb", True)
+        self.assertIn("laod", str(ctx.exception))
+        aliased = {"name": "D", "exercises": [{"name": "Cable chest press", "primary": "chest", "sets": 2, "reps": 10, "weight": 60}]}
+        with self.assertRaises(ValueError) as ctx:
+            features.program_day_to_payload(lib, aliased, "lb", True)
+        self.assertIn("use 'load'", str(ctx.exception))
+        for day in coach.generate_program(goal="muscle", days_per_week=3)["days"]:  # whatever the coach generates is accepted
+            for e in day["exercises"]:
+                self.assertLessEqual(set(e), features._PROGRAM_EXERCISE_KEYS)
+
+    def test_stats_answers_401_when_the_vendor_session_expired(self):
+        client = mock.Mock(credentials={"token": "x"})
+        client.get_user_action_stats.side_effect = Exception("Unauthorized")
+        with mock.patch.object(gym_app, "client", client):
+            resp = gym_app.app.test_client().get("/api/stats/5", headers=BASIC)
+        self.assertEqual(resp.status_code, 401)
+        client.get_user_action_stats.side_effect = Exception("boom")
+        with mock.patch.object(gym_app, "client", client):
+            self.assertEqual(gym_app.app.test_client().get("/api/stats/5", headers=BASIC).status_code, 500)

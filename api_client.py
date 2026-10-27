@@ -87,6 +87,8 @@ def _require_ok(resp, what):
         if (getattr(resp, "text", "") or "").strip():  # e.g. a proxy's HTML page
             raise UpstreamError(f"{what} response was not JSON") from None
         return  # an empty 2xx body is a plain success
+    if body is not None and not isinstance(body, dict):  # false, [], "rejected": no confirmation, not a success
+        raise UpstreamError(f"{what} response was not a JSON object")
     if isinstance(body, dict) and body.get('code') not in (None, 0):
         raise UpstreamError(f"{what} was rejected (code {body.get('code')})")
 
