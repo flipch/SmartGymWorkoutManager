@@ -1805,6 +1805,51 @@ class Round28(unittest.TestCase):
         self.assertNotIn("{{ variant.coach.", html)
 
 
+class Round29(unittest.TestCase):
+    def call(self, name, args, client=None):
+        import asyncio
+        client = client or mock.Mock()
+        with mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}), mock.patch.object(mcp_server, "_client", return_value=client), \
+                mock.patch.object(mcp_server, "_require_auth"):
+            try:
+                return asyncio.run(mcp_server.mcp.call_tool(name, args))
+            except Exception as e:  # a refused call may surface as an exception or as an error result
+                return e
+
+    def test_a_boolean_is_never_a_template_id_over_rpc(self):
+        client = mock.Mock()
+        client.save_workout.return_value = {"code": 0}
+        self.call("save_workout", {"name": "n", "exercises": [], "template_id": True}, client)
+        client.save_workout.assert_not_called()
+        self.call("save_workout", {"name": "n", "exercises": [], "template_id": 5}, client)
+        self.assertEqual(client.save_workout.call_args.args[2], 5)  # the control: a real id still goes through
+        self.call("save_workout", {"name": "n", "exercises": [], "template_id": "abc_1"}, client)
+        self.assertEqual(client.save_workout.call_args.args[2], "abc_1")
+
+    def test_a_misspelled_argument_fails_the_call(self):
+        client = mock.Mock()
+        client.save_workout.return_value = {"code": 0}
+        self.call("save_workout", {"name": "n", "exercises": [], "bogus": 1}, client)
+        client.save_workout.assert_not_called()
+        with mock.patch.object(coach_mod := __import__("coach"), "autoregulate", wraps=coach_mod.autoregulate) as auto:
+            self.call("autoregulate", {"whoop_recoveryy": 10, "subjective": 5, "use_stored_readiness": False})
+            auto.assert_not_called()
+            self.call("autoregulate", {"whoop_recovery": 10, "subjective": 5, "use_stored_readiness": False})
+            auto.assert_called_once()
+
+    def test_every_spelling_of_fly_is_one_exercise_for_a_pain_report(self):
+        import coach
+        for reported in ("Chest flyes", "chest fly", "Chest Flye", "Chest flies"):
+            self.assertTrue(coach._is_avoided("Cable Chest Fly", {coach._norm_name(reported)}), reported)
+        self.assertFalse(coach._is_avoided("Cable Chest Press", {coach._norm_name("Chest flyes")}))
+
+    def test_a_row_ski_timed_exercise_is_a_timer_in_the_summary(self):
+        record = {"trainingId": 1, "startTimestamp": 1_790_000_000_000, "title": "T"}
+        for cm, timer in ((0, True), (2, True), (1, False)):
+            detail = [{"actionLibraryName": "Row", "completionMethod": cm, "finishedReps": [{"finishedCount": 0, "targetCount": 60, "time": 45}]}]
+            self.assertEqual(features._summarize_session(record, detail, "kg")["exercises"][0]["timer"], timer, cm)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

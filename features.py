@@ -1445,7 +1445,7 @@ def _summarize_session(record, detail, unit):
             "name": ex.get("actionLibraryName") or "Exercise",
             "group_id": ex.get("actionLibraryGroupId"),
             "rating": ex.get("actionRating"),
-            "unilateral": uni, "timer": ex.get("completionMethod") == 0,
+            "unilateral": uni, "timer": ex.get("completionMethod") in (0, 2),
             "total_volume": round(ex.get("totalCapacity") or 0, 1),
             "max_weight": ex.get("maxWeight"),
             "sets": sets,

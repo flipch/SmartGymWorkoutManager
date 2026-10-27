@@ -546,14 +546,19 @@
         resultEl.className = 'mt-2 text-sm text-center text-gray-400';
         resultEl.textContent = 'Scheduling...';
 
+        const courseId = currentCourseId;
         try {
             const resp = await fetch('/api/schedule_course', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ date, courseId: currentCourseId, status: 1 })
+                body: JSON.stringify({ date, courseId, status: 1 })
             });
             const result = await resp.json();
 
+            if (currentCourseId !== courseId) {  // the modal now shows another course: say what happened to THIS one
+                alert(result.success ? `Course ${courseId} was scheduled for ${date}.` : `Course ${courseId} could not be scheduled.`);
+                return;
+            }
             if (result.success) {
                 resultEl.className = 'mt-2 text-sm text-center text-green-400';
                 resultEl.textContent = `Scheduled for ${date}!`;

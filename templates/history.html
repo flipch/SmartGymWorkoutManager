@@ -336,7 +336,7 @@
             const totalCap = ex.totalCapacity || 0;
             const rating = ex.actionRating;
             const isUnilateral = ex.isLeftRight === 1;
-            const isTimer = ex.completionMethod === 0;
+            const isTimer = ex.completionMethod === 0 || ex.completionMethod === 2;  // 2 = Row/Ski timed
 
             // Score stars
             let ratingHtml = '';

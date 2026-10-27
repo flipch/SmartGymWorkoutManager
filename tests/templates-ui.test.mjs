@@ -127,7 +127,7 @@ function browse(fetchImpl, now) {
     const doc = makeDocument();
     const ctx = {
         document: doc, fetch: fetchImpl, console, DIFF_MAP: {}, jsq: (x) => x,
-        renderCourseDetail: (d) => { ctx.rendered = d; }, rendered: null,
+        renderCourseDetail: (d) => { ctx.rendered = d; }, rendered: null, alerts: [], alert: (m) => ctx.alerts.push(m),
         Date: now ? class extends Date { constructor(...a) { super(...(a.length ? a : [now])); } } : Date,
     };
     vm.createContext(ctx);
@@ -1189,4 +1189,39 @@ test('the set editor offers every mode the saver accepts', () => {
     for (const [value, label] of [[1, 'Standard'], [2, 'Chains'], [3, 'Eccentric'], [4, 'Constant'], [5, 'Spotter']]) {
         assert.match(src, new RegExp(`<option value="${value}" \\$\\{set\\.mode == ${value} \\? 'selected' : ''\\}>${label}</option>`), label);
     }
+});
+
+// ----------------------------------------------------------------------------------------------- round 29
+test('a booking answer for one course never lands in another course\'s modal', async () => {
+    let release;
+    const fetchImpl = (url, opts) => {
+        if (opts) return new Promise((resolve) => { release = () => resolve({ json: async () => ({ success: true }) }); });
+        const id = Number(url.split('/').pop());
+        return Promise.resolve({ ok: true, json: async () => ({ id }) });
+    };
+    const { ctx, doc } = browse(fetchImpl);
+    ctx.api.openCourseDetailById(101, 'A', 10);
+    await new Promise((r) => setImmediate(r));
+    doc.getElementById('scheduleDate').value = '2026-11-01';
+    const pending = ctx.api.confirmSchedule();
+    ctx.api.openCourseDetailById(202, 'B', 20);
+    await new Promise((r) => setImmediate(r));
+    release(); await pending;
+    assert.notEqual(doc.getElementById('scheduleResult').textContent, 'Scheduled for 2026-11-01!');
+    assert.match(ctx.alerts[0], /Course 101 was scheduled for 2026-11-01/);
+});
+
+test('the workout history page: a failed search leaves nothing exportable', async () => {
+    const src = read('workout_history.html');
+    const doc = makeDocument();
+    const ctx = { document: doc, console: { error() {} }, alert() {}, JSON, currentHistoryData: [{ id: 'september' }], renderTable() {},
+                  esc: (s) => String(s), fetch: async () => { throw new Error('offline'); } };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'let historySeq', '    function renderTable') + '\nglobalThis.fetchHistory = fetchHistory;', ctx);
+    await ctx.fetchHistory();
+    same(ctx.currentHistoryData, []);
+});
+
+test('the history detail shows a Row/Ski timed set as a duration', () => {
+    assert.match(read('history.html'), /const isTimer = ex\.completionMethod === 0 \|\| ex\.completionMethod === 2;/);
 });

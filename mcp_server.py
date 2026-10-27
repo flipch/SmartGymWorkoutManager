@@ -16,7 +16,11 @@ import os
 from datetime import date, timedelta
 
 from mcp.server.mcpserver import MCPServer
-from pydantic import StrictBool
+from mcp.server.mcpserver.utilities.func_metadata import ArgModelBase
+from pydantic import StrictBool, StrictInt, StrictStr
+
+# a misspelled argument (whoop_recoveryy, addd) must fail the call, not be dropped while the rest runs
+ArgModelBase.model_config = {**ArgModelBase.model_config, "extra": "forbid"}
 
 import coach
 import state_io
@@ -127,7 +131,7 @@ def delete_workout(template_id: str) -> dict:
 
 
 @mcp.tool()
-def save_workout(name: str, exercises: list, template_id: int | str | None = None) -> dict:
+def save_workout(name: str, exercises: list, template_id: StrictInt | StrictStr | None = None) -> dict:  # true must not become template 1
     """Create (template_id omitted) or update (template_id given) a workout.
 
     `exercises` is a list of dicts, each:

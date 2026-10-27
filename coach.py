@@ -247,6 +247,8 @@ def _swap_count(ordered):
 
 def _stem(token):
     """Plural and hyphen insensitive: 'lunges' = 'lunge', 'split-squats' = 'split squat'."""
+    if token in ("flye", "flyes", "flys"):  # fly, flye, flyes, flies: one movement
+        return "fly"
     if len(token) > 3:
         if token.endswith("sses"):
             return token[:-2]
