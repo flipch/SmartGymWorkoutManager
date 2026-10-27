@@ -31,6 +31,12 @@ LAYOFF_DAYS = 14          # after this long without logging a lift, hold its loa
 
 
 
+
+def _mid(values: list[int]) -> float | int:
+    """True median of rep counts (the average of the two middle values for an even count), shown without a trailing .0."""
+    m = median(values)
+    return int(m) if m == int(m) else m
+
 def _norm(name: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", name.lower()).split())
 
@@ -111,6 +117,15 @@ def _lifted_median(loads) -> float:
     100 lb) the LOWER one stands, not their average."""
     lo, hi = median_low(loads), median_high(loads)
     return float(median(loads)) if hi <= lo * 1.25 else float(lo)
+
+
+def _working_reps(sets) -> list[int]:
+    """Sorted rep counts of the sets at the working load (a ramp's 1-rep top set is not the rep count of the lift)."""
+    done = [x for x in sets if x.reps]
+    loads = [x.load for x in done if x.load]
+    mid = _lifted_median(loads) if loads else None
+    near = [x.reps for x in done if mid and x.load and abs(x.load - mid) <= 0.1 * mid]
+    return sorted(near or (x.reps for x in done))
 
 
 def anchor_load(sets) -> float | None:
@@ -251,10 +266,10 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                     else "no recorded sets last time (skipped or unrecorded): use your template's targets")
             out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None, note))
             continue
-        done_reps = sorted(r.reps for r in performed if r.reps)
-        if reps and done_reps and done_reps[len(done_reps) // 2] < 0.6 * reps:  # a 1-rep max is not the load for a 10-rep prescription
+        done_reps = _working_reps(performed)
+        if reps and done_reps and _mid(done_reps) < 0.6 * reps:  # a 1-rep max is not the load for a 10-rep prescription
             out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
-                                        f"last logged at about {done_reps[len(done_reps) // 2]} rep(s) per set, far from the {reps} prescribed: "
+                                        f"last logged at about {_mid(done_reps)} rep(s) per set, far from the {reps} prescribed: "
                                         "choose a load that leaves the target RIR"))
             continue
         last = anchor_load(performed)
@@ -282,9 +297,9 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                                             f"a newer session ({nday.isoformat()}) logged this lift as a timed exercise (seconds): choose a load that leaves the target RIR"))
                 continue
             nreps = sorted(x.reps for x in nsets if x.reps)
-            if nload <= last and nreps[len(nreps) // 2] < 0.3 * (reps or 0):  # 1 or 2 reps of a 10-rep prescription is not a load to plan on
+            if nload <= last and _mid(nreps) < 0.3 * (reps or 0):  # 1 or 2 reps of a 10-rep prescription is not a load to plan on
                 out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None,
-                                            f"a newer session ({nday.isoformat()}) managed about {nreps[len(nreps) // 2]} rep(s) per set, far from the {reps} prescribed: "
+                                            f"a newer session ({nday.isoformat()}) managed about {_mid(nreps)} rep(s) per set, far from the {reps} prescribed: "
                                             "choose a load that leaves the target RIR"))
                 continue
             if nload <= last:  # not heavier since this template: that is where the athlete is now,
@@ -327,10 +342,10 @@ def _from_catalog(sessions: list[SessionResult], auto: dict, goal: str, days_per
             out.append(ProposedExercise(ex["name"], sets, ex["reps"], max(ex["rir"], auto["rir_min"]), mode, None,
                                         f"last logged on {last_day.isoformat()} as a timed exercise (seconds): choose a load that leaves the target RIR"))
             continue
-        done_reps = sorted(x.reps for x in logged if x.reps)
-        if done_reps and done_reps[len(done_reps) // 2] < 0.6 * ex["reps"]:  # a 1-rep max is not the load for 9 reps
+        done_reps = _working_reps(logged)
+        if done_reps and _mid(done_reps) < 0.6 * ex["reps"]:  # a 1-rep max is not the load for 9 reps
             out.append(ProposedExercise(ex["name"], sets, ex["reps"], max(ex["rir"], auto["rir_min"]), mode, None,
-                                        f"last logged at about {done_reps[len(done_reps) // 2]} rep(s) per set on {last_day.isoformat()}, far from the {ex['reps']} prescribed: "
+                                        f"last logged at about {_mid(done_reps)} rep(s) per set on {last_day.isoformat()}, far from the {ex['reps']} prescribed: "
                                         "choose a load that leaves the target RIR"))
             continue
         hit_all = all(x.reps is not None and x.reps >= ex["reps"] for x in logged)

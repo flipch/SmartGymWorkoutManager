@@ -52,6 +52,14 @@ def _json_data(resp, what, kind, empty=None):
     return data
 
 
+def _ack_data(resp):
+    """The `data` of a write answer; a body that is not a JSON object is an upstream error, not an AttributeError."""
+    body = resp.json()
+    if not isinstance(body, dict):
+        raise UpstreamError("write answer was not a JSON object")
+    return body.get('data', False)
+
+
 def _acknowledged(data):
     """A write's `data` as a yes/no: only an explicit true counts ("false", {"success": false}, [] and a missing value do not)."""
     if isinstance(data, bool):
@@ -677,7 +685,7 @@ class SpeedianceClient:
         resp = self._request('GET', url, headers=self._get_headers())
         if strict:
             detail = _json_data(resp, "exercise detail", dict)
-            if "isLeftRight" not in detail:  # real answers always carry it (0 for bilateral)
+            if detail.get("isLeftRight") not in (0, 1):  # real answers always carry it (0 for bilateral)
                 raise UpstreamError("exercise detail was incomplete")
             return detail
         return resp.json().get('data', {})
@@ -740,7 +748,7 @@ class SpeedianceClient:
         }
         resp = self._request('POST', url, headers=self._get_headers(), json=payload)
         _require_ok(resp, "schedule")
-        return _acknowledged(resp.json().get('data', False)) if resp.content or resp.text else False
+        return _acknowledged(_ack_data(resp)) if resp.content or resp.text else False
 
     def get_training_history(self, start_date, end_date):
         """
@@ -777,7 +785,7 @@ class SpeedianceClient:
                 "status": resp.status_code,
             }
             _require_ok(resp, "course schedule")
-            return _acknowledged(resp.json().get('data', False))
+            return _acknowledged(_ack_data(resp))
         except UpstreamError:
             raise
         except Exception as e:

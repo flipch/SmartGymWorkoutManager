@@ -2865,3 +2865,74 @@ class Round51(unittest.TestCase):
         self.assertEqual(gym_app.app.config["MAX_CONTENT_LENGTH"], 5 * 1024 * 1024)
         big = gym_app.app.test_client().post("/api/coach/critique", headers=BASIC, data=b"{" + b" " * (6 * 1024 * 1024) + b"}", content_type="application/json")
         self.assertEqual(big.status_code, 413)
+
+
+class Round52(unittest.TestCase):
+    AUTO = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+
+    def _client(self):
+        with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-r52-")}):
+            client = api_client.SpeedianceClient()
+        client.save_config("1", "tok", "Global", 0, "", 1, False, [], [])
+        return client
+
+    def test_the_far_below_rep_guards_use_the_true_median_of_an_even_count(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        day = date(2026, 10, 26)
+        template = SessionResult("1", date(2026, 10, 18), 1_790_000_000_000, "T", sets=tuple(SetResult("Bench", reps=10, load=100.0, target=10) for _ in range(3)))
+        newer = SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=(
+            SetResult("Bench", reps=1, load=90.0, target=10), SetResult("Bench", reps=4, load=90.0, target=10)))
+        self.assertIsNone(planner._from_template(template, self.AUTO, 5.0, day, [template, newer])[0].load)  # median 2.5 < 3
+        pair = SessionResult("3", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=(
+            SetResult("Bench", reps=1, load=100.0, target=10), SetResult("Bench", reps=10, load=100.0, target=10)))
+        self.assertIsNone(planner._from_template(pair, self.AUTO, 5.0, day)[0].load)  # median 5.5 < 6
+        ok = SessionResult("4", date(2026, 10, 24), 1_792_000_000_000, "Other", sets=(
+            SetResult("Bench", reps=6, load=100.0, target=10), SetResult("Bench", reps=7, load=100.0, target=10)))
+        self.assertEqual(planner._from_template(ok, self.AUTO, 5.0, day)[0].load, 100.0)  # median 6.5 still proposes
+        self.assertEqual(planner._mid([1, 4]), 2.5)
+        self.assertEqual(planner._mid([4, 6]), 5)
+
+    def test_a_ramps_rep_guard_looks_at_the_sets_at_the_working_load(self):
+        from datetime import date
+        from harness import planner
+        from harness.model import SetResult
+        ramp = [SetResult("Row", reps=20, load=10.0, target=20), SetResult("Row", reps=20, load=10.0, target=20), SetResult("Row", reps=1, load=100.0, target=1)]
+        self.assertEqual(planner._working_reps(ramp), [20, 20])
+
+    def test_a_write_answer_that_is_not_an_object_is_an_upstream_error(self):
+        client = self._client()
+        client._request = lambda method, url, **kw: Resp(200, [1, 2])
+        with self.assertRaises(api_client.UpstreamError):
+            client.schedule_workout("2026-10-27", "T1", 1)
+
+    def test_strict_exercise_detail_refuses_a_null_or_string_side_flag(self):
+        client = self._client()
+        for bad in (None, "1", "0"):
+            client._request = lambda method, url, bad=bad, **kw: Resp(200, {"code": 0, "data": {"isLeftRight": bad}})
+            with self.assertRaises(api_client.UpstreamError, msg=repr(bad)):
+                client.get_exercise_detail(5, strict=True)
+        client._request = lambda method, url, **kw: Resp(200, {"code": 0, "data": {"isLeftRight": 0}})
+        self.assertEqual(client.get_exercise_detail(5, strict=True)["isLeftRight"], 0)
+
+    def test_the_catalog_guard_uses_the_true_median_and_the_working_sets(self):
+        from datetime import date
+        import coach
+        from harness import planner
+        from harness.model import SessionResult, SetResult
+        day = date(2026, 10, 26)
+        first = coach.generate_program(goal="muscle", days_per_week=3)["days"][1]["exercises"][0]  # one session in the window selects day 2
+        name, want = first["name"], first["reps"]
+        low, high = max(1, int(0.5 * want) - 1), want
+        # an even count whose middle pair averages below 60% of the prescription (the old upper-middle pick passed it)
+        for reps in ((1, high), (low, high)):
+            if (reps[0] + reps[1]) / 2 >= 0.6 * want:
+                continue
+            sets = tuple(SetResult(name, reps=r, load=100.0, target=want) for r in reps)
+            plan = planner._from_catalog([SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=sets)], self.AUTO, "muscle", 3, "intermediate", day, 10.0, [])[1]
+            self.assertIsNone(next(x for x in plan if x.name == name).load, reps)
+        # a ramp's heavy single is not the rep count of the lift: the working sets (10 lb x want) carry the guard
+        ramp = tuple([SetResult(name, reps=want, load=10.0, target=want)] * 2 + [SetResult(name, reps=1, load=100.0, target=1)] * 2)
+        plan = planner._from_catalog([SessionResult("2", date(2026, 10, 24), 1_792_000_000_000, "T", sets=ramp)], self.AUTO, "muscle", 3, "intermediate", day, 10.0, [])[1]
+        self.assertIsNotNone(next(x for x in plan if x.name == name).load)
