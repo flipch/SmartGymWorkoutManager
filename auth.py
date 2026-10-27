@@ -147,26 +147,28 @@ class AccessJwt:
         self.audience = audience
         self._key_for = key_for or self._default_key_for()
 
-    FETCH_COOLDOWN_S = 30  # after the key ENDPOINT failed, do not refetch for this long while no keys are cached
+    FETCH_COOLDOWN_S = 30  # after the key ENDPOINT failed, do not refetch for this long
 
     def _default_key_for(self):
         import time
         import jwt
-        client = jwt.PyJWKClient(f"{self.issuer}/cdn-cgi/access/certs", cache_keys=True, lifespan=3600, timeout=5)
-        state = {"retry_at": 0.0}
+        cooldown, state = self.FETCH_COOLDOWN_S, {"retry_at": 0.0}
 
-        def key_for(token):
-            # Only an unreachable endpoint with nothing cached cools down. A token naming an unknown kid must NOT: that is
-            # attacker-controlled, and would lock the real user out (PyJWT rate-limits its own unknown-kid refresh).
-            cached = client.jwk_set_cache is not None and client.jwk_set_cache.get() is not None
-            if not cached and time.monotonic() < state["retry_at"]:
-                raise OSError("signing keys unavailable (cooling down)")
-            try:
-                return client.get_signing_key_from_jwt(token).key
-            except jwt.PyJWKClientConnectionError:
-                state["retry_at"] = time.monotonic() + self.FETCH_COOLDOWN_S
-                raise
-        return key_for
+        class Client(jwt.PyJWKClient):
+            def fetch_data(self):
+                # The cooldown gates the NETWORK fetch, not the lookup: a key already cached still verifies while the endpoint
+                # is down, and a flood of forged unknown-kid tokens cannot queue one slow fetch per request. (An unknown kid
+                # on a healthy endpoint is rate-limited by PyJWT itself, cooldown_duration.)
+                if time.monotonic() < state["retry_at"]:
+                    raise jwt.PyJWKClientConnectionError("signing keys unavailable (cooling down)")
+                try:
+                    return super().fetch_data()
+                except jwt.PyJWKClientConnectionError:
+                    state["retry_at"] = time.monotonic() + cooldown
+                    raise
+
+        client = Client(f"{self.issuer}/cdn-cgi/access/certs", cache_keys=True, lifespan=3600, timeout=5)
+        return lambda token: client.get_signing_key_from_jwt(token).key
 
     def _plausible(self, token: str) -> bool:
         """Cheap checks on the UNVERIFIED claims, before any key is fetched: the right issuer, audience, an allowed email

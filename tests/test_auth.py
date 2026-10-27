@@ -286,6 +286,30 @@ class CloudflareAccessAssertion(unittest.TestCase):
                 self.assertIsNone(real.email(forged))
                 self.assertEqual(real.email(good()), self.EMAIL)
 
+    def test_a_failing_key_endpoint_is_fetched_once_per_cooldown_and_cached_keys_keep_working(self):
+        import json as _json
+        import jwt as pyjwt
+        from jwt.algorithms import RSAAlgorithm
+        jwk = _json.loads(RSAAlgorithm.to_jwk(self.key.public_key()))
+        jwk.update({"kid": "real", "use": "sig", "alg": "RS256"})
+        state = {"up": True, "fetches": 0}
+
+        def fetch(self_):
+            state["fetches"] += 1
+            if not state["up"]:
+                raise pyjwt.PyJWKClientConnectionError("down")
+            return {"keys": [jwk]}
+        good = lambda: pyjwt.encode(self.claims(), self.key, algorithm="RS256", headers={"kid": "real"})
+        with patch.object(pyjwt.PyJWKClient, "fetch_data", fetch):
+            real = auth.AccessJwt(self.TEAM, self.AUD, [self.EMAIL])
+            self.assertEqual(real.email(good()), self.EMAIL)
+            state["up"], state["fetches"] = False, 0
+            for i in range(30):  # a flood of plausible forgeries naming unknown kids while the endpoint is down
+                forged = pyjwt.encode(self.claims(), self.other, algorithm="RS256", headers={"kid": f"unknown-{i}"})
+                self.assertIsNone(real.email(forged))
+                self.assertEqual(real.email(good()), self.EMAIL, "a cached key must keep verifying while the endpoint is down")
+        self.assertLessEqual(state["fetches"], 2, "the flood must not become one network fetch per request")
+
     def claims(self):
         import time
         now = int(time.time())
