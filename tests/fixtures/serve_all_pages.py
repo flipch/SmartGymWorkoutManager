@@ -129,7 +129,25 @@ INSIGHTS_DEEP = {
 }
 
 
+class _FakeResponse:
+    status_code = 200
+    text = ""
+
+    def __init__(self, body):
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+def _no_network(*args, **kwargs):
+    raise RuntimeError("the UI fixture makes no network requests: stub the client method that tried this")
+
+
 def install(client):
+    import requests
+    requests.request = _no_network  # a client method that is not stubbed below fails loudly instead of calling the vendor
+    requests.Session.request = _no_network
     client.credentials = {"token": "fixture", "user_id": "1", "unit": 0, "unit_confirmed": True, "region": "Global", "device_type": 1,
                           "allow_monster_moves": False, "owned_accessories": [], "owned_devices": [], "custom_instruction": ""}
     client.device_type, client.allow_monster_moves = 1, False
@@ -158,6 +176,9 @@ def install(client):
     client.get_workout_detail = lambda code: {"name": "Push day", "id": 101, "actionLibraryList": [
         {"groupId": 1, "actionLibraryId": 1, "title": "Barbell Bench Press", "setsAndReps": "10,10", "weights": "40,40", "level": "", "sportMode": "1,1",
          "breakTime2": "60,60", "leftRight": "0,0", "counterweight2": "", "templatePresetId": -1, "img": pic("Bench", 200)}]}
+    client.get_user_action_stats = lambda group_id, page=1, size=12: {"code": 0, "data": {"list": []}}
+    client._request = lambda method, url, **kw: _FakeResponse({"code": 0, "data": {"actionInfoList": [], "title": "Push day"}})
+    client._get_headers = lambda: {}
     client.logout = lambda: None
     gym_app.app.jinja_env.filters["local_cache"] = lambda url, force=False: url
     features._deep_insights = lambda days=90, max_sessions=24: INSIGHTS_DEEP

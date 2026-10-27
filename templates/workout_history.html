@@ -218,6 +218,15 @@
         opacity: 0.9;
         margin-top: 2px;
     }
+    /* Seven columns have to fit a phone: cells may shrink, titles are cut short and the details live in the popup. */
+    .history-calendar-day { min-width: 0; }
+    @media (max-width: 40rem) {
+        div:has(> #historyCalendarGrid) { padding: 0.5rem; }
+        div:has(> .history-calendar-day) { gap: 0.25rem; }
+        .history-calendar-day { min-height: 4.5rem; padding: 0.25rem; }
+        .history-workout-pill { padding: 2px 4px; }
+        .history-workout-pill .workout-meta { display: none; }
+    }
 </style>
 
 <script>
