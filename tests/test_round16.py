@@ -2726,3 +2726,43 @@ class Round47(unittest.TestCase):
         self.assertTrue(coach._is_avoided("Glute Squeeze", {coach._norm_name("Glute Squeezes")}))
         self.assertTrue(coach._is_avoided("Cable Crunch", {coach._norm_name("Cable crunches")}))
         self.assertEqual(features._parse_date("0001-01-01T00:00:00Z"), date(1, 1, 1))
+
+
+class Round48(unittest.TestCase):
+    def client(self):
+        with mock.patch.dict(os.environ, {"DATA_DIR": tempfile.mkdtemp(prefix="gym-r48-")}):
+            client = api_client.SpeedianceClient()
+        client.save_config("42", "tok", "Global", 1, "", 1, False, [], [], unit_confirmed=True)
+        return client
+
+    def test_only_an_explicit_true_acknowledges_a_schedule_write(self):
+        client = self.client()
+        for data, expected in ((True, True), (1, True), ("true", True), ({"success": True}, True),
+                               (False, False), (0, False), ("false", False), ("", False), ([], False), ({"success": False}, False), ({}, False), (None, False)):
+            client._request = lambda m, u, data=data, **kw: Resp(200, {"code": 0, "data": data})
+            self.assertEqual(client.schedule_workout("2026-10-28", "abc", 1), expected, repr(data))
+            self.assertEqual(client.schedule_course("2026-10-28", "7", 1), expected, repr(data))
+
+    def test_the_catalogs_own_abbreviation_still_resolves_and_accents_fold(self):
+        import coach
+        lib = [{"id": 1, "title": "Overhead Triceps Extension", "mainMuscleGroupName": "triceps", "isLeftRight": 0}]
+        self.assertNotEqual(features.resolve_exercise(lib, "Overhead triceps ext.", "triceps")["confidence"], "low")
+        self.assertEqual(coach._norm_name("Café Crunch"), coach._norm_name("Cafe Crunch"))
+        self.assertEqual(coach._norm_name("Naïve Crunch"), coach._norm_name("Naive Crunch"))  # a mark inside a word must not split it
+        self.assertTrue(coach._is_avoided("Cafe Crunch", {coach._norm_name("Café Crunch")}))
+
+    def test_a_malformed_body_does_not_wipe_the_custom_instruction_or_become_defaults(self):
+        c = gym_app.app.test_client()
+        with mock.patch.object(features, "_authed", return_value=True):
+            as_list = c.post("/api/coach/program", headers=BASIC, json=[{"days_per_week": 3}])
+        self.assertEqual(as_list.status_code, 400)
+        saver = mock.Mock()
+        creds = {"token": "x", "user_id": "42", "region": "Global", "unit": 1, "custom_instruction": "keep me"}
+        with mock.patch.object(gym_app.client, "credentials", creds), mock.patch.object(gym_app.client, "save_config", saver):
+            for kwargs in ({"data": "{bad", "content_type": "application/json"}, {"json": []}, {"data": "instruction=x"}):
+                resp = c.post("/settings/custom_instruction", headers=BASIC, **kwargs)
+                self.assertEqual(resp.status_code, 400, kwargs)
+            saver.assert_not_called()
+            ok = c.post("/settings/custom_instruction", headers=BASIC, json={"instruction": ""})  # clearing it on purpose still works
+        self.assertEqual(ok.status_code, 200)
+        saver.assert_called_once()

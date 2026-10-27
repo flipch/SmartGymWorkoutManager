@@ -265,7 +265,9 @@ def _stem(token):
 
 
 def _norm_name(value):
-    return " ".join(_stem(t) for t in re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", str(value)).casefold()))
+    text = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", str(value)).casefold())
+    text = "".join(c for c in text if not unicodedata.combining(c))  # "Café Crunch" and "Cafe Crunch" are one exercise
+    return " ".join(_stem(t) for t in re.findall(r"[^\W_]+", text))
 
 
 def _is_avoided(name, avoid):

@@ -785,6 +785,8 @@ def coach_program():
     parsed = request.get_json(silent=True)
     if parsed is None and request.get_data(cache=True).strip() not in (b"", b"null"):  # truncated JSON or a wrong Content-Type must not become "all defaults"
         return jsonify({"error": "bad_request", "message": "The body must be a JSON object (Content-Type: application/json)."}), 400
+    if parsed is not None and not isinstance(parsed, dict):
+        return jsonify({"error": "bad_request", "message": "The body must be a JSON object."}), 400
     body = json_object(parsed)
     readiness = body.get("readiness")
     readiness_error = _readiness_read_error() if body.get("use_stored_readiness") is not False else None
@@ -1028,10 +1030,13 @@ _VARIANT = {"incline", "decline", "reverse", "overhead", "front", "rear", "later
 _ONE_SIDED_WORDS = {"one", "single", "unilateral", "alternating", "1"}  # one-sidedness is checked separately (isLeftRight), not by name coverage
 
 
+_ABBREVIATION = {"ext": "extension"}  # the coach catalog writes "Overhead triceps ext."
+
+
 def _cover(tokens):
     """Name words for the 'does the library title say everything the coach's name says' check: spelling variants and
     one-sided synonyms agree (flye = fly, one-arm = single arm)."""
-    return {coach._stem(t) for t in tokens if t not in _ONE_SIDED_WORDS}
+    return {_ABBREVIATION.get(coach._stem(t), coach._stem(t)) for t in tokens if t not in _ONE_SIDED_WORDS}
 
 
 _POSTURE = {"seated", "standing", "lying", "prone", "supine", "kneeling"}

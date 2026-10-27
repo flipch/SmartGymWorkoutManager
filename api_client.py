@@ -52,6 +52,19 @@ def _json_data(resp, what, kind, empty=None):
     return data
 
 
+def _acknowledged(data):
+    """A write's `data` as a yes/no: only an explicit true counts ("false", {"success": false}, [] and a missing value do not)."""
+    if isinstance(data, bool):
+        return data
+    if isinstance(data, int):
+        return data == 1
+    if isinstance(data, str):
+        return data.strip().lower() == "true"
+    if isinstance(data, dict):
+        return data.get("success") is True
+    return False
+
+
 def _require_ok(resp, what):
     """Raise unless the vendor accepted a write: HTTP < 400 and, when the body carries a `code`, code == 0."""
     if resp.status_code == 401:
@@ -727,7 +740,7 @@ class SpeedianceClient:
         }
         resp = self._request('POST', url, headers=self._get_headers(), json=payload)
         _require_ok(resp, "schedule")
-        return resp.json().get('data', False) if resp.content or resp.text else False
+        return _acknowledged(resp.json().get('data', False)) if resp.content or resp.text else False
 
     def get_training_history(self, start_date, end_date):
         """
@@ -764,7 +777,7 @@ class SpeedianceClient:
                 "status": resp.status_code,
             }
             _require_ok(resp, "course schedule")
-            return resp.json().get('data', False)
+            return _acknowledged(resp.json().get('data', False))
         except UpstreamError:
             raise
         except Exception as e:

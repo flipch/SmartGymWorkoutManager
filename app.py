@@ -197,6 +197,8 @@ def settings():
 @app.route('/settings/custom_instruction', methods=['POST'])
 def update_custom_instruction():
     data = json_object(request.get_json(silent=True))
+    if 'instruction' not in data:  # a malformed or empty body must not wipe the stored instruction
+        return jsonify({"status": "error", "message": "send a JSON object with an instruction"}), 400
     instruction = data.get('instruction', '')
     if not isinstance(instruction, str) or len(instruction) > 4000:
         return jsonify({"status": "error", "message": "instruction must be text of at most 4000 characters"}), 400
