@@ -281,6 +281,7 @@
             const resp = await fetch(`/api/browse/course/${courseId}`);
             const data = await resp.json();
             if (currentCourseId !== courseId) return;  // a slower answer for a course that is no longer shown
+            if (!resp.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));  // never "no exercise details"
             document.getElementById('courseModalLoading').classList.add('hidden');
             renderCourseDetail(data);
         } catch (err) {
@@ -435,6 +436,7 @@
             const resp = await fetch(`/api/browse/program/${planId}`);
             const data = await resp.json();
             if (currentProgramId !== planId) return;  // a slower answer for a program that is no longer shown
+            if (!resp.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));  // never "no schedule details"
             document.getElementById('programModalLoading').classList.add('hidden');
             renderProgramDetail(data);
         } catch (err) {

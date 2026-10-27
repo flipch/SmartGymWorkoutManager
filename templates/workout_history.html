@@ -634,7 +634,7 @@
             if (isCurrentMonth) {
                 const dateStr = formatDateInput(currentDate);
                 const workoutsForDay = calendarHistoryData.filter(workout => {
-                    const workoutDate = new Date(toMs(workout.endTimestamp || workout.startTimestamp));
+                    const workoutDate = new Date(toMs(workout.startTimestamp || workout.endTimestamp));  // the START day, like every other page
                     return formatDateInput(workoutDate) === dateStr;
                 });
 

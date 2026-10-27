@@ -25,7 +25,7 @@ from insights_core import clamp_days, clamp_n, recovery_advice, summarize, valid
 from features import (  # shared so MCP == HTTP logic
     _session_dates, _coach_workout_to_exercises,
     _detailed_records, fetch_session_detail, _summarize_session, _unit_label,
-    _feedback_profile, _fresh_readiness, apply_program,
+    _feedback_profile, _fresh_readiness, _readiness_read_error, merge_readiness, apply_program,
     log_feedback as _persist_feedback, save_readiness as _persist_readiness,
 )
 
@@ -328,7 +328,10 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
         # program adapts to what the user/agent has reported (real-time, stateful loop).
         c = _client()
         r = state_io.require_readiness(readiness) if readiness is not None else None
-        if r is None:
+        readiness_error = _readiness_read_error(c.data_dir)
+        if r is not None:
+            r = merge_readiness(r, c.data_dir)  # a partial reading must not hide a fresh stored one
+        else:
             stored = _fresh_readiness(c.data_dir)
             if any(k in stored for k in state_io.READINESS_SIGNALS):
                 r = stored
@@ -338,6 +341,8 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
                                          experience=experience, readiness=r, feedback=fb)
         if prof.get("unreadable"):  # the stored pain/avoid list could not be read: say so, never silently drop it
             program["feedback_error"] = prof["unreadable"]
+        if readiness_error:
+            program["readiness_error"] = readiness_error
         return program
     return _safe(run)
 

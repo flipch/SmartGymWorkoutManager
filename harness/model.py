@@ -14,6 +14,7 @@ class SetResult:
     seconds: float | None = None
     unit: str | None = None  # "kg" | "lb" | None (unknown: never guess)
     target: int | None = None  # the rep target the template asked for (None/0 = none recorded)
+    side: str | None = None  # "left" | "right" for a one-sided set, None for bilateral
 
 
 @dataclass(frozen=True)

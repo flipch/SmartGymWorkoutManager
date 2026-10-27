@@ -265,7 +265,12 @@ def _is_avoided(name, avoid):
     """An avoid entry matches an exercise when it is its name, or (4+ characters) part of it: "chest press" rules out
     "Cable Chest Press" too. Over-excluding is the safe direction for a pain report."""
     n = _norm_name(name)
-    return any(a == n or (len(a) >= 4 and a in n) for a in avoid)
+    words = n.split()
+
+    def as_words(a):  # "row" rules out "Seated Cable Row", never "Arrow"
+        w = a.split()
+        return bool(w) and any(words[i:i + len(w)] == w for i in range(len(words) - len(w) + 1))
+    return any(a == n or (len(a) >= 4 and a in n) or as_words(a) for a in avoid)
 
 
 def _pick_for_day(focus, goal, experience, allow_eccentric, exclude=frozenset()):
@@ -373,6 +378,11 @@ def generate_program(goal="general", days_per_week=4, experience="intermediate",
     days_out = []
     weekly_sets = {}
 
+    if available_accessories is not None:
+        if (not isinstance(available_accessories, (list, tuple)) or not available_accessories
+                or not all(isinstance(a, str) for a in available_accessories)):
+            raise ValueError("available_accessories must be a non-empty list of accessory names")
+        available_accessories = [a.strip().lower() for a in available_accessories]
     for name, focus in split:
         if available_accessories:
             focus = focus  # focus unchanged; catalog filter happens in selection

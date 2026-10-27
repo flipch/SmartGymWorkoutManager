@@ -452,11 +452,16 @@ class PainExclusionsAreFuzzyAndLoud(unittest.TestCase):
             _, after = self.prescribed(feedback={"avoid": [entry]})
             self.assertNotIn(victim, after, entry)
 
-    def test_short_entries_only_match_exactly(self):
+    def test_short_entries_match_whole_words_only(self):
         _, names = self.prescribed()
-        self.assertTrue(any("row" in n and n != "row" for n in coach_names()), "the catalog must have a name containing 'row'")
-        _, after = self.prescribed(feedback={"avoid": ["row"]})  # 3 characters: matches an exact name only, never a substring
-        self.assertEqual(sorted(after), sorted(names))
+        self.assertTrue(any("row" in n.split() and n != "row" for n in coach_names()), "the catalog must have a name with the word 'row'")
+        _, after = self.prescribed(feedback={"avoid": ["row"]})  # 3 characters: a whole word of a name, never a substring
+        self.assertFalse([n for n in after if "row" in n.split()])
+        self.assertTrue(coach._is_avoided("Seated Cable Row", {"row"}))
+        self.assertFalse(coach._is_avoided("Arrow Press", {"row"}))
+        self.assertTrue(coach._is_avoided("Chest Fly", {"fly"}))
+        self.assertTrue(coach._is_avoided("Bench Dips", {"dip"}))
+        self.assertFalse(coach._is_avoided("Hip Thrust", {"dip"}))
 
     def test_entries_that_match_nothing_are_reported(self):
         real = coach.CATALOG[0]["name"]

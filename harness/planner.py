@@ -94,6 +94,32 @@ def newest_with_title(sessions: list[SessionResult], title: str) -> SessionResul
 
 
 # ── helpers over logged sets ────────────────────────────────────────────────
+def anchor_load(sets) -> float | None:
+    """The load a progression is built on. One-sided sets keep their side: the WEAKER side's median is the anchor, so an
+    asymmetric 20/40 history never prescribes a load the weaker side has not done (averaging would give 30)."""
+    by_side: dict = {}
+    for s in sets:
+        if s.load:
+            by_side.setdefault(s.side, []).append(s.load)
+    if not by_side:
+        return None
+    medians = [float(median(v)) for v in by_side.values()]
+    return min(medians)
+
+
+def asymmetry_note(sets) -> str | None:
+    by_side = {}
+    for s in sets:
+        if s.load and s.side:
+            by_side.setdefault(s.side, []).append(s.load)
+    if len(by_side) < 2:
+        return None
+    left, right = (float(median(by_side[k])) for k in ("left", "right") if k in by_side)
+    if abs(left - right) <= 1e-9:
+        return None
+    return f"left {left:g} vs right {right:g}: anchored on the lower side"
+
+
 def last_logged(name: str, sessions: list[SessionResult], *, since: date | None = None):
     """(median load, sets, day) from the newest session that logged this exercise with loads (catalog fallback).
 
@@ -105,7 +131,7 @@ def last_logged(name: str, sessions: list[SessionResult], *, since: date | None 
         sets = [x for x in s.sets if _same_exercise(x.exercise, name)]
         loads = [x.load for x in sets if x.load]
         if loads:
-            return float(median(loads)), sets, s.local_day
+            return anchor_load(sets), sets, s.local_day
     return None
 
 
@@ -177,12 +203,13 @@ def _from_template(template: SessionResult, auto: dict, max_jump_pct: float, day
                     else "no recorded sets last time (skipped or unrecorded): use your template's targets")
             out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", None, note))
             continue
-        last = float(median(loads))
+        last = anchor_load(performed)
         hit_all = bool(targets) and all((r.reps or 0) >= r.target for r in rows if r.target)
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
                                 allow_increase=age < LAYOFF_DAYS)
+        uneven = asymmetry_note(performed)
         out.append(ProposedExercise(name, n_sets, reps, auto["rir_min"], "as_template", load,
-                                    f"{basis} (last {last:g})", last_load=last))
+                                    f"{basis} (last {last:g}{'; ' + uneven if uneven else ''})", last_load=last))
     return out
 
 
@@ -209,7 +236,8 @@ def _from_catalog(sessions: list[SessionResult], auto: dict, goal: str, days_per
         load, basis = _progress(last, hit_all, auto["band"], auto["intensity_pct"], max_jump_pct,
                                 allow_increase=(day - last_day).days < LAYOFF_DAYS)
         out.append(ProposedExercise(ex["name"], sets, ex["reps"], max(ex["rir"], auto["rir_min"]), mode, load,
-                                    f"{basis} (last {last:g} on {last_day.isoformat()})", last_load=last))
+                                    f"{basis} (last {last:g} on {last_day.isoformat()}"
+                                    f"{'; ' + asymmetry_note(logged) if asymmetry_note(logged) else ''})", last_load=last))
     return todays["name"], out
 
 

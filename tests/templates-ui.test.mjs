@@ -144,7 +144,7 @@ test('scheduling targets the course the modal shows, and a slower answer for ano
     const fetchImpl = (url, opts) => {
         if (opts) { requests.push(JSON.parse(opts.body)); return Promise.resolve({ json: async () => ({ success: true }) }); }
         const id = Number(url.split('/').pop());
-        return new Promise((resolve) => { waiting[id] = () => resolve({ json: async () => ({ id }) }); });
+        return new Promise((resolve) => { waiting[id] = () => resolve({ ok: true, json: async () => ({ id }) }); });
     };
     const { ctx, doc } = browse(fetchImpl);
     ctx.api.openCourseDetailById(101, 'A', 10);
@@ -330,7 +330,7 @@ test('a slower program answer for a program no longer shown is ignored', async (
     const rendered = [];
     const ctx = {
         console, document: doc, DIFF_MAP: {}, allPrograms: [{ id: 1 }, { id: 2 }], renderProgramDetail: (d) => rendered.push(d.id),
-        fetch: (url) => new Promise((resolve) => { const id = Number(url.split('/').pop()); waiting[id] = () => resolve({ json: async () => ({ id }) }); }),
+        fetch: (url) => new Promise((resolve) => { const id = Number(url.split('/').pop()); waiting[id] = () => resolve({ ok: true, json: async () => ({ id }) }); }),
     };
     vm.createContext(ctx);
     vm.runInContext('let currentProgramId = null;', ctx);
@@ -698,4 +698,51 @@ test('history: a slow network failure for an older session does not replace the 
     waiting[2].resolve({ ok: true, status: 200, json: async () => ({ detail: [2] }) }); await b;
     waiting[1].reject(new Error('network down')); await a;
     assert.doesNotMatch(doc.getElementById('detailLoading').textContent, /network down/);
+});
+
+test('an imported barbell exercise keeps its 7 kg minimum', async () => {
+    const { ctx, doc } = editor(() => metaOf({ isBarbell: true }));
+    await importJson(ctx, doc, { name: 'x', exercises: [{ id: 5, sets: [{ reps: 10, weight: 20, rest: 60 }] }] });
+    assert.equal(ctx.workoutData[0].isBarbell, true);
+});
+
+test('a failed course or program detail is an error, never an empty record', async () => {
+    const doc = makeDocument();
+    const down = async () => ({ ok: false, status: 502, json: async () => ({ error: 'upstream_error' }) });
+    const rendered = [];
+    const ctx = { document: doc, console, fetch: down, renderCourseDetail: (d) => rendered.push(d), renderProgramDetail: (d) => rendered.push(d),
+                  window: {}, resetScheduleUI() {}, DIFF_MAP: {}, allPrograms: [], allCourses: [] };
+    vm.createContext(ctx);
+    vm.runInContext('let currentCourseId = null, currentProgramId = null;', ctx);
+    const src = read('browse.html');
+    vm.runInContext(between(src, 'async function openCourseDetail', '    function renderCourseDetail') + '\nglobalThis.openCourse = openCourseDetail;', ctx);
+    vm.runInContext(between(src, 'async function openProgramDetail', '    function renderProgramDetail') + '\nglobalThis.openProgram = openProgramDetail;', ctx);
+    await ctx.openCourse(1);
+    await ctx.openProgram(2);
+    assert.equal(rendered.length, 0);
+    assert.match(doc.getElementById('courseModalLoading').textContent, /Error/);
+    assert.match(doc.getElementById('programModalLoading').textContent, /Error/);
+});
+
+test('a failed last-max-weight lookup shows as unavailable, not as no history', () => {
+    const src = read('create.html');
+    const ctx = { shouldLoadLastMaxWeight: () => true, lastMaxWeightElementId: () => 'chip', formatLastMaxWeight: (x) => String(x) };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'function buildLastMaxWeightHtml', '    function applyStatsSummaryToExercise') + '\nglobalThis.build = buildLastMaxWeightHtml;', ctx);
+    assert.match(ctx.build({ lastMaxWeightStatus: 'error' }), /unavailable/);
+    assert.equal(ctx.build({ lastMaxWeightStatus: 'none' }), '');
+    assert.match(ctx.build({ lastMaxWeightStatus: 'loaded', lastMaxWeight: 50 }), /Last Max Wt.: 50/);
+});
+
+test('the workout history calendar puts a session on the day it STARTED', async () => {
+    const src = read('workout_history.html');
+    assert.match(src, /new Date\(toMs\(workout\.startTimestamp \|\| workout\.endTimestamp\)\);  \/\/ the START day/);
+});
+
+test('the coach page says when the stored readiness could not be read', () => {
+    const { ctx, doc } = coachPage(() => Promise.reject(new Error('unused')));
+    ctx.api.render(aProgram({ readiness_error: 'JSONDecodeError' }));
+    assert.match(doc.getElementById('out').innerHTML, /stored readiness could not be read \(JSONDecodeError\)/);
+    ctx.api.render(aProgram());
+    assert.doesNotMatch(doc.getElementById('out').innerHTML, /stored readiness could not be read/);
 });

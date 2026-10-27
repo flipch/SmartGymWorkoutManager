@@ -1107,6 +1107,117 @@ class Round20ServerSide(unittest.TestCase):
         self.assertIn("Error loading data", resp.get_data(as_text=True), down)
 
 
+class Round21(unittest.TestCase):
+    def stored(self, **signals):
+        d = tempfile.mkdtemp(prefix="gym-r21-")
+        features.save_readiness(signals, d)
+        return d, features._readiness_path(d)
+
+    def mcp(self, name):
+        return getattr(getattr(mcp_server, name), "fn", getattr(mcp_server, name))
+
+    def test_a_partial_reading_does_not_hide_a_fresh_red_one(self):
+        d, path = self.stored(whoop_recovery=10)
+        with mock.patch.object(features, "_readiness_path", side_effect=lambda dd=None: path), mock.patch.object(features, "_client", mock.Mock(data_dir=d)):
+            out = gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"goal": "muscle", "readiness": {"sleep_hours": 9}}).get_json()
+            self.assertEqual(out["autoregulation"]["band"], "low")
+            higher = gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"goal": "muscle", "readiness": {"whoop_recovery": 90}}).get_json()
+            self.assertNotEqual(higher["autoregulation"]["band"], "low")  # what the caller says about a signal wins
+            alone = gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"goal": "muscle", "readiness": {"sleep_hours": 9}, "use_stored_readiness": False}).get_json()
+            self.assertNotEqual(alone["autoregulation"]["band"], "low")
+        client = mock.Mock(data_dir=d)
+        with mock.patch.object(mcp_server, "_client", return_value=client), mock.patch.object(mcp_server, "_require_auth"):
+            self.assertEqual(self.mcp("generate_program")(readiness={"sleep_hours": 9})["autoregulation"]["band"], "low")
+
+    def test_an_unreadable_readiness_file_is_reported_not_read_as_no_reading(self):
+        d = tempfile.mkdtemp(prefix="gym-r21-")
+        path = features._readiness_path(d)
+        open(path, "w").write("{not json")
+        with mock.patch.object(features, "_readiness_path", side_effect=lambda dd=None: path), mock.patch.object(features, "_client", mock.Mock(data_dir=d)):
+            c = gym_app.app.test_client()
+            resp = c.get("/api/coach/readiness", headers=BASIC)
+            self.assertEqual((resp.status_code, resp.get_json()["error"]), (500, "readiness_unreadable"))
+            self.assertIn("readiness_error", c.post("/api/coach/program", headers=BASIC, json={"goal": "muscle"}).get_json())
+        client = mock.Mock(data_dir=d)
+        with mock.patch.object(mcp_server, "_client", return_value=client), mock.patch.object(mcp_server, "_require_auth"):
+            self.assertIn("readiness_error", self.mcp("generate_program")())
+        open(path, "w").write("[1]")
+        self.assertEqual(features._readiness_read_error(d), "NotAnObject")
+        os.remove(path)
+        self.assertIsNone(features._readiness_read_error(d))  # never reported anything: not an error
+
+    def test_prescriptions_are_never_truncated(self):
+        for bad in (2.9, "2.5", True, float("nan"), float("inf"), 10 ** 400):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                features._whole(bad, "sets", 20)
+        for good in (3, 3.0, "3", None):
+            self.assertIn(features._whole(good, "sets", 20), (0, 3))
+        library = [{"id": 7, "title": "Cable Row", "mainMuscleGroupName": "Lats", "isLeftRight": 0}]
+        for bad in ({"name": "Cable Row", "primary": "back", "sets": 2.9, "reps": 8}, {"name": "Cable Row", "primary": "back", "sets": 3, "reps": 8.9}):
+            with self.assertRaises(ValueError):
+                features.program_day_to_payload(library, {"name": "D", "exercises": [bad]})
+
+    def test_a_repeat_report_keeps_the_session_data_of_the_one_it_replaces(self):
+        d = tempfile.mkdtemp(prefix="gym-fb-")
+        features.log_feedback({"pain": True, "exercise": "Bench press", "rpe": 9.5, "difficulty": "too_hard", "soreness": 5}, d)
+        features.log_feedback({"avoid": "bench press"}, d)
+        stored = json.load(open(features._feedback_path(d)))
+        self.assertTrue(any(e.get("rpe") == 9.5 and e.get("difficulty") == "too_hard" for e in stored))
+        d2 = tempfile.mkdtemp(prefix="gym-fb-")
+        features.log_feedback({"avoid": "Dips"}, d2)
+        features.log_feedback({"avoid": "dips"}, d2)
+        self.assertEqual(len(json.load(open(features._feedback_path(d2)))), 1)  # a pure restatement still replaces
+
+    def test_short_avoid_names_apply_as_whole_words(self):
+        import coach
+        program = coach.generate_program(goal="muscle", days_per_week=4, feedback={"avoid": ["row", "fly"], "events": [1]})
+        names = [e["name"].lower().split() for d in program["days"] for e in d["exercises"]]
+        self.assertFalse([n for n in names if "row" in n or "fly" in n])
+        self.assertNotIn("row", program["avoid_unmatched"])
+
+    def test_a_name_with_no_primary_is_still_checked_against_the_muscle_its_name_implies(self):
+        library = [{"id": 1, "title": "Triceps Extension", "mainMuscleGroupName": "Triceps", "isLeftRight": 0}]
+        self.assertEqual(features.resolve_exercise(library, "Leg extension")["confidence"], "low")
+        library.append({"id": 2, "title": "Leg Extension", "mainMuscleGroupName": "Quads", "isLeftRight": 0})
+        match = features.resolve_exercise(library, "Leg extension")
+        self.assertEqual((match["groupId"], match["confidence"]), (2, "high"))
+
+    def test_available_accessories_must_be_a_usable_list(self):
+        import coach
+        for bad in ("barbell", [], [1], "Handles"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                coach.generate_program(goal="muscle", days_per_week=3, available_accessories=bad)
+        resp = gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"goal": "muscle", "available_accessories": "barbell"})
+        self.assertEqual(resp.status_code, 400)
+        upper = coach.generate_program(goal="muscle", days_per_week=3, available_accessories=["HANDLES", " Rope "])
+        lower = coach.generate_program(goal="muscle", days_per_week=3, available_accessories=["handles", "rope"])
+        self.assertEqual(upper["days"], lower["days"])
+
+    def test_the_planner_anchors_a_one_sided_lift_on_the_weaker_side(self):
+        from harness import normalize, planner
+        from harness.model import SetResult
+        sets = [SetResult("Split Squat", reps=8, load=20.0, side="left"), SetResult("Split Squat", reps=8, load=40.0, side="right")] * 3
+        self.assertEqual(planner.anchor_load(sets), 20.0)
+        self.assertIn("left 20 vs right 40", planner.asymmetry_note(sets))
+        self.assertIsNone(planner.asymmetry_note([SetResult("Press", reps=8, load=30.0)] * 3))
+        self.assertEqual(planner.anchor_load([SetResult("Press", reps=8, load=30.0), SetResult("Press", reps=8, load=34.0)]), 32.0)
+        from datetime import date
+        day = date(2026, 10, 26)
+        from harness.model import SessionResult
+        session = SessionResult("1", date(2026, 10, 24), 1_792_000_000_000, "T", sets=tuple(sets))
+        self.assertEqual(planner.last_logged("Split Squat", [session])[0], 20.0)
+        auto = {"volume_pct": 0, "rir_min": 2, "band": "high", "intensity_pct": 100}
+        plan = planner._from_template(session, auto, 10.0, day)
+        self.assertLessEqual(plan[0].load, 22.0)  # built on the 20 side, never on the 30 average
+        self.assertIn("anchored on the lower side", plan[0].load_basis)
+        detail = [{"actionLibraryName": "Split Squat", "finishedReps": [
+            {"finishedCount": 8, "leftRight": 1, "trainingInfoDetail": {"weights": [20.0]}},
+            {"finishedCount": 8, "leftRight": 2, "trainingInfoDetail": {"weights": [40.0]}},
+            {"finishedCount": 8, "trainingInfoDetail": {"weights": [30.0]}}]}]
+        got = normalize.session_with_sets({"trainingId": 1, "startTimestamp": 1_790_000_000}, detail)
+        self.assertEqual([x.side for x in got.sets], ["left", "right", None])
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

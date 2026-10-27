@@ -569,6 +569,26 @@ def _load_readiness(data_dir=None):
         return {}
 
 
+def _readiness_read_error(data_dir=None):
+    """Why the stored readiness cannot be used, or None (absent is fine: nothing was ever reported)."""
+    path = _readiness_path(data_dir)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return None if isinstance(json.load(f), dict) else "NotAnObject"
+    except Exception as e:
+        return type(e).__name__
+
+
+def merge_readiness(supplied, data_dir=None):
+    """What a caller reported, completed with the fresh stored signals it did not mention: a partial reading ("slept 9 h")
+    must not hide a fresh red WHOOP score."""
+    stored = _fresh_readiness(data_dir)
+    base = {k: v for k, v in stored.items() if k in state_io.READINESS_SIGNALS}
+    return {**base, **(supplied or {})}
+
+
 READINESS_KEYS = ("whoop_recovery", "hrv_vs_baseline", "rhr_delta_bpm",
                   "sleep_hours", "subjective", "acwr")
 
@@ -683,6 +703,10 @@ def coach_readiness():
         except Exception as e:
             return jsonify({"error": "could_not_store", "message": type(e).__name__}), 500
         return jsonify({"stored": keep, "adjustment": coach.autoregulate(keep)})
+    unreadable = _readiness_read_error()
+    if unreadable:  # a corrupt file is not "no reading": "Train as planned" could hide a red score
+        return jsonify({"error": "readiness_unreadable", "message": f"The stored readiness could not be read ({unreadable}); "
+                        "post a new reading."}), 500
     stored = _load_readiness()
     age = readiness_age_hours(stored)
     usable = _fresh_readiness()  # per-field freshness, the same rule program generation uses
@@ -714,12 +738,15 @@ def _all_finite(value):
 def coach_program():
     body = json_object(request.get_json(silent=True))
     readiness = body.get("readiness")
+    readiness_error = _readiness_read_error() if body.get("use_stored_readiness", True) else None
     if readiness is not None:
         try:
             readiness = state_io.require_readiness(readiness)
         except ValueError as e:
             return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
-    if readiness is None and body.get("use_stored_readiness", True):
+        if body.get("use_stored_readiness", True):
+            readiness = merge_readiness(readiness)
+    elif body.get("use_stored_readiness", True):
         stored = _fresh_readiness()
         if any(k in stored for k in state_io.READINESS_SIGNALS):
             readiness = stored
@@ -746,6 +773,8 @@ def coach_program():
         return jsonify({"error": "bad_request", "message": "Invalid program parameters."}), 400
     if feedback_error:  # the stored pain/avoid list could not be read: say so instead of silently dropping it
         prog["feedback_error"] = feedback_error
+    if readiness_error:
+        prog["readiness_error"] = readiness_error
     return jsonify(prog)
 
 
@@ -786,6 +815,16 @@ def _exclusions(event):
     return {n for n in names if n}
 
 
+_SESSION_SIGNALS = ("rpe", "difficulty", "completion", "soreness", "note", "workout_code", "prefer")
+
+
+def _pure_exclusion(event):
+    """A pain/avoid report that says nothing else: restating it loses nothing. One that also carried a session's RPE,
+    difficulty or soreness is kept, or the next program would stop backing off."""
+    return bool((event.get("pain") or event.get("avoid")) and _exclusions(event)
+                and not any(event.get(k) not in (None, "") for k in _SESSION_SIGNALS))
+
+
 def log_feedback(payload, data_dir=None):
     """Validate and append one feedback event (any subset of FEEDBACK_KEYS); return it, or None when `payload` carries
     nothing. Raises ValueError for a bad value and OSError/TimeoutError if the write fails: a lost event must not
@@ -802,7 +841,7 @@ def log_feedback(payload, data_dir=None):
         if event.get("pain") or event.get("avoid"):
             # a repeat report replaces an older one only when it restates EVERY exclusion that one carried
             mine = _exclusions(event)
-            events = [e for e in events[:-1] if not ((e.get("pain") or e.get("avoid")) and _exclusions(e) and _exclusions(e) <= mine)] + [event]
+            events = [e for e in events[:-1] if not (_pure_exclusion(e) and _exclusions(e) <= mine)] + [event]
         standing = [e for e in events if e.get("pain") or e.get("avoid")][-500:]
         ordinary = [e for e in events if not (e.get("pain") or e.get("avoid"))][-100:]
         state_io.atomic_write_json(path, sorted(standing + ordinary, key=lambda e: str(e.get("ts") or "")))
@@ -925,6 +964,8 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
     if not coach_tokens:
         return None
     anchor = _MUSCLE_ANCHOR.get((goal_muscle or "").lower(), set())
+    if not anchor:  # no muscle given: what the NAME itself says ("Leg extension" is quads) must still match the library entry
+        anchor = _MUSCLE_ANCHOR.get((coach.classify_exercise(name)[0] or "").lower(), set())
     best = None  # (key, gid, title, mg, score)
     for ex in library:
         if not isinstance(ex, dict):
@@ -1006,9 +1047,14 @@ def _to_account_unit(load, load_unit, imperial):
 
 def _whole(value, what, hi):
     try:
-        n = int(value or 0)
-    except (TypeError, ValueError):
+        if isinstance(value, bool):
+            raise TypeError
+        x = float(value or 0)
+        n = int(x)
+    except (TypeError, ValueError, OverflowError):
         raise ValueError(f"{what} must be a whole number") from None
+    if x != n:  # 2.9 sets is not 2 sets
+        raise ValueError(f"{what} must be a whole number")
     if not 0 <= n <= hi:
         raise ValueError(f"{what} must be between 0 and {hi}")
     return n
@@ -1228,6 +1274,7 @@ function render(p){
     h+='</div>';
   });
   if(p.avoid_unmatched&&p.avoid_unmatched.length)h+='<div class=warn style="margin-top:8px">⚠ Your avoid list has entries that matched no exercise (check the spelling): '+p.avoid_unmatched.map(a=>esc(a)).join(', ')+'</div>';
+  if(p.readiness_error)h+='<div class=warn style="margin-top:8px">⚠ Your stored readiness could not be read ('+esc(p.readiness_error)+'): this program ignores it. Post a new reading.</div>';
   if(p.feedback_error)h+='<div class=warn style="margin-top:8px">⚠ Your saved pain/avoid list could not be fully read ('+esc(p.feedback_error)+'): exclusions may be missing.</div>';
   h+=`<p class=muted>${esc(p.disclaimer)}</p>`;
   $('out').innerHTML=h;

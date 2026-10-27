@@ -554,7 +554,10 @@
             return `<span id="${lastMaxWeightElementId(ex)}" class="bg-yellow-600/20 text-yellow-300 border border-yellow-500/30 px-2 py-0.5 rounded text-xs font-mono font-bold">Last Max Wt.: ${formatLastMaxWeight(ex.lastMaxWeight)}</span>`;
         }
 
-        if (ex.lastMaxWeightStatus === 'none' || ex.lastMaxWeightStatus === 'error') return '';
+        if (ex.lastMaxWeightStatus === 'error') {  // a failed lookup is not "no history"
+            return `<span id="${lastMaxWeightElementId(ex)}" title="The last max weight could not be loaded; reload the page to retry" class="bg-gray-700/60 text-gray-400 border border-gray-600 px-2 py-0.5 rounded text-xs font-mono">Last Max Wt.: unavailable</span>`;
+        }
+        if (ex.lastMaxWeightStatus === 'none') return '';
 
         return `<span id="${lastMaxWeightElementId(ex)}" class="bg-gray-700/60 text-gray-400 border border-gray-600 px-2 py-0.5 rounded text-xs font-mono animate-pulse">Last Max Wt.: ...</span>`;
     }
@@ -1297,6 +1300,7 @@ You must output a JSON object with the following structure:
                         title: title,
                         img: meta.variants?.[0]?.img || (libEx ? libEx.img : ""),
                         isUnilateral: meta.isUnilateral,
+                        isBarbell: meta.isBarbell,  // the 7 kg barbell minimum depends on it
                         variants: meta.variants,
                         presets: meta.presets,
                         selectedVariantId: meta.variants?.[0]?.id ?? null,  // none known: the server picks the exercise's own
