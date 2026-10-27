@@ -274,7 +274,7 @@ class UrlEncodingPerEndpoint(unittest.TestCase):
         self.client._get_headers = lambda: {}
         self.urls = []
         self.client._request = lambda method, url, **kw: (self.urls.append(url),
-                                                           mock.Mock(json=lambda: {"data": {}}, status_code=200))[1]
+                                                           mock.Mock(json=lambda: {"data": [{"x": 1}]}, status_code=200))[1]
 
     def test_course_detail_id_is_quoted(self):
         self.client.get_training_detail("1/../x", "course")

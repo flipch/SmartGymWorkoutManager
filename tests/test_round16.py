@@ -897,6 +897,162 @@ class Round18bServerSide(unittest.TestCase):
             self.assertNotIn("has not been set", gym_app.app.test_client().get("/", headers=BASIC).get_data(as_text=True))
 
 
+class Round19ServerSide(unittest.TestCase):
+    LIB = [{"id": 1, "title": "Standing Triceps Extension", "mainMuscleGroupName": "Triceps", "isLeftRight": 0},
+           {"id": 2, "title": "Leg Extension (ankle)", "mainMuscleGroupName": "Quads", "isLeftRight": 0},
+           {"id": 3, "title": "Mystery Extension", "mainMuscleGroupName": "", "isLeftRight": 0}]
+
+    def test_a_movement_that_trains_another_muscle_is_never_a_confident_match(self):
+        only_triceps = [self.LIB[0]]
+        for name in ("Leg extension (ankle)", "Leg extension"):
+            match = features.resolve_exercise(only_triceps, name, "quads")
+            self.assertEqual(match["confidence"], "low", name)
+        self.assertEqual(features.resolve_exercise(self.LIB, "Leg extension (ankle)", "quads")["matched_name"], "Leg Extension (ankle)")
+        self.assertEqual(features.resolve_exercise(self.LIB, "Leg extension (ankle)", "quads")["confidence"], "high")
+
+    def test_an_unlabelled_library_exercise_is_at_most_a_medium_match(self):
+        match = features.resolve_exercise([self.LIB[2]], "Mystery Extension", "quads")
+        self.assertIn(match["confidence"], ("med", "low"))
+
+    def test_the_importer_does_not_save_a_leg_load_onto_a_triceps_exercise(self):
+        day = {"name": "D", "exercises": [{"name": "Leg extension (ankle)", "primary": "quads", "sets": 3, "reps": 10, "load": 60, "rest_sec": 60}]}
+        exercises, resolved, unresolved = features.program_day_to_payload([self.LIB[0]], day, "lb", True)
+        self.assertEqual((exercises, resolved), ([], []))
+        self.assertIn("low-confidence", unresolved[0]["reason"])
+
+    def test_a_repeat_report_keeps_the_other_exclusion_the_first_one_carried(self):
+        d = tempfile.mkdtemp(prefix="gym-fb-")
+        features.log_feedback({"pain": True, "exercise": "Cable Curl", "avoid": "Deadlift"}, d)
+        features.log_feedback({"pain": True, "exercise": "Cable Curl", "avoid": "Squat"}, d)
+        self.assertEqual(sorted(features._feedback_profile(d, days=3650)["avoid"]), ["Cable Curl", "Deadlift", "Squat"])
+        features.log_feedback({"pain": True, "exercise": "Cable Curl", "avoid": "Deadlift"}, d)  # restating replaces the old one
+        stored = json.load(open(features._feedback_path(d)))
+        self.assertLessEqual(len(stored), 2)
+
+    def test_a_vita_exercise_saved_without_its_stat_type_is_refused(self):
+        client = client_with(1, True)
+        client.get_batch_details = lambda ids, **kw: [{"id": i, "actionLibraryList": [{"id": i + 1000}], "dataStatType": 6} for i in ids]
+        with self.assertRaises(ValueError) as ctx:
+            client.prepare_workout("n", [ex(8)])
+        self.assertIn("level", str(ctx.exception))
+        payload = client.prepare_workout("n", [ex(8, data_stat_type=6)])
+        self.assertEqual(payload["actionLibraryList"][0]["level"], "8")
+
+    def test_the_editor_post_must_match_the_accounts_current_unit(self):
+        client = client_with(0, True)
+        calls = []
+        client._request = lambda m, u, **kw: (calls.append(u), Resp(200, {"code": 0, "data": {"id": 1}}))[1]
+        with mock.patch.object(gym_app, "client", client), mock.patch.dict(os.environ, {"GYM_ALLOW_WRITES": "1"}):
+            c = gym_app.app.test_client()
+            stale = c.post("/create", headers=BASIC, json={"name": "n", "unit": 1, "exercises": [ex(100)]}).get_json()
+            self.assertEqual(stale["status"], "error")
+            self.assertIn("unit setting changed", stale["message"])
+            self.assertEqual(calls, [])
+            ok = c.post("/create", headers=BASIC, json={"name": "n", "unit": 0, "exercises": [ex(40)]}).get_json()
+            self.assertEqual(ok["status"], "success")
+
+    def test_reps_must_be_whole_numbers_of_at_least_one(self):
+        client = client_with(1, True)
+        for bad in ("0", 0.5, 1.5, "abc", -3):
+            broken = ex(10)
+            broken["sets"] = [{"reps": bad, "weight": 10, "rest": 60}]
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                client.prepare_workout("n", [broken])
+        for good in ("10", 10, 10.0):
+            fine = ex(10)
+            fine["sets"] = [{"reps": good, "weight": 10, "rest": 60}]
+            self.assertEqual(client.prepare_workout("n", [fine])["actionLibraryList"][0]["setsAndReps"], "10")
+
+    def test_a_timed_preset_set_adds_no_volume_either(self):
+        client = client_with(1, True)
+        timed = ex(13, preset_id=1)
+        timed["sets"] = [{"reps": 60, "weight": 13, "rest": 30, "unit": "sec"}]
+        self.assertEqual(client.prepare_workout("n", [timed])["totalCapacity"], 0)
+
+
+class Round19BatchB(unittest.TestCase):
+    def mcp(self, name):
+        return getattr(getattr(mcp_server, name), "fn", getattr(mcp_server, name))
+
+    def test_a_readiness_that_names_no_known_signal_is_an_error_not_no_reading(self):
+        client = mock.Mock(data_dir=tempfile.mkdtemp())
+        red = {"whoop_recovery": 12, "sleep_hours": 4.5}
+        with mock.patch.object(mcp_server, "_client", return_value=client), mock.patch.object(mcp_server, "_require_auth"), \
+                mock.patch.object(mcp_server, "_fresh_readiness", return_value=red):
+            for bad in ({}, {"recovery": 5}, {"whoop_recovery": 50, "recovry": 1}):
+                self.assertIn("error", self.mcp("generate_program")(readiness=bad), bad)
+                self.assertIn("error", self.mcp("autoregulate")(bad), bad)
+            self.assertIsNotNone(self.mcp("generate_program")()["autoregulation"])  # the stored red reading still applies
+            self.assertNotIn("error", self.mcp("generate_program")(readiness={"whoop_recovery": 80}))
+        with mock.patch.object(features, "_fresh_readiness", return_value=red), mock.patch.object(features, "_client", mock.Mock(data_dir=tempfile.mkdtemp())):
+            for bad in ({}, {"recovery": 5}):
+                resp = gym_app.app.test_client().post("/api/coach/program", headers=BASIC, json={"readiness": bad})
+                self.assertEqual((resp.status_code, resp.get_json()["error"]), (400, "invalid_readiness"), bad)
+
+    def test_avoid_names_in_any_script_are_kept_and_reported(self):
+        import coach
+        for name in ("スクワット", "Übung", "Café Curl"):
+            self.assertNotEqual(coach._norm_name(name), "", name)
+        program = coach.generate_program(feedback={"avoid": ["スクワット"], "events": [1]})
+        self.assertIn(coach._norm_name("スクワット"), program["avoid_unmatched"])
+
+    def test_variant_and_preset_ids_are_refused_not_replaced(self):
+        client = client_with(1, True)
+        for key, bad in (("variant_id", "abc"), ("variant_id", -5), ("variant_id", 1.5), ("preset_id", 0.5), ("preset_id", -5),
+                         ("preset_id", "x"), ("preset_id", True), ("preset_id", 99999)):
+            broken = ex(10, **{key: bad})
+            with self.assertRaises(ValueError, msg=(key, bad)):
+                client.prepare_workout("n", [broken])
+        for key, good in (("variant_id", 1007), ("variant_id", "1007"), ("variant_id", None), ("preset_id", -1), ("preset_id", "-1"),
+                          ("preset_id", None), ("preset_id", 3)):
+            client.prepare_workout("n", [ex(10, **{key: good})])
+
+    def test_an_unknown_training_id_is_not_found_not_an_empty_session(self):
+        client = client_with(1, True)
+        for body in ({"code": 0, "data": None}, {"code": 0}, {"code": 0, "data": {}}):
+            client._request = lambda m, u, body=body, **kw: Resp(200, body)
+            with self.assertRaises(api_client.UpstreamError):
+                client.get_training_detail("999", "custom")
+        creds = mock.Mock()
+        creds.credentials = {"token": "x", "unit": 1, "unit_confirmed": True}
+        creds.get_training_detail.side_effect = api_client.UpstreamError("training detail not found")
+        with mock.patch.object(mcp_server, "_client", return_value=creds), mock.patch.object(mcp_server, "_require_auth"):
+            self.assertIn("error", self.mcp("workout_session")(999, "custom"))
+
+    def test_the_dashboard_survives_opaque_template_ids(self):
+        creds = {"token": "x", "user_id": "42", "unit": 0, "region": "Global", "device_type": 1,
+                 "owned_accessories": [], "owned_devices": [], "custom_instruction": "", "allow_monster_moves": False}
+        workouts = [{"id": 101, "code": "a", "title": "Numeric", "name": "Numeric", "totalCapacity": 1, "durationMinute": 1, "actionNum": 1},
+                    {"id": "9f3ac2e8d1", "code": "b", "title": "Opaque", "name": "Opaque", "totalCapacity": 1, "durationMinute": 1, "actionNum": 1},
+                    {"id": 7, "code": "c", "title": "Small", "name": "Small", "totalCapacity": 1, "durationMinute": 1, "actionNum": 1}]
+        with mock.patch.object(gym_app.client, "credentials", creds), mock.patch.object(gym_app.client, "load_config", return_value=creds), \
+                mock.patch.object(gym_app.client, "get_user_workouts", return_value=workouts), mock.patch.object(gym_app.client, "get_accessories", return_value=[]):
+            page = gym_app.app.test_client().get("/", headers=BASIC).get_data(as_text=True)
+        self.assertNotIn("Invalid token", page)
+        for title in ("Numeric", "Opaque", "Small"):
+            self.assertIn(title, page)
+        self.assertLess(page.index("Small"), page.index("Numeric"))  # numeric ids keep their numeric order
+
+    def test_a_vendor_outage_on_the_library_pages_says_so(self):
+        creds = {"token": "x", "user_id": "42", "unit": 1, "unit_confirmed": True, "region": "Global", "device_type": 1,
+                 "owned_accessories": [], "owned_devices": [], "custom_instruction": "", "allow_monster_moves": False}
+
+        def down(*a, strict=False, **kw):  # like the real client: only the strict call reports the outage
+            if strict:
+                raise api_client.UpstreamError("exercise library unavailable")
+            return []
+        with mock.patch.object(gym_app.client, "credentials", creds), mock.patch.object(gym_app.client, "load_config", return_value=creds), \
+                mock.patch.object(gym_app.client, "get_library", side_effect=down), mock.patch.object(gym_app.client, "get_categories", side_effect=down), \
+                mock.patch.object(gym_app.client, "get_exercise_detail", side_effect=lambda *a, strict=False, **kw: down(strict=strict) or {}), \
+                mock.patch.object(gym_app.client, "get_accessories", return_value=[]):
+            c = gym_app.app.test_client()
+            for path, words in (("/library", "Error loading library"), ("/create", "Could not load the exercise library")):
+                page = c.get(path, headers=BASIC, follow_redirects=True).get_data(as_text=True)
+                self.assertIn(words, page, path)
+            resp = c.get("/exercise/5", headers=BASIC)
+            self.assertEqual(resp.status_code, 302)  # not a 500 page
+
+
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class TemplateHandlersRunUnderNode(unittest.TestCase):
     def test_the_real_editor_browse_and_calendar_handlers_pass(self):

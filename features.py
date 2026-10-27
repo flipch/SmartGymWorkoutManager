@@ -711,7 +711,7 @@ def coach_program():
     readiness = body.get("readiness")
     if readiness is not None:
         try:
-            readiness = state_io.validate_readiness(readiness)
+            readiness = state_io.require_readiness(readiness)
         except ValueError as e:
             return jsonify({"error": "invalid_readiness", "message": str(e)}), 400
     if readiness is None and body.get("use_stored_readiness", True):
@@ -771,6 +771,16 @@ def _load_feedback_events(data_dir=None, *, quarantine_corrupt=False):
         return []
 
 
+def _exclusions(event):
+    """The normalised exercise names a stored pain/avoid report excludes."""
+    names = set()
+    if event.get("pain") and event.get("exercise"):
+        names.add(coach._norm_name(event["exercise"]))
+    if event.get("avoid"):
+        names.add(coach._norm_name(event["avoid"]))
+    return {n for n in names if n}
+
+
 def log_feedback(payload, data_dir=None):
     """Validate and append one feedback event (any subset of FEEDBACK_KEYS); return it, or None when `payload` carries
     nothing. Raises ValueError for a bad value and OSError/TimeoutError if the write fails: a lost event must not
@@ -784,10 +794,10 @@ def log_feedback(payload, data_dir=None):
         events = _load_feedback_events(data_dir, quarantine_corrupt=True)
         events.append(event)
         # a pain/avoid entry is a standing safety instruction: ordinary entries age out after 100, these only after 500 DISTINCT exercises
-        subject = coach._norm_name(event.get("exercise") or event.get("avoid") or "")
-        if event.get("pain") or event.get("avoid"):  # one standing entry per exercise: a repeat report must not crowd out others
-            events = [e for e in events[:-1] if not ((e.get("pain") or e.get("avoid"))
-                                                     and subject and coach._norm_name(e.get("exercise") or e.get("avoid") or "") == subject)] + [event]
+        if event.get("pain") or event.get("avoid"):
+            # a repeat report replaces an older one only when it restates EVERY exclusion that one carried
+            mine = _exclusions(event)
+            events = [e for e in events[:-1] if not ((e.get("pain") or e.get("avoid")) and _exclusions(e) and _exclusions(e) <= mine)] + [event]
         standing = [e for e in events if e.get("pain") or e.get("avoid")][-500:]
         ordinary = [e for e in events if not (e.get("pain") or e.get("avoid"))][-100:]
         state_io.atomic_write_json(path, sorted(standing + ordinary, key=lambda e: str(e.get("ts") or "")))
@@ -945,6 +955,11 @@ def resolve_exercise(library, name, goal_muscle=None, unilateral=False):
         return None
     score = best[4]
     conf = "high" if score >= 1.0 else "med" if score >= 0.55 else "low"
+    if anchor:  # the movement must train the muscle the coach named: "Leg extension" is not "Triceps extension"
+        if best[3] and best[3] not in anchor:
+            conf = "low"
+        elif not best[3] and conf == "high":
+            conf = "med"
     return {"groupId": best[1], "matched_name": best[2], "muscle": best[3], "confidence": conf,
             "unilateral": best[5]}
 

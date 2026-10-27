@@ -387,3 +387,167 @@ test('saving a coach day sends one request per click and reports what was not sa
     assert.match(html, /Lunge \(on your avoid list\)/);
     assert.match(html, /QuarantinedCorruptFile/);
 });
+
+// ----------------------------------------------------------------------------------------------- round 19
+function historyPage(fetchImpl) {
+    const src = read('history.html');
+    const doc = makeDocument();
+    const ctx = { document: doc, console, fetch: fetchImpl, TYPE_MAP: {}, Number, Date, JSON };
+    vm.createContext(ctx);
+    const code = [
+        between(src, 'const toMs', '\n') ,
+        between(src, 'function fmtDateTime', '    function fmtWeight'),
+        between(src, 'async function openDetail', '    function renderDetail'),
+    ].join('\n');
+    vm.runInContext('let currentDetailPayload = null; let renderedDetail = null; function renderDetail(d, r) { renderedDetail = d; }\n' + code +
+        '\nglobalThis.api = { fmtDateTime, openDetail, toMs, rendered: () => renderedDetail };', ctx);
+    return { ctx, doc, src };
+}
+
+test('history: seconds and milliseconds are the same moment, and sort by real time', () => {
+    const { ctx, src } = historyPage(async () => ({}));
+    assert.equal(ctx.api.fmtDateTime(1790000000), ctx.api.fmtDateTime(1790000000000));
+    const sort = /records\.sort\(([^;]+)\);/.exec(src)[1];
+    const compare = vm.runInContext(`(${sort.replace(/\(a, b\) =>/, '(a, b) =>')})`, Object.assign(ctx, {}));
+    const records = [{ id: 'older_ms', startTimestamp: 1790000000000 }, { id: 'newer_s', startTimestamp: 1791000000 }];
+    records.sort(compare);
+    assert.equal(records[0].id, 'newer_s');
+});
+
+test('history: a failed detail fetch is an error message, never an empty breakdown', async () => {
+    const { ctx, doc } = historyPage(async () => ({ ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }));
+    await ctx.api.openDetail({ trainingId: 5, type: 5, title: 'x', startTimestamp: 1 });
+    assert.equal(ctx.api.rendered(), null);
+    assert.match(doc.getElementById('detailLoading').textContent, /history_unavailable/);
+});
+
+test('history: a good detail still renders', async () => {
+    const { ctx } = historyPage(async () => ({ ok: true, status: 200, json: async () => ({ detail: [] }) }));
+    await ctx.api.openDetail({ trainingId: 5, type: 5, title: 'x', startTimestamp: 1 });
+    same(ctx.api.rendered(), { detail: [] });
+});
+
+test('the editor refuses to open a workout whose exercise details could not be loaded', async () => {
+    const { ctx, calls } = editor(() => ({ failed: true, variants: [], presets: [], isUnilateral: false, dataStatType: null }));
+    await ctx.loadExistingWorkout({ name: 'n', actionLibraryList: [apiExercise({ weights: '0,0', level: '8,3' })] });
+    assert.deepEqual(plain(ctx.workoutData), []);
+    assert.ok(calls.some((c) => c[0] === 'alert' && /Could not load/.test(c[1])));
+});
+
+test('fetchExerciseMetadata turns an HTTP error body into a failure, not into an empty exercise', async () => {
+    const src = read('create.html');
+    const ctx = { fetch: async () => ({ ok: false, status: 502, json: async () => ({ error: 'upstream_error' }) }) };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'async function fetchExerciseMetadata', '    async function loadExistingWorkout') + '\nglobalThis.f = fetchExerciseMetadata;', ctx);
+    assert.equal((await ctx.f(5)).failed, true);
+    ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({ isLeftRight: 1, dataStatType: 6, actionLibraryList: [{ id: 9 }] }) });
+    const good = await ctx.f(5);
+    assert.equal(good.failed, undefined);
+    assert.equal(good.dataStatType, 6);
+});
+
+test('saving carries the unit the numbers were typed in', async () => {
+    const { ctx, calls } = editor(() => metaOf());
+    ctx.workoutData = [{ groupId: 5, selectedVariantId: null, selectedPresetId: -1, dataStatType: null, completionMethod: null, selectCompletionMethod: null,
+                         sets: [{ reps: 10, weight: 100, unit: 'reps', rest: 60 }] }];
+    await ctx.window.saveWorkout();
+    assert.equal(calls.find((c) => c[0] === 'fetch')[2].unit, 1);  // editor() runs with userUnit = 1
+});
+
+test('workout history calendar: the newest month wins and a failed load says so', async () => {
+    const src = read('workout_history.html');
+    const doc = makeDocument();
+    let release;
+    const answers = [];
+    const ctx = {
+        document: doc, console, Date, JSON, Array,
+        currentCalendarMonth: 8, currentCalendarYear: 2026, calendarHistoryData: [],
+        formatDateInput: (d) => d.toISOString().slice(0, 10),
+        fetch: (url) => new Promise((resolve) => answers.push({ url, resolve })),
+    };
+    vm.createContext(ctx);
+    const body = between(src, 'let historyCalendarSeq', '        // Render the calendar grid');
+    vm.runInContext(`${body}\n    }\nglobalThis.render = renderHistoryCalendar; globalThis.getData = () => calendarHistoryData;`, ctx);
+    const first = ctx.render();
+    const second = ctx.render();
+    // the NEWER answer lands first, the stale one second
+    answers[1].resolve({ ok: true, json: async () => [{ id: 'new' }] });
+    await second;
+    answers[0].resolve({ ok: true, json: async () => [{ id: 'stale' }] });
+    await first;
+    assert.deepEqual(plain(ctx.getData()).map((w) => w.id), ['new']);
+    // a failed answer is reported, never shown as an empty month
+    const third = ctx.render();
+    answers[2].resolve({ ok: false, json: async () => ({ error: 'history_unavailable' }) });
+    await third;
+    assert.match(doc.getElementById('currentMonthLabelHistory').textContent, /could not be loaded/);
+    // an HTTP error whose body happens to be a list is still an error
+    doc.getElementById('currentMonthLabelHistory').textContent = '';
+    const fourth = ctx.render();
+    answers[3].resolve({ ok: false, json: async () => [] });
+    await fourth;
+    assert.match(doc.getElementById('currentMonthLabelHistory').textContent, /could not be loaded/);
+});
+
+function historyActions(file, from, to, extra = {}) {
+    const src = read(file);
+    const doc = makeDocument();
+    const calls = [];
+    const plainGet = doc.getElementById;
+    doc.getElementById = (id) => Object.assign(plainGet(id), { scrollIntoView() {} });
+    const ctx = {
+        document: Object.assign(doc, { createElement: () => ({ click() {}, style: {} }) }),
+        console: { error() {}, log() {} }, JSON, Array, Number, Date, Promise, setTimeout: (f) => f(),
+        alert: (m) => calls.push(['alert', m]), confirm: () => true,
+        copyToClipboard: (x) => calls.push(['copy', x]),
+        Blob: class { constructor(parts) { this.parts = parts; calls.push(['blob', parts.join('')]); } },
+        URL: { createObjectURL: () => 'blob:x', revokeObjectURL() {} },
+        TYPE_MAP: { 5: { detailType: 'custom' } },
+        ...extra,
+    };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, from, to), ctx);
+    return { ctx, calls, doc };
+}
+
+test('workout history: a failed detail is a message, never a copied or downloaded error object', async () => {
+    const { ctx, calls } = historyActions('workout_history.html', 'async function copyDetail', 'async function deepExport', {
+        fetch: async () => ({ ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }),
+    });
+    await ctx.copyDetail(5, 'custom');
+    await ctx.downloadDetail(5, 'custom');
+    assert.equal(calls.filter((c) => c[0] === 'copy' || c[0] === 'blob').length, 0);
+    assert.equal(calls.filter((c) => c[0] === 'alert' && /Failed to fetch detail/.test(c[1])).length, 2);
+});
+
+test('workout history: the deep export marks a failed record instead of storing the error as its detail', async () => {
+    const { ctx, doc } = historyActions('workout_history.html', 'async function deepExport', '    function copyExportArea', {
+        currentHistoryData: [{ trainingId: 5, type: 5 }],
+        fetch: async () => ({ ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }),
+    });
+    await ctx.deepExport();
+    const rows = JSON.parse(doc.getElementById('export-textarea').value);
+    assert.equal(rows[0].detail, undefined);
+    assert.match(rows[0].error, /Failed/);
+});
+
+test('history: the deep export marks a failed record instead of storing the error as its detail', async () => {
+    const { ctx, calls } = historyActions('history.html', 'async function deepExportHistory', '    function exportHistory', {
+        historyData: { records: [{ trainingId: 5, type: 5 }], start: 'a', end: 'b' },
+        fetch: async () => ({ ok: false, status: 502, json: async () => ({ error: 'history_unavailable' }) }),
+    });
+    await ctx.deepExportHistory();
+    const blob = calls.find((c) => c[0] === 'blob');
+    const rows = JSON.parse(blob[1]).records;
+    assert.equal(rows[0].detail, null);
+    assert.match(rows[0].error, /history_unavailable/);
+});
+
+test('workout history: seconds and milliseconds are the same moment', () => {
+    const src = read('workout_history.html');
+    const ctx = { Number };
+    vm.createContext(ctx);
+    vm.runInContext(between(src, 'const toMs', '\n') + '\nglobalThis.toMs = toMs;', ctx);
+    assert.equal(ctx.toMs(1790000000), ctx.toMs(1790000000000));
+    assert.equal(new Date(ctx.toMs(1790000000)).getFullYear(), 2026);
+});

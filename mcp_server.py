@@ -327,7 +327,7 @@ def generate_program(goal: str = "general", days_per_week: int = 4,
         # works offline as a PT; auto-applies any persisted readiness + feedback so the
         # program adapts to what the user/agent has reported (real-time, stateful loop).
         c = _client()
-        r = state_io.validate_readiness(readiness) if readiness is not None else None
+        r = state_io.require_readiness(readiness) if readiness is not None else None
         if r is None:
             stored = _fresh_readiness(c.data_dir)
             if any(k in stored for k in state_io.READINESS_SIGNALS):
@@ -400,7 +400,7 @@ def autoregulate(whoop_recovery: float = None, hrv_vs_baseline: str = None,
         "rhr_delta_bpm": rhr_delta_bpm, "sleep_hours": sleep_hours,
         "subjective": subjective, "acwr": acwr,
     }.items() if v is not None}
-    return _safe(lambda: coach.autoregulate(state_io.validate_readiness(r)))  # out-of-range numbers are refused
+    return _safe(lambda: coach.autoregulate(state_io.require_readiness(r)))  # out-of-range numbers are refused
 
 
 @mcp.tool()

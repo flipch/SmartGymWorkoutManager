@@ -296,7 +296,10 @@ class UpstreamReadersAreStrictAboutShape(unittest.TestCase):
         client = make_client(0)
         for body in ({"code": 0, "data": None}, {"code": 0}):
             client._request = lambda m, u, body=body, **kw: Resp(200, body)
-            self.assertEqual(client.get_training_detail("1", "custom"), {})
+            with self.assertRaises(api_client.UpstreamError):  # an unknown id is not "a workout with no sets"
+                client.get_training_detail("1", "custom")
+        client._request = lambda m, u, **kw: Resp(200, {"code": 0, "data": []})
+        self.assertEqual(client.get_training_detail("1", "custom"), [])  # a real session with no sets is a list
 
     def test_require_ok(self):
         for resp in (Resp(302, {}), Resp(301, {}), Resp(200, None, "<html>login</html>")):

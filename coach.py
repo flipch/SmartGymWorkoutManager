@@ -18,6 +18,7 @@ the numbers are the engine's, the judgement/conversation is the agent's.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 
 # ───────────────────────────────────────────── goal prescriptions (programming.md §Key numbers)
@@ -257,7 +258,7 @@ def _stem(token):
 
 
 def _norm_name(value):
-    return " ".join(_stem(t) for t in re.findall(r"[a-z0-9]+", str(value).lower()))
+    return " ".join(_stem(t) for t in re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", str(value)).casefold()))
 
 
 def _is_avoided(name, avoid):

@@ -103,7 +103,7 @@ def index():
     try:
         workouts = client.get_user_workouts()
         # Sort workouts from oldest to newest (so newest is closest to Calendar section)
-        workouts.sort(key=lambda w: w.get('id', 0))
+        workouts.sort(key=lambda w: (0, int(str(w.get('id'))), '') if str(w.get('id')).isdigit() else (1, 0, str(w.get('id', ''))))
     except Exception as e:
         if str(e) == "Unauthorized":
             client.logout()
@@ -417,9 +417,9 @@ def api_stats(group_id):
 def library():
     if not client.credentials.get("token"): return redirect(url_for('settings'))
     try:
-        exercises = client.get_library()
+        exercises = client.get_library(strict=True)
         accessories = client.get_accessories()
-        categories = client.get_categories()
+        categories = client.get_categories(strict=True)
     except Exception as e:
         if str(e) == "Unauthorized":
             client.logout()
@@ -470,7 +470,15 @@ def exercise_detail(ex_id):
     if not client.credentials.get("token"): return redirect(url_for('settings'))
     
     # 1. Load details
-    detail = client.get_exercise_detail(ex_id)
+    try:
+        detail = client.get_exercise_detail(ex_id, strict=True)
+    except Exception as e:
+        if str(e) == "Unauthorized":
+            client.logout()
+            flash("Session expired. Please login again.", "error")
+            return redirect(url_for('settings'))
+        flash(f"Could not load this exercise ({type(e).__name__}).", "error")
+        return redirect(url_for('library'))
     
     # 2. Resolve accessories (IDs -> Objects with Image/Name)
     all_accessories = client.get_accessories()
@@ -748,6 +756,10 @@ def create():
         exercises = data.get('exercises')
         template_id = data.get('id') 
         
+        shown_unit = data.get('unit')
+        if shown_unit is not None and (isinstance(shown_unit, bool) or shown_unit != int(bool(client.credentials.get('unit')))):
+            return jsonify({"status": "error", "message": "Your unit setting changed since this page was opened "
+                                                          "(kg and lb differ): reload the page and check the weights."})
         try:
             result = client.save_workout(name, exercises, template_id)
             if result.get('code') == 0:
@@ -760,13 +772,14 @@ def create():
             return jsonify({"status": "error", "message": str(e)})
 
     try:
-        library = client.get_library()
-        categories = client.get_categories()
+        library = client.get_library(strict=True)
+        categories = client.get_categories(strict=True)
     except Exception as e:
         if str(e) == "Unauthorized":
             client.logout()
             flash("Session expired. Please login again.", "error")
             return redirect(url_for('settings'))
+        flash(f"Could not load the exercise library ({type(e).__name__}): reload before building a workout.", "error")
         library = []
         categories = []
 

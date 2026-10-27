@@ -102,6 +102,8 @@
 </div>
 
 <script>
+    // vendor timestamps arrive as epoch seconds OR milliseconds
+    const toMs = (t) => { const n = Number(t); return n > 1e11 ? n : n * 1000; };
     const unit = {{ unit }};
     const unitLabel = unit === 1 ? 'lbs' : 'kg';
     let historyData = null;
@@ -140,7 +142,7 @@
         // Use startTimestamp (Unix seconds) for accurate local time display
         if (!unixSeconds) return '-';
         try {
-            const d = new Date(unixSeconds * 1000);
+            const d = new Date(toMs(unixSeconds));
             return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         } catch { return '-'; }
     }
@@ -214,7 +216,7 @@
         document.getElementById('deepExportBtn').classList.remove('hidden');
 
         // Sort by startTimestamp descending
-        records.sort((a, b) => (b.startTimestamp || 0) - (a.startTimestamp || 0));
+        records.sort((a, b) => toMs(b.startTimestamp || 0) - toMs(a.startTimestamp || 0));
 
         records.forEach(rec => {
             const tr = document.createElement('tr');
@@ -271,6 +273,7 @@
         try {
             const resp = await fetch(`/api/history/detail/${rec.trainingId}?type=${apiType}`);
             const data = await resp.json();
+            if (!resp.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));  // never "no breakdown available"
             currentDetailPayload = { summary: rec, detail: data };
             document.getElementById('detailFooter').classList.remove('hidden');
             document.getElementById('detailLoading').classList.add('hidden');
@@ -486,6 +489,7 @@
             try {
                 const resp = await fetch(`/api/history/detail/${rec.trainingId}?type=${apiType}`);
                 const detail = await resp.json();
+                if (!resp.ok) throw new Error((detail && detail.error) || ('HTTP ' + resp.status));
                 fullDataset.push({ summary: rec, detail });
             } catch (e) {
                 fullDataset.push({ summary: rec, detail: null, error: e.message });

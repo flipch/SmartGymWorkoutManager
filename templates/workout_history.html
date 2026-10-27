@@ -221,6 +221,8 @@
 </style>
 
 <script>
+    // vendor timestamps arrive as epoch seconds OR milliseconds
+    const toMs = (t) => { const n = Number(t); return n > 1e11 ? n : n * 1000; };
     let currentHistoryData = [];
 
     // Set default dates (Current Month)
@@ -289,7 +291,7 @@
             // 1. Prefer the end timestamp, fall back to start timestamp
             const timestamp = item.endTimestamp || item.startTimestamp;
             // 2. Convert Unix seconds to JavaScript milliseconds
-            const dateObj = new Date(timestamp * 1000);
+            const dateObj = new Date(toMs(timestamp));
             
             const dateStr = dateObj.toLocaleString(undefined, {
                 year: 'numeric', month: 'numeric', day: 'numeric',
@@ -340,6 +342,7 @@
             // Updated to pass type to backend
             const res = await fetch(`/api/workout_history/detail/${id}?type=${type}`);
             const data = await res.json();
+            if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
             copyToClipboard(JSON.stringify(data, null, 2));
             alert("Detailed JSON copied to clipboard!");
         } catch (e) {
@@ -356,6 +359,7 @@
         try {
             const res = await fetch(`/api/workout_history/detail/${id}?type=${type}`);
             const data = await res.json();
+            if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
 
             // Create filename using training ID
             const filename = `training-record-${id}.json`;
@@ -406,6 +410,7 @@
                     // Updated to pass type to backend
                     const res = await fetch(`/api/workout_history/detail/${targetId}?type=${type}`);
                     const detail = await res.json();
+                    if (!res.ok) throw new Error((detail && detail.error) || ('HTTP ' + res.status));
                     
                     fullDataset.push({
                         summary: summary,
@@ -535,7 +540,10 @@
         renderHistoryCalendar();
     });
 
+    let historyCalendarSeq = 0;
     async function renderHistoryCalendar() {
+        const seq = ++historyCalendarSeq;
+        let loadFailed = false;
         // Update month label
         const monthNames = ["January", "February", "March", "April", "May", "June",
             "July", "August", "September", "October", "November", "December"];
@@ -554,14 +562,21 @@
             const res = await fetch(`/api/workout_history?start=${startDate}&end=${endDate}`);
             const data = await res.json();
 
-            if (!data.error) {
+            if (seq !== historyCalendarSeq) return;  // a newer month was asked for: this answer is stale
+            if (res.ok && !data.error && Array.isArray(data)) {
                 calendarHistoryData = data;
             } else {
                 calendarHistoryData = [];
+                loadFailed = true;
             }
         } catch (e) {
             console.error('Error fetching calendar history:', e);
+            if (seq !== historyCalendarSeq) return;
             calendarHistoryData = [];
+            loadFailed = true;
+        }
+        if (loadFailed) {
+            document.getElementById('currentMonthLabelHistory').textContent += ' (workouts could not be loaded)';
         }
 
         // Render the calendar grid
@@ -619,7 +634,7 @@
             if (isCurrentMonth) {
                 const dateStr = formatDateInput(currentDate);
                 const workoutsForDay = calendarHistoryData.filter(workout => {
-                    const workoutDate = new Date((workout.endTimestamp || workout.startTimestamp) * 1000);
+                    const workoutDate = new Date(toMs(workout.endTimestamp || workout.startTimestamp));
                     return formatDateInput(workoutDate) === dateStr;
                 });
 
@@ -654,7 +669,7 @@
     }
 
     function showWorkoutDetails(workout) {
-        const dateObj = new Date((workout.endTimestamp || workout.startTimestamp) * 1000);
+        const dateObj = new Date(toMs(workout.endTimestamp || workout.startTimestamp));
         const dateStr = dateObj.toLocaleString(undefined, {
             year: 'numeric', month: 'long', day: 'numeric',
             hour: '2-digit', minute: '2-digit'

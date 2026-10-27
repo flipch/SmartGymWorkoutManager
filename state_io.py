@@ -135,6 +135,19 @@ def validate_readiness(payload) -> dict:
     return out
 
 
+def require_readiness(payload) -> dict:
+    """validate_readiness for a reading the CALLER supplied: a typo or an empty object is an error, because falling back
+    to "no reading" would plan a full-volume session on top of a red stored one."""
+    if isinstance(payload, dict):
+        unknown = sorted(str(k)[:40] for k in payload if k not in READINESS_SIGNALS)
+        if unknown:
+            raise ValueError(f"unknown readiness field(s): {', '.join(unknown)}; use {', '.join(READINESS_SIGNALS)}")
+    out = validate_readiness(payload)
+    if not out:
+        raise ValueError(f"readiness has no signal; give at least one of {', '.join(READINESS_SIGNALS)}")
+    return out
+
+
 DIFFICULTY = ("too_easy", "ok", "too_hard")
 
 

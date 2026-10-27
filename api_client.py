@@ -132,6 +132,16 @@ def validate_workout(name, exercises, imperial=False):
             raise ValueError(f"exercise {n}: needs 1-{MAX_SETS} sets")
         _group_id(ex.get('groupId'), f"exercise {n}")
         preset = ex.get('preset_id')
+        if preset not in (None, ""):
+            try:
+                number = float(preset)
+            except (TypeError, ValueError):
+                number = float("nan")
+            if isinstance(preset, bool) or number != number or number != int(number) or not (number == -1 or 0 <= number <= 1000):
+                raise ValueError(f"exercise {n}: preset_id must be -1 (custom load) or a preset number")
+        variant = ex.get('variant_id')
+        if variant not in (None, "") and not (str(variant).isdigit() and int(variant) > 0):
+            raise ValueError(f"exercise {n}: variant_id must be a positive whole number")
         stat = _bounded(ex.get('data_stat_type') or 0, f"exercise {n}: data_stat_type", 100)
         for m, st in enumerate(ex['sets'], 1):
             if not isinstance(st, dict):
@@ -145,7 +155,10 @@ def validate_workout(name, exercises, imperial=False):
             seconds = set_unit == 'sec'
             if st.get('reps') in (None, "") or not (st.get('reps') or 0):
                 raise ValueError(f"{where}: reps (or seconds) is required")
-            _bounded(st.get('reps') or 0, f"{where}: reps", MAX_SECONDS if seconds else MAX_REPS)
+            if _bounded(st.get('reps') or 0, f"{where}: reps", MAX_SECONDS if seconds else MAX_REPS) != int(float(st.get('reps'))):
+                raise ValueError(f"{where}: reps (or seconds) must be a whole number")
+            if int(float(st.get('reps'))) < 1:
+                raise ValueError(f"{where}: reps (or seconds) is required")
             _bounded(st.get('rest') or 0, f"{where}: rest", MAX_REST_S)
             if st.get('mode') not in (None, ""):
                 mode = _bounded(st['mode'], f"{where}: mode", MAX_MODE)
@@ -741,6 +754,7 @@ class SpeedianceClient:
         
         id_map = {}
         variants = {}
+        lib_stat = {str(d.get('id')): int(d.get('dataStatType') or 0) for d in details if isinstance(d, dict)}
         for d in details:
             if d.get('actionLibraryList'):
                 id_map[str(d['id'])] = d['actionLibraryList'][0]['id']
@@ -759,6 +773,8 @@ class SpeedianceClient:
             raw_preset_id = ex.get('preset_id')
             preset_id = int(raw_preset_id) if raw_preset_id is not None else -1
             data_stat_type = int(ex.get('data_stat_type') or 0)
+            if lib_stat.get(str(group_id)) == 6 and data_stat_type != 6:
+                raise ValueError(f"exercise {group_id}: this is a level-based (Vita) exercise; its data_stat_type must be 6")
             
             is_unilateral = unilateral_check.get(group_id, False)
             if is_unilateral and len(sets) % 2:  # the machine alternates left, right: a lone set is one-sided work
@@ -838,7 +854,8 @@ class SpeedianceClient:
                     # AND populate counter_list with the RM value.
                     weights_list.append("3.5")
                     counter_list.append(str(int(weight_val)))
-                    set_capacity += (reps * weight_val * 2.2)
+                    if unit != 'sec':  # seconds x load is not volume
+                        set_capacity += (reps * weight_val * 2.2)
 
             total_capacity += set_capacity
 
@@ -941,7 +958,10 @@ class SpeedianceClient:
             url = f"{self.base_url}/api/app/trainingInfo/cttTrainingInfoDetail/{_q(training_id)}"
         try:
             resp = self._request('GET', url, headers=self._get_headers())
-            return _json_data(resp, "training detail", (dict, list), empty=dict)
+            detail = _json_data(resp, "training detail", (dict, list), empty=dict)
+            if detail == {}:  # an unknown id answers code 0 with no data: not "a workout with no sets"
+                raise UpstreamError("training detail not found")
+            return detail
         except Exception as e:
             if str(e) == "Unauthorized": raise e
             print(f"Error fetching training detail: {type(e).__name__}")
