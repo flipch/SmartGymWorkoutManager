@@ -300,14 +300,27 @@ def workout_insights() -> dict:
 
 @mcp.tool()
 def recovery_recommendation() -> dict:
-    """Should the user train, rest, or do active recovery today? Based on recent
-    training frequency. Mirrors the web /api/recovery endpoint. If the history cannot be read this returns an
+    """Should the user train, rest, or do active recovery today? `recommendation` is based on recent TRAINING FREQUENCY only.
+    The stored WHOOP readiness (recovery score, sleep) and the band it gives come back under `readiness`; call get_readiness
+    for the full detail. Mirrors the web /api/recovery endpoint. If the history cannot be read this returns an
     error, NOT a "train" recommendation."""
     def run():
         c = _client(); _require_auth(c)
         end = date.today(); start = end - timedelta(days=21)
         recs = c.get_training_history(start.isoformat(), end.isoformat())
-        return recovery_advice(_session_dates(recs if isinstance(recs, list) else []), date.today(), len(recs) if isinstance(recs, list) else 0)
+        advice = recovery_advice(_session_dates(recs if isinstance(recs, list) else []), date.today(), len(recs) if isinstance(recs, list) else 0)
+        try:  # the readiness is extra: a failure here must not turn a good answer into an error
+            data_dir = c.data_dir
+            _pull_whoop_if_due(data_dir)
+            usable = {k: v for k, v in _fresh_readiness(data_dir).items() if k in state_io.READINESS_SIGNALS}
+        except Exception:
+            usable = {}
+        if usable:
+            advice["readiness"] = {"signals": usable, "band": coach.autoregulate(usable).get("band")}
+        else:
+            advice["readiness"] = None
+            advice["readiness_hint"] = "No fresh WHOOP or manual readiness is stored: call get_readiness (or whoop_connect if WHOOP needs consent)."
+        return advice
     return _safe(run)
 
 
@@ -439,14 +452,16 @@ def autoregulate(whoop_recovery: Number | None = None, hrv_vs_baseline: str = No
     """Given today's recovery signals (any subset; from Whoop/Apple Health or a 1-5 subjective
     score), return today's training adjustment: readiness band + volume%/intensity%/RIR/session
     type. Most-conservative signal wins; sleep<6h or RHR>=+5bpm caps a green day. Fresh stored signals
-    you did not mention are included (use_stored_readiness=false for a pure what-if)."""
+    you did not mention are included (use_stored_readiness=false for a pure what-if). Call it with NO arguments to
+    get today's adjustment from the stored WHOOP readings alone."""
     r = {k: v for k, v in {
         "whoop_recovery": whoop_recovery, "hrv_vs_baseline": hrv_vs_baseline,
         "rhr_delta_bpm": rhr_delta_bpm, "sleep_hours": sleep_hours,
         "subjective": subjective, "acwr": acwr,
     }.items() if v is not None}
     def run():
-        got = state_io.require_readiness(r)  # out-of-range numbers are refused
+        got = state_io.require_readiness(r) if r else {}  # out-of-range numbers are refused; an empty call may still use the stored ones
+        data_dir = None
         if use_stored_readiness:  # a partial reading must not hide a fresh stored red one
             data_dir = _client().data_dir
             _pull_whoop_if_due(data_dir)
@@ -454,6 +469,12 @@ def autoregulate(whoop_recovery: Number | None = None, hrv_vs_baseline: str = No
             if unreadable:
                 raise RuntimeError(f"the stored readiness could not be read ({unreadable}): post a new reading, or pass use_stored_readiness=false")
             got = merge_readiness(got, data_dir)
+        if not got:  # nothing given and nothing fresh stored: say which, so the agent can act on it
+            if data_dir is None:
+                raise ValueError(f"readiness has no signal; give at least one of {', '.join(state_io.READINESS_SIGNALS)}")
+            st = whoop_sync.status(data_dir)
+            raise ValueError("no readiness signal: none was given and no fresh one is stored (WHOOP: " + st["state"] + "). "
+                             + (_whoop_hint(st) or "Pass a reading (for example subjective 1-5), or call get_readiness to refresh WHOOP."))
         return coach.autoregulate(got)
     return _safe(run)
 
